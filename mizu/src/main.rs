@@ -10,7 +10,7 @@ use sbi_spec::{
 extern crate panic_halt;
 
 #[cfg_attr(not(test), riscv_rt::entry)]
-fn main() -> ! {
+fn main(_hartid: usize) -> ! {
     sbi_call(
         EID_SRST,
         SYSTEM_RESET,
