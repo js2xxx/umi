@@ -1,0 +1,9 @@
+[package]
+edition = "2021"
+name = "mizu"
+version = "0.1.0"
+
+[dependencies]
+panic-halt = "0"
+riscv-rt = {version = "0", features = ["s-mode"]}
+sbi-spec = "0"
