@@ -1,16 +1,20 @@
 #![cfg_attr(not(test), no_std)]
 #![cfg_attr(not(test), no_main)]
+#![feature(thread_local)]
+
+mod rxx;
 
 use sbi_spec::{
     binary::SbiRet,
     srst::{EID_SRST, RESET_REASON_NO_REASON, RESET_TYPE_SHUTDOWN, SYSTEM_RESET},
 };
 
-#[cfg(not(test))]
-extern crate panic_halt;
+#[thread_local]
+static mut X: i32 = 123;
 
-#[cfg_attr(not(test), riscv_rt::entry)]
 fn main(_hartid: usize) -> ! {
+    unsafe { assert_eq!(X, 123) };
+
     sbi_call(
         EID_SRST,
         SYSTEM_RESET,

@@ -4,6 +4,6 @@ name = "mizu"
 version = "0.1.0"
 
 [dependencies]
-panic-halt = "0"
-riscv-rt = {version = "0", features = ["s-mode"]}
+r0 = "1"
+riscv = "0"
 sbi-spec = "0"
