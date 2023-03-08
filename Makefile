@@ -1,27 +1,32 @@
-TARGET := riscv64imac-unknown-none-elf
-MODE   ?= debug
+export TARGET := riscv64imac-unknown-none-elf
+export MODE   ?= debug
 
-TARGET_DIR  := target/$(TARGET)/$(MODE)
+export TARGET_DIR 	:= target/$(TARGET)/$(MODE)
+export DEBUG_DIR   	:= debug
 
-KERNEL_FILE:
-
-.PHONY: build run all
+.PHONY: all build run debug
 
 all: build
 
 build:
-ifeq ($(MODE),debug)
-	cargo build --target $(TARGET)
-else
-	cargo build --release --target $(TARGET)
-endif
-	cp $(TARGET_DIR)/mizu kernel-qemu
+	cd mizu && make build
 
 run: build
 	qemu-system-riscv64 \
+		-monitor stdio \
 		-machine virt \
 		-bios default \
-		-device loader,file=kernel-qemu,addr=0x80200000 \
 		-kernel kernel-qemu \
 		-nographic \
+		-serial file:debug/qemu.log \
 		-smp 4 -m 2G
+
+debug: build
+	qemu-system-riscv64 \
+		-monitor stdio \
+		-machine virt \
+		-bios default \
+		-kernel kernel-qemu \
+		-nographic \
+		-serial file:debug/qemu.log \
+		-smp 4 -m 2G -s -S

@@ -1,5 +1,5 @@
 [toolchain]
 channel = "nightly"
-components = ["rustfmt", "rustc", "rust-std", "rust-src", "cargo", "clippy"]
-targets = ["riscv64imac-unknown-none-elf"]
+components = ["rustfmt", "rustc", "rust-std", "rust-src", "cargo", "clippy", "llvm-tools"]
 profile = "default"
+targets = ["riscv64imac-unknown-none-elf"]
