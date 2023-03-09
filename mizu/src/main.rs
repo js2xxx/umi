@@ -28,7 +28,7 @@ fn main(_hartid: usize) -> ! {
 
 #[inline(always)]
 fn sbi_call(extension: usize, function: usize, arg0: u32, arg1: u32) -> SbiRet {
-    #[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))]
+    #[cfg(target_arch = "riscv64")]
     {
         let (error, value);
         unsafe {
@@ -41,7 +41,7 @@ fn sbi_call(extension: usize, function: usize, arg0: u32, arg1: u32) -> SbiRet {
         };
         SbiRet { error, value }
     }
-    #[cfg(not(any(target_arch = "riscv32", target_arch = "riscv64")))]
+    #[cfg(not(target_arch = "riscv64"))]
     {
         let _ = (extension, function, arg0, arg1);
         unimplemented!("not RISC-V instruction set architecture")

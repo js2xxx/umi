@@ -1,5 +1,7 @@
+#[cfg(not(test))]
 use core::arch::{asm, global_asm};
 
+#[cfg(not(test))]
 #[no_mangle]
 unsafe extern "C" fn _init(hartid: usize, _: usize, _: usize) {
     extern "C" {
@@ -39,6 +41,7 @@ unsafe extern "C" fn _init(hartid: usize, _: usize, _: usize) {
     crate::main(hartid)
 }
 
+#[cfg(not(test))]
 global_asm! {
 "
 .section .init

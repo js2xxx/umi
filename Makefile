@@ -4,7 +4,7 @@ export MODE   ?= debug
 export TARGET_DIR 	:= target/$(TARGET)/$(MODE)
 export DEBUG_DIR   	:= debug
 
-.PHONY: all build run debug
+.PHONY: all build run debug test clean
 
 all: build
 
@@ -30,3 +30,9 @@ debug: build
 		-nographic \
 		-serial file:debug/qemu.log \
 		-smp 4 -m 2G -s -S
+
+test:
+	cd mizu && make test
+
+clean:
+	cargo clean

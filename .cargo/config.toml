@@ -1,0 +1,8 @@
+[profile.dev]
+incremental = true
+
+[profile.release]
+lto = true
+
+[build]
+rustflags = ["-Zshare-generics=n"]

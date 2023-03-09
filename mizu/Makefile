@@ -5,7 +5,7 @@ KERNEL_SYM 	:= ../$(DEBUG_DIR)/$(KERNEL).sym
 KERNEL_META := ../$(DEBUG_DIR)/$(KERNEL).txt
 KERNEL_ASM  := ../$(DEBUG_DIR)/$(KERNEL).asm
 
-.PHONY: build
+.PHONY: build test
 
 build:
 ifeq ($(MODE),debug)
@@ -17,3 +17,10 @@ endif
 	llvm-strip --strip-debug $(KERNEL_RAW) -o ../kernel-qemu
 	llvm-objdump ../kernel-qemu -x > $(KERNEL_META)
 	llvm-objdump ../kernel-qemu -Cd > $(KERNEL_ASM)
+
+test:
+ifeq ($(MODE),debug)
+	cargo test
+else
+	cargo bench
+endif
