@@ -19,7 +19,7 @@ static BOOT_PAGES: Table = const {
 
 #[cfg(not(test))]
 #[no_mangle]
-unsafe extern "C" fn _init(hartid: usize, _: usize, _: usize) {
+unsafe extern "C" fn __rt_init(hartid: usize) {
     extern "C" {
         static mut _sbss: u32;
         static mut _ebss: u32;
@@ -109,7 +109,7 @@ unsafe extern "C" fn _start() -> ! {
         add t0, t0, t3
         jr t0
         ", 
-        _init = sym _init,
+        _init = sym __rt_init,
         BOOT_PAGES = sym BOOT_PAGES,
         ID_OFFSET = const ID_OFFSET,
         options(noreturn)
