@@ -18,6 +18,10 @@ bitflags! {
         const GLOBAL = 1 << 5;
         const ACCESSED = 1 << 6;
         const DIRTY = 1 << 7;
+
+        const KERNEL_R = Self::VALID.bits | Self::READABLE.bits | Self::GLOBAL.bits;
+        const KERNEL_RW = Self::KERNEL_R.bits | Self::WRITABLE.bits;
+        const KERNEL_RWX = Self::KERNEL_RW.bits | Self::EXECUTABLE.bits;
     }
 }
 
@@ -147,4 +151,24 @@ impl const DerefMut for Table {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
+}
+
+#[macro_export]
+macro_rules! table_1g {
+    (@ITEM $obj:ident, $virt:expr, $phys:expr, $attr:expr) => {
+        {
+            let index = Level::max().addr_idx($virt, false);
+            $obj[index] = Entry::new(PAddr::new($phys), $attr, Level::pt());
+        }
+    };
+    [$($virt:expr => $phys:expr, $attr:expr);+$(;)?] => {
+        {
+            let mut table = Table::new();
+            $(
+                table_1g!(@ITEM table, $virt, $phys, $attr);
+            )+
+            table
+        }
+    };
+    [] => { Table::new() };
 }

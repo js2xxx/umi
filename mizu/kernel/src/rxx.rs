@@ -1,31 +1,22 @@
 #[cfg(not(test))]
 use core::arch::asm;
 
-use rv39_paging::{Attr, Entry, Level, PAddr, Table};
+use rv39_paging::{table_1g, Attr, Entry, Level, PAddr, Table};
 
 const ID_OFFSET: usize = 0xffffffc000000000;
 
 #[no_mangle]
 static BOOT_PAGES: Table = const {
-    let mut table = Table::new();
     let low_start = 0x80000000usize;
-    let low_index = Level::max().addr_idx(low_start, false);
-    assert!(low_index == 2);
     let high_start = low_start + ID_OFFSET;
-    let high_index = Level::max().addr_idx(high_start, false);
-    assert!(high_index == 0x102);
     let delta = Level::max().page_size();
-    let attr = Attr::VALID
-        .union(Attr::READABLE)
-        .union(Attr::WRITABLE)
-        .union(Attr::EXECUTABLE)
-        .union(Attr::GLOBAL);
 
-    table[low_index] = Entry::new(PAddr::new(low_start), attr, Level::pt());
-    table[low_index + 1] = Entry::new(PAddr::new(low_start + delta), attr, Level::pt());
-    table[high_index] = Entry::new(PAddr::new(low_start), attr, Level::pt());
-    table[high_index + 1] = Entry::new(PAddr::new(low_start + delta), attr, Level::pt());
-    table
+    table_1g![
+        low_start => low_start, Attr::KERNEL_RWX;
+        low_start + delta => low_start + delta, Attr::KERNEL_RWX;
+        high_start => low_start, Attr::KERNEL_RWX;
+        high_start + delta => low_start + delta, Attr::KERNEL_RWX;
+    ]
 };
 
 #[cfg(not(test))]
