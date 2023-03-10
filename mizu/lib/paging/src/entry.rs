@@ -88,7 +88,7 @@ const_assert!(core::mem::size_of::<Entry>() == 1 << ENTRY_SIZE_SHIFT);
 impl Entry {
     #[inline]
     pub const fn get(self, level: Level) -> (PAddr, Attr) {
-        let addr = (self.0 << 2) & level.entry_addr_mask();
+        let addr = (self.0 << 2) & level.paddr_mask();
         (PAddr::new(addr), self.into())
     }
 
@@ -99,7 +99,7 @@ impl Entry {
 
     #[inline]
     pub const fn new(addr: PAddr, attr: Attr, level: Level) -> Self {
-        Self(((*addr & level.entry_addr_mask()) >> 2) | attr.bits)
+        Self(((*addr & level.paddr_mask()) >> 2) | attr.bits)
     }
 }
 

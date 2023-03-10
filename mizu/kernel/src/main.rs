@@ -1,5 +1,9 @@
 #![cfg_attr(not(test), no_std)]
 #![cfg_attr(not(test), no_main)]
+#![feature(asm_const)]
+#![feature(const_mut_refs)]
+#![feature(const_trait_impl)]
+#![feature(inline_const)]
 #![feature(naked_functions)]
 #![feature(thread_local)]
 

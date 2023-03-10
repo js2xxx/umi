@@ -1,4 +1,4 @@
-use crate::{NR_ENTRIES_SHIFT, PAGE_SHIFT};
+use crate::{NR_ENTRIES, NR_ENTRIES_SHIFT, PAGE_SHIFT};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Level(u8);
@@ -11,6 +11,10 @@ impl Level {
 
     pub const fn pt() -> Self {
         Self::new(0)
+    }
+
+    pub const fn max() -> Self {
+        Self::new(2)
     }
 
     #[inline]
@@ -29,14 +33,29 @@ impl Level {
     }
 
     #[inline]
-    pub const fn entry_addr_mask(&self) -> usize {
+    pub const fn paddr_mask(&self) -> usize {
         ((1 << 56) - 1) & !self.page_mask()
+    }
+
+    #[inline]
+    pub const fn laddr_mask(&self) -> usize {
+        Level(3).page_mask() & !self.page_mask()
+    }
+
+    #[inline]
+    pub const fn addr_idx(&self, laddr: usize, end: bool) -> usize {
+        let ret = ((laddr & self.laddr_mask()) >> self.page_shift()) & (NR_ENTRIES - 1);
+        if end && ret == 0 {
+            NR_ENTRIES
+        } else {
+            ret
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::{Level, PAGE_SIZE, PAGE_SHIFT};
+    use crate::{Level, PAGE_SHIFT, PAGE_SIZE};
 
     #[test]
     fn test_page_size() {
