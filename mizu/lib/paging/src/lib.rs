@@ -5,7 +5,7 @@
 
 mod addr;
 mod consts;
-mod level;
 mod entry;
+mod level;
 
-pub use self::{addr::*, consts::*, level::*, entry::*};
+pub use self::{addr::*, consts::*, entry::*, level::*};
