@@ -1,5 +1,6 @@
 #![cfg_attr(not(test), no_std)]
 #![cfg_attr(not(test), no_main)]
+#![feature(naked_functions)]
 #![feature(thread_local)]
 
 mod rxx;

@@ -1,15 +1,16 @@
 export TARGET := riscv64imac-unknown-none-elf
 export MODE   ?= debug
 
-export TARGET_DIR 	:= target/$(TARGET)/$(MODE)
-export DEBUG_DIR   	:= debug
+export ROOT			:= $(shell pwd)
+export TARGET_DIR 	:= $(ROOT)/target/$(TARGET)/$(MODE)
+export DEBUG_DIR   	:= $(ROOT)/debug
 
 .PHONY: all build run debug test clean
 
 all: build
 
 build:
-	cd mizu && make build
+	cd mizu/kernel && make build
 
 run: build
 	qemu-system-riscv64 \
@@ -32,7 +33,7 @@ debug: build
 		-smp 4 -m 2G -s -S
 
 test:
-	cd mizu && make test
+	cd mizu/kernel && make test
 
 clean:
 	cargo clean

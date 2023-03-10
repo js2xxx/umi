@@ -1,2 +1,4 @@
 [workspace]
-members = ["mizu"]
+members = [
+  "mizu/kernel",
+]
