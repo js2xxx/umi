@@ -42,18 +42,25 @@
 
 use core::sync::atomic;
 
+use static_assertions::const_assert;
+
 #[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))]
 mod imp;
 
 #[derive(Debug, Clone, Copy, Default)]
 #[repr(C)]
 pub struct TrapFrame {
-    x: [usize; 31],
-    a0: usize, // the "a0" in `x` is actually `sscratch`.
+    /// Note that `x{i}` is `x[i - 1]`.
+    pub x: [usize; 31], // 0..248
+    /// the "a0" in `x` (i.e. x10) is actually `sscratch`.
+    pub a0: usize, // 248
+    pub sepc: usize,    // 256
+    pub sstatus: usize, // 264
 
-    rt_stack: usize,
-    rt_ra: usize,
+    rt_stack: usize, // 272
+    rt_ra: usize,    // 280
 }
+const_assert!(core::mem::size_of::<TrapFrame>() == 288);
 
 #[no_mangle]
 static mut REENT_HANDLER: usize = 0;

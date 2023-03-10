@@ -6,3 +6,4 @@ version = "0.1.0"
 
 [dependencies]
 riscv = "0"
+static_assertions = "1"
