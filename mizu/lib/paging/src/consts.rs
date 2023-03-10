@@ -8,7 +8,8 @@ pub const ENTRY_SIZE_SHIFT: usize = 3;
 pub const NR_ENTRIES_SHIFT: usize = PAGE_SHIFT - ENTRY_SIZE_SHIFT;
 pub const NR_ENTRIES: usize = 1 << NR_ENTRIES_SHIFT;
 
-pub const CANONICAL_PREFIX: usize = 0xFFFF_FFC0_0000_0000;
+pub const CANONICAL_PREFIX: usize = 0xffff_ffc0_0000_0000;
+pub const ID_OFFSET: usize = CANONICAL_PREFIX;
 
 #[derive(Copy, Clone, Debug)]
 pub enum Error {

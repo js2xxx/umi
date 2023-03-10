@@ -2,7 +2,7 @@ OUTPUT_ARCH(riscv)
 
 SECTIONS
 {
-    . = 0x80200000;
+    . = KERNEL_START;
     .text : 
     { 
         KEEP(*(.init*));

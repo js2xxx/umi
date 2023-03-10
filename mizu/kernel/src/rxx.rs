@@ -1,13 +1,11 @@
 #[cfg(not(test))]
 use core::arch::asm;
 
-use rv39_paging::{table_1g, Attr, Entry, Level, PAddr, Table};
-
-const ID_OFFSET: usize = 0xffffffc000000000;
+use rv39_paging::{table_1g, AddrExt, Attr, Entry, Level, PAddr, Table, ID_OFFSET};
 
 #[no_mangle]
 static BOOT_PAGES: Table = const {
-    let low_start = 0x80000000usize;
+    let low_start = config::KERNEL_START.round_down(Level::max());
     let high_start = low_start + ID_OFFSET;
     let delta = Level::max().page_size();
 

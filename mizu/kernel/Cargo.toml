@@ -4,10 +4,18 @@ license = "MIT OR Apache-2.0"
 name = "mizu"
 version = "0.1.0"
 
+[features]
+qemu-virt = ["config/qemu-virt"]
+default = ["qemu-virt"]
+
 [dependencies]
 # Local crates
+config = {path = "../lib/config", default-features = false}
 rv39-paging = {path = "../lib/paging"}
 # External crates
 r0 = "1"
 riscv = "0"
 sbi-rt = "0"
+
+[build-dependencies]
+config = {path = "../lib/config", default-features = false}

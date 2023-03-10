@@ -53,6 +53,25 @@ impl Level {
     }
 }
 
+#[const_trait]
+pub trait AddrExt {
+    fn round_down(self, level: Level) -> Self;
+
+    fn round_up(self, level: Level) -> Self;
+}
+
+impl const AddrExt for usize {
+    #[inline]
+    fn round_down(self, level: Level) -> Self {
+        self & !level.page_mask()
+    }
+
+    #[inline]
+    fn round_up(self, level: Level) -> Self {
+        (self + level.page_mask()) & !level.page_mask()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{Level, PAGE_SHIFT, PAGE_SIZE};
