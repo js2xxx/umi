@@ -7,7 +7,9 @@ KERNEL_ASM  := $(DEBUG_DIR)/$(KERNEL).asm
 
 CARGO_ARGS := --target $(TARGET) \
 	--no-default-features \
-	--features $(BOARD)
+	--features $(BOARD) \
+	-Zbuild-std=core,compiler_builtins,alloc,panic_abort \
+	-Zbuild-std-features=compiler-builtins-mem
 
 ifeq ($(MODE),release)
     CARGO_ARGS += --release
