@@ -20,7 +20,7 @@
 //!     unsafe { co_trap::init(reent_handler) };
 //!     // Enable interrupts
 //! }
-//! 
+//!
 //! async fn init_task() -> TrapFrame {
 //!     todo!("init_task")
 //! }
@@ -34,7 +34,7 @@
 //!         handle_resume(&mut frame, cause).await;
 //!     }
 //! }
-//! 
+//!
 //! async fn handle_resume(_frame: &mut TrapFrame, _cause: scause::Scause) {
 //!     todo!("handle_resume");
 //! }
