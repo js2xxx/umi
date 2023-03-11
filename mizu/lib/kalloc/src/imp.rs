@@ -30,3 +30,24 @@ unsafe impl GlobalAlloc for Allocator {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn alloc_dealloc() {
+        static mut SPACE: [u64; 256] = [0; 256];
+        let layout = Layout::from_size_align(4, 8).unwrap();
+        unsafe {
+            let allocator = Allocator::new();
+            assert!(allocator.alloc(layout).is_null());
+
+            allocator.init(SPACE.as_ptr() as usize, SPACE.len() * 8);
+
+            let ptr = allocator.alloc(layout);
+            assert!(!ptr.is_null());
+            allocator.dealloc(ptr, layout);
+        }
+    }
+}
