@@ -53,6 +53,9 @@ unsafe extern "C" fn __rt_init(hartid: usize) {
     // Disable interrupt in `ksync`
     unsafe { ksync::disable() };
 
+    // Init logger.
+    unsafe { klog::init_logger(log::Level::Debug) };
+
     unsafe {
         static mut A: usize = 12345;
 

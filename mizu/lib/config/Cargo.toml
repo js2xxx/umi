@@ -9,3 +9,4 @@ default = ["qemu-virt"]
 qemu-virt = []
 
 [dependencies]
+num-rational = {version = "0", default-features = false}

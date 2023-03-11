@@ -9,8 +9,8 @@
 
 mod rxx;
 
-#[macro_use]
-extern crate klog;
+// #[macro_use]
+// extern crate klog;
 
 use sbi_rt::{NoReason, Shutdown};
 
@@ -20,7 +20,7 @@ static mut X: i32 = 123;
 fn main(_hartid: usize) -> ! {
     unsafe { assert_eq!(X, 123) };
 
-    println!("Hello world!");
+    log::info!("Hello world!");
 
     sbi_rt::system_reset(Shutdown, NoReason);
     loop {

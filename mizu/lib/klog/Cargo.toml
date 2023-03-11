@@ -7,7 +7,9 @@ version = "0.1.0"
 [dependencies]
 # Local crates
 ksync = {path = "../ksync"}
+ktime-core = {path = "../ktime-core"}
 # External crates
+log = "0"
 spin = "0"
 [dependencies.sbi-rt]
 branch = "multitarget"
