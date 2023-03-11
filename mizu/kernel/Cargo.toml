@@ -12,6 +12,8 @@ qemu-virt = ["config/qemu-virt"]
 # Local crates
 co-trap = {path = "../lib/co-trap"}
 config = {path = "../lib/config", default-features = false}
+klog = {path = "../lib/klog"}
+ksync = {path = "../lib/ksync"}
 rv39-paging = {path = "../lib/paging"}
 # External crates
 r0 = "1"

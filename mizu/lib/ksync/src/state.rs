@@ -3,7 +3,7 @@ use core::{
     sync::atomic::{AtomicUsize, Ordering::Relaxed},
 };
 
-use riscv::interrupt;
+use riscv::register::sstatus;
 
 pub struct PreemptState {
     count: AtomicUsize,
@@ -23,18 +23,26 @@ impl PreemptState {
     }
 
     pub fn lock(&self) -> PreemptStateGuard {
-        if self.count.fetch_add(1, Relaxed) == 0 {
-            unsafe { interrupt::disable() }
-        }
+        unsafe { self.disable() };
         PreemptStateGuard { state: self }
+    }
+
+    pub unsafe fn disable(&self) {
+        if self.count.fetch_add(1, Relaxed) == 0 {
+            unsafe { sstatus::clear_sie() }
+        }
+    }
+
+    pub unsafe fn enable(&self) {
+        if self.count.fetch_sub(1, Relaxed) == 1 {
+            unsafe { sstatus::set_sie() }
+        }
     }
 }
 
 impl Drop for PreemptStateGuard<'_> {
     fn drop(&mut self) {
-        if self.state.count.fetch_sub(1, Relaxed) == 1 {
-            unsafe { interrupt::enable() }
-        }
+        unsafe { self.state.enable() }
     }
 }
 

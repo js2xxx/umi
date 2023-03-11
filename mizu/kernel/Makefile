@@ -18,8 +18,9 @@ endif
 build:
 	cargo build $(CARGO_ARGS)
 	cp $(KERNEL_RAW)  $(KERNEL_SYM)
-	llvm-strip --strip-debug $(KERNEL_RAW) -o $(ROOT)/kernel-qemu
-	llvm-objdump $(ROOT)/kernel-qemu -x > $(KERNEL_META)
+	llvm-strip --strip-debug --strip-symbol="" \
+		$(KERNEL_RAW) -o $(ROOT)/kernel-qemu
+	llvm-readelf $(ROOT)/kernel-qemu -Ces > $(KERNEL_META)
 	llvm-objdump $(ROOT)/kernel-qemu -Cd > $(KERNEL_ASM)
 
 test:

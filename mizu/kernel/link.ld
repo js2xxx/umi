@@ -10,11 +10,11 @@ SECTIONS
         *(.plt*);
     } :text
 
+    .dynamic : { *(.dynamic*) } :text :dynamic
     .dynsym : { *(.dynsym) }
     .gnu.hash : { *(.gnu.hash) }
     .hash : { *(.hash) }
     .dynstr : { *(.dynstr) }
-    .dynamic : { *(.dynamic*) } :text :dynamic
 
     .rodata : ALIGN(8)
     {
@@ -41,7 +41,7 @@ SECTIONS
         _tdata_size = _etdata - _stdata;
     } :data :tls
 
-    .bss (NOLOAD) :
+    .bss (NOLOAD) : ALIGN(8)
     {
         _sbss = .;
         *(.sbss*);
@@ -53,11 +53,11 @@ SECTIONS
         _estack = ALIGN(8);
     }
 
-    .tbss (NOLOAD) :
+    .tbss (NOLOAD) : ALIGN(8)
     {
         _stp = .;
         . += _tdata_size * _max_harts;
-        _etp = .;
+        _etp = ALIGN(8);
     }
 
     .eh_frame (INFO) : { KEEP(*(.eh_frame)) }
@@ -70,7 +70,6 @@ PHDRS
     text PT_LOAD FLAGS(5);
     data PT_LOAD FLAGS(6);
     dynamic PT_DYNAMIC FLAGS(6);
-    relro PT_GNU_RELRO FLAGS(4);
     note PT_NOTE FLAGS(4);
     tls PT_TLS FLAGS(4);
 }

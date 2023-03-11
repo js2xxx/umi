@@ -50,6 +50,9 @@ unsafe extern "C" fn __rt_init(hartid: usize) {
         );
     }
 
+    // Disable interrupt in `ksync`
+    unsafe { ksync::disable() };
+
     unsafe {
         static mut A: usize = 12345;
 
