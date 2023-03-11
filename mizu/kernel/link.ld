@@ -51,6 +51,10 @@ SECTIONS
         _sstack = ALIGN(4K);
         . += _stack_size * _max_harts;
         _estack = ALIGN(8);
+
+        _sheap = ALIGN(4K);
+        . += _heap_size;
+        _eheap = ALIGN(8);
     }
 
     .tbss (NOLOAD) : ALIGN(8)
@@ -74,5 +78,6 @@ PHDRS
     tls PT_TLS FLAGS(4);
 }
 
+PROVIDE(_heap_size = 24M);
 PROVIDE(_stack_size = 4K);
 PROVIDE(_max_harts = 4);

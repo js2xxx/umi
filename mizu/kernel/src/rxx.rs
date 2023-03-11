@@ -31,6 +31,9 @@ unsafe extern "C" fn __rt_init(hartid: usize) {
 
         static _stdata: u32;
         static _etdata: u32;
+
+        static mut _sheap: u32;
+        static mut _eheap: u32;
     }
     if hartid == 0 {
         r0::zero_bss(&mut _sbss, &mut _ebss);
@@ -50,11 +53,14 @@ unsafe extern "C" fn __rt_init(hartid: usize) {
         );
     }
 
-    // Disable interrupt in `ksync`
+    // Disable interrupt in `ksync`.
     unsafe { ksync::disable() };
 
     // Init logger.
     unsafe { klog::init_logger(log::Level::Debug) };
+
+    // Init the kernel heap.
+    unsafe { kalloc::init(&mut _sheap, &mut _eheap) };
 
     unsafe {
         static mut A: usize = 12345;

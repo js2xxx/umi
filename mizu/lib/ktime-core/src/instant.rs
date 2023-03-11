@@ -10,16 +10,16 @@ pub struct Instant(u128);
 impl Instant {
     pub fn now() -> Self {
         let raw = riscv::register::time::read64() as u128;
-        let nanos = config::TIME_FREQ.reduced() * 1_000_000_000 * raw;
-        Instant(nanos.to_integer())
+        let micros = config::TIME_FREQ_M.numer() * raw / config::TIME_FREQ_M.denom();
+        Instant(micros)
     }
 
     #[must_use]
     pub fn checked_duration_since(&self, earlier: Self) -> Option<Duration> {
-        let nanos = self.0.checked_sub(earlier.0)?;
-        let secs = (nanos / 1_000_000_000) as u64;
-        let nanos = (nanos % 1_000_000_000) as u32;
-        Some(Duration::new(secs, nanos))
+        let micros = self.0.checked_sub(earlier.0)?;
+        let secs = (micros / 1_000_000) as u64;
+        let micros = (micros % 1_000_000) as u32;
+        Some(Duration::new(secs, micros))
     }
 
     #[must_use]
@@ -28,11 +28,11 @@ impl Instant {
     }
 
     pub fn checked_add(&self, duration: Duration) -> Option<Self> {
-        self.0.checked_add(duration.as_nanos()).map(Instant)
+        self.0.checked_add(duration.as_micros()).map(Instant)
     }
 
     pub fn checked_sub(&self, duration: Duration) -> Option<Self> {
-        self.0.checked_sub(duration.as_nanos()).map(Instant)
+        self.0.checked_sub(duration.as_micros()).map(Instant)
     }
 }
 
@@ -76,7 +76,7 @@ impl Sub for Instant {
 
 impl fmt::Debug for Instant {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let display = self.0 as f64 / 1_000_000_000.0;
+        let display = self.0 as f64 / 1_000_000.0;
         fmt::Display::fmt(&display, f)
     }
 }
