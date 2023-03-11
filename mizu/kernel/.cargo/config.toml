@@ -1,11 +1,18 @@
+[unstable]
+build-std = ["core", "compiler_builtins", "alloc", "panic_abort"]
+build-std-features = ["compiler-builtins-mem"]
+
 [target.riscv64imac-unknown-none-elf]
 linker = "ld.lld"
 rustflags = [
+  "-Crelocation-model=pic",
   "-Clink-arg=--pie",
   "-Clink-arg=--pic-veneer",
   "-Clink-arg=-Bstatic",
+  "-Clink-arg=--apply-dynamic-relocs",
   "-Clink-arg=--ignore-function-address-equality",
   "-Clink-arg=--ignore-data-address-equality",
   "-Clink-arg=-zseparate-loadable-segments",
   "-Clink-arg=--pack-dyn-relocs=relr",
+  "-Ztls-model=local-exec",
 ]

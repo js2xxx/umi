@@ -50,6 +50,12 @@ unsafe extern "C" fn __rt_init(hartid: usize) {
         );
     }
 
+    // Disable interrupt in `ksync`
+    unsafe { ksync::disable() };
+
+    // Init logger.
+    unsafe { klog::init_logger(log::Level::Debug) };
+
     unsafe {
         static mut A: usize = 12345;
 
@@ -118,7 +124,11 @@ unsafe extern "C" fn _start() -> ! {
 
 #[cfg(not(test))]
 #[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! {
+fn panic(info: &core::panic::PanicInfo) -> ! {
+    use sbi_rt::{Shutdown, SystemFailure};
+    klog::print!(""); // MAGIC, test it before removing.
+    log::error!("kernel {info}");
+    sbi_rt::system_reset(Shutdown, SystemFailure);
     loop {
         unsafe { core::arch::asm!("wfi") }
     }

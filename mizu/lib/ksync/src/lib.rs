@@ -27,3 +27,25 @@ pub fn critical<R>(f: impl FnOnce() -> R) -> R {
     let _preempt = state::PREEMPT.lock();
     f()
 }
+
+/// Disable interrupts manually.
+///
+/// # Safety
+///
+/// The caller must care about the potential risks of functions that have sth to
+/// do with interrupts.
+pub unsafe fn disable() {
+    #[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))]
+    state::PREEMPT.disable()
+}
+
+/// Enable interrupts manually.
+///
+/// # Safety
+///
+/// The caller must care about the potential risks of functions that have sth to
+/// do with interrupts.
+pub unsafe fn enable() {
+    #[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))]
+    state::PREEMPT.enable()
+}
