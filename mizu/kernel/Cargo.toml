@@ -5,18 +5,18 @@ name = "mizu"
 version = "0.1.0"
 
 [features]
-qemu-virt = ["config/qemu-virt"]
 default = ["qemu-virt"]
+qemu-virt = ["config/qemu-virt"]
 
 [dependencies]
 # Local crates
+co-trap = {path = "../lib/co-trap"}
 config = {path = "../lib/config", default-features = false}
 rv39-paging = {path = "../lib/paging"}
-co-trap = {path = "../lib/co-trap"}
 # External crates
 r0 = "1"
 riscv = "0"
-sbi-rt = "0"
+sbi-rt = {git = "https://github.com/js2xxx/sbi-rt", branch = "multitarget"}
 
 [build-dependencies]
 config = {path = "../lib/config", default-features = false}

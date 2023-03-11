@@ -13,16 +13,20 @@
 //!
 //! Task scheduling by some async runtime.
 //! ```rust,no_run
-//! use co_trap::yield_to_user;
+//! use co_trap::{yield_to_user, TrapFrame};
 //! use riscv::register::scause;
 //!
 //! fn init_context() {
-//!     co_trap::init(reent_handler);
+//!     unsafe { co_trap::init(reent_handler) };
 //!     // Enable interrupts
+//! }
+//! 
+//! async fn init_task() -> TrapFrame {
+//!     todo!("init_task")
 //! }
 //!
 //! async fn run_task() {
-//!     let mut frame = init_task();
+//!     let mut frame = init_task().await;
 //!     loop {
 //!         unsafe { yield_to_user(&mut frame) };
 //!         let cause = scause::read();
@@ -30,9 +34,13 @@
 //!         handle_resume(&mut frame, cause).await;
 //!     }
 //! }
+//! 
+//! async fn handle_resume(_frame: &mut TrapFrame, _cause: scause::Scause) {
+//!     todo!("handle_resume");
+//! }
 //!
 //! // Process exceptions or interrupts occurred in S-mode.
-//! extern "C" fn reent_handler(_frame: &mut frame) {
+//! extern "C" fn reent_handler(_frame: &mut TrapFrame) {
 //!     // Example:
 //!     // * Panic or reset if an S-mode exception occurred.
 //!     // * Wake wakers of tasks waiting for it if an interrupt occurred.
