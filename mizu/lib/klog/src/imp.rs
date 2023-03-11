@@ -12,7 +12,7 @@ impl Output {
         #[allow(deprecated)]
         let _ = sbi_rt::legacy::console_putchar(byte as usize);
         #[cfg(test)]
-        std::io::stdout().lock().write(&[byte]).unwrap()
+        std::io::stdout().lock().write(&[byte]).unwrap();
     }
 }
 

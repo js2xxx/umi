@@ -1,0 +1,12 @@
+[package]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+name = "kalloc"
+version = "0.1.0"
+
+[dependencies]
+# Local crates
+ksync = {path = "../ksync"}
+# External crates
+buddy_system_allocator = {version = "0", default-features = false}
+spin = "0"

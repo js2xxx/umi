@@ -9,8 +9,10 @@
 
 mod rxx;
 
-// #[macro_use]
-// extern crate klog;
+#[macro_use]
+extern crate klog;
+
+extern crate alloc;
 
 use sbi_rt::{NoReason, Shutdown};
 
@@ -20,7 +22,9 @@ static mut X: i32 = 123;
 fn main(_hartid: usize) -> ! {
     unsafe { assert_eq!(X, 123) };
 
-    log::info!("Hello world!");
+    println!("Hello world!");
+    let vec = alloc::vec![1, 2, 3, 4, 5];
+    log::debug!("{vec:?}");
 
     sbi_rt::system_reset(Shutdown, NoReason);
     loop {

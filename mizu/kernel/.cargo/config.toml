@@ -1,7 +1,3 @@
-[unstable]
-build-std = ["core", "compiler_builtins", "alloc", "panic_abort"]
-build-std-features = ["compiler-builtins-mem"]
-
 [target.riscv64imac-unknown-none-elf]
 linker = "ld.lld"
 rustflags = [
