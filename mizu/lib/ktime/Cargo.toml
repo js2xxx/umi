@@ -5,4 +5,6 @@ name = "ktime"
 version = "0.1.0"
 
 [dependencies]
+event-listener = {git = "https://github.com/js2xxx/event-listener", default-features = false}
 ktime-core = {path = "../ktime-core"}
+futures-lite = {version = "1.12", default-features = false, features = ["alloc"]}
