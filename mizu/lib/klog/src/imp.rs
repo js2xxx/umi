@@ -1,5 +1,5 @@
 use core::fmt;
-#[cfg(test)]
+#[cfg(feature = "test")]
 use std::io::Write;
 
 use spin::Mutex;
@@ -8,10 +8,10 @@ pub struct Output(());
 
 impl Output {
     pub fn write_byte(&mut self, byte: u8) {
-        #[cfg(not(test))]
+        #[cfg(not(feature = "test"))]
         #[allow(deprecated)]
         let _ = sbi_rt::legacy::console_putchar(byte as usize);
-        #[cfg(test)]
+        #[cfg(feature = "test")]
         std::io::stdout().lock().write(&[byte]).unwrap();
     }
 }

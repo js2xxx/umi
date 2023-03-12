@@ -27,7 +27,7 @@ build:
 
 test:
 ifeq ($(MODE),debug)
-	cargo test --workspace
+	cargo test --workspace --features test
 else
-	cargo bench --workspace
+	cargo bench --workspace --features test
 endif

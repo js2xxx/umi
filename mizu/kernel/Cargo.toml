@@ -7,6 +7,12 @@ version = "0.1.0"
 [features]
 default = ["qemu-virt"]
 qemu-virt = ["config/qemu-virt"]
+test = [
+  "art/test",
+  "kalloc/test",
+  "klog/test",
+  "ktime/test",
+]
 
 [dependencies]
 # Local crates

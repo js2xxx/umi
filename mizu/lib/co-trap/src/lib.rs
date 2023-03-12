@@ -46,7 +46,7 @@
 //!     // * Wake wakers of tasks waiting for it if an interrupt occurred.
 //! }
 //! ```
-#![cfg_attr(not(test), no_std)]
+#![cfg_attr(any(target_arch = "riscv32", target_arch = "riscv64"), no_std)]
 
 use core::sync::atomic;
 

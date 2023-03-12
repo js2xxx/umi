@@ -1,5 +1,5 @@
-#![cfg_attr(not(test), no_std)]
-#![cfg_attr(not(test), no_main)]
+#![cfg_attr(not(feature = "test"), no_std)]
+#![cfg_attr(not(feature = "test"), no_main)]
 #![feature(asm_const)]
 #![feature(const_mut_refs)]
 #![feature(const_trait_impl)]

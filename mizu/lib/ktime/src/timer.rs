@@ -1,4 +1,3 @@
-
 use core::time::Duration;
 
 use event_listener::Event;
@@ -88,4 +87,46 @@ static TIMER: Event = Event::new();
 
 pub fn notify_timer() {
     TIMER.notify(usize::MAX)
+}
+
+#[cfg(test)]
+mod tests {
+    use core::time::Duration;
+    use std::{sync::mpsc, thread};
+
+    use futures::executor::block_on;
+    use ktime_core::Instant;
+
+    use crate::{notify_timer, Timer};
+
+    #[test]
+    fn test_timer() {
+        let (tx, rx) = mpsc::channel();
+        let test = async {
+            let start = Instant::now();
+
+            let dur = Duration::from_millis(10);
+            let mut timer = Timer::after(dur);
+
+            let delta = timer.wait().await - (start + dur);
+            assert!(delta < Duration::from_millis(1));
+            
+            let deadline = start + dur * 2;
+            timer.set_deadline(deadline);
+
+            let delta = timer.wait().await - deadline;
+            assert!(delta < Duration::from_millis(1));
+
+            tx.send(()).unwrap()
+        };
+        let notify = thread::spawn(move || loop {
+            let try_recv = rx.try_recv();
+            if try_recv.is_ok() {
+                break;
+            }
+            notify_timer()
+        });
+        block_on(test);
+        notify.join().unwrap();
+    }
 }

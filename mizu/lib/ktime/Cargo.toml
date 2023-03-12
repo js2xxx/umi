@@ -4,7 +4,14 @@ license = "MIT OR Apache-2.0"
 name = "ktime"
 version = "0.1.0"
 
+[features]
+test = ["ktime-core/test"]
+
 [dependencies]
 event-listener = {git = "https://github.com/js2xxx/event-listener", default-features = false}
-ktime-core = {path = "../ktime-core"}
 futures-lite = {version = "1.12", default-features = false, features = ["alloc"]}
+ktime-core = {path = "../ktime-core"}
+
+[dev-dependencies]
+futures = "0"
+ktime-core = {path = "../ktime-core"}
