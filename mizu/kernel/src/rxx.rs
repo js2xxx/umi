@@ -1,4 +1,4 @@
-#[cfg(not(test))]
+#[cfg(not(feature = "test"))]
 use core::arch::asm;
 
 use rv39_paging::{table_1g, AddrExt, Attr, Entry, Level, PAddr, Table, ID_OFFSET};
@@ -17,7 +17,7 @@ static BOOT_PAGES: Table = const {
     ]
 };
 
-#[cfg(not(test))]
+#[cfg(not(feature = "test"))]
 #[no_mangle]
 unsafe extern "C" fn __rt_init(hartid: usize) {
     extern "C" {
@@ -70,7 +70,7 @@ unsafe extern "C" fn __rt_init(hartid: usize) {
     crate::main(hartid)
 }
 
-#[cfg(not(test))]
+#[cfg(not(feature = "test"))]
 #[naked]
 #[no_mangle]
 #[link_section = ".init"]
@@ -128,7 +128,7 @@ unsafe extern "C" fn _start() -> ! {
     )
 }
 
-#[cfg(not(test))]
+#[cfg(not(feature = "test"))]
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
     use sbi_rt::{Shutdown, SystemFailure};

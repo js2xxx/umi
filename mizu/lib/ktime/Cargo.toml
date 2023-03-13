@@ -4,5 +4,17 @@ license = "MIT OR Apache-2.0"
 name = "ktime"
 version = "0.1.0"
 
+[features]
+test = ["ktime-core/test"]
+
 [dependencies]
+# Local crates
+ksync = {path = "../ksync"}
 ktime-core = {path = "../ktime-core"}
+# External crates
+futures-lite = {version = "1", default-features = false, features = ["alloc"]}
+heapless = "0"
+spin = "0"
+
+[dev-dependencies]
+smol = "1"

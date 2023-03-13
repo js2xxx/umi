@@ -1,9 +1,11 @@
-#![cfg_attr(not(test), no_std)]
+#![cfg_attr(not(feature = "test"), no_std)]
 #![feature(once_cell)]
 
 mod imp;
 
-#[cfg(not(test))]
+pub use imp::Allocator;
+
+#[cfg(not(feature = "test"))]
 #[global_allocator]
 static GLOBAL_ALLOC: imp::Allocator = imp::Allocator::new();
 
@@ -14,7 +16,7 @@ static GLOBAL_ALLOC: imp::Allocator = imp::Allocator::new();
 /// - `end` must be greater than `start` in addresses and must be properly
 ///   aligned.
 /// - Must be called only once at initialization.
-#[cfg(not(test))]
+#[cfg(not(feature = "test"))]
 pub unsafe fn init<T: Copy>(start: &mut T, end: &mut T) {
     let start_ptr = (start as *mut T).cast();
     let end_ptr = (end as *mut T).cast::<u8>();

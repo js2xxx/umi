@@ -4,7 +4,7 @@ use core::{
     time::Duration,
 };
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Instant(u128);
 
 impl Instant {

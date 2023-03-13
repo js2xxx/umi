@@ -13,6 +13,9 @@ impl Allocator {
         Allocator(Mutex::new(Heap::new()))
     }
 
+    /// # Safety
+    ///
+    /// The function must be called only once during initialization
     pub unsafe fn init(&self, start: usize, len: usize) {
         ksync::critical(|| self.0.lock().init(start, len));
     }

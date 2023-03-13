@@ -7,9 +7,16 @@ version = "0.1.0"
 [features]
 default = ["qemu-virt"]
 qemu-virt = ["config/qemu-virt"]
+test = [
+  "art/test",
+  "kalloc/test",
+  "klog/test",
+  "ktime/test",
+]
 
 [dependencies]
 # Local crates
+art = {path = "../lib/art"}
 co-trap = {path = "../lib/co-trap"}
 config = {path = "../lib/config", default-features = false}
 kalloc = {path = "../lib/kalloc"}
