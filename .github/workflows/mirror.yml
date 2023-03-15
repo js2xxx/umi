@@ -1,0 +1,28 @@
+on:
+  push:
+    branches: ["master"]
+  pull_request:
+    branches: ["master"]
+    
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Configure SSH
+      env: 
+        PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
+      run: |
+        mkdir -p ~/.ssh
+        echo "$PRIVATE_KEY" > ~/.ssh/id_rsa
+        chmod 600 ~/.ssh/id_rsa
+        echo "StrictHostChecking no" >> ~/.ssh/config
+    - name: Push Mirror
+      env:
+        SRC: 'https://github.com/js2xxx/umi.git'
+        DST: 'git@gitlab.eduxiji.net:PLNTRY/OSKernel2023-umi.git'
+      run: |
+        git clone --mirror "$SRC" && cd `basename "$SRC"`
+        git remote set-url --push origin "$DST"
+        git fetch -p origin
+        git for-each-ref --format 'delete %(refname)' refs/pull | git update-ref --stdin
+        git push --mirror
