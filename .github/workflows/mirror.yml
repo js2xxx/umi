@@ -15,7 +15,7 @@ jobs:
         mkdir -p ~/.ssh
         echo "$PRIVATE_KEY" > ~/.ssh/id_rsa
         chmod 600 ~/.ssh/id_rsa
-        echo "StrictHostChecking no" >> ~/.ssh/config
+        echo "StrictHostKeyChecking no" >> ~/.ssh/config
     - name: Push Mirror
       env:
         SRC: 'https://github.com/js2xxx/umi.git'
