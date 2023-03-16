@@ -34,6 +34,12 @@ impl Instant {
     pub fn checked_sub(&self, duration: Duration) -> Option<Self> {
         self.0.checked_sub(duration.as_micros()).map(Instant)
     }
+
+    #[inline]
+    #[must_use]
+    pub fn elapsed(&self) -> Duration {
+        Instant::now() - *self
+    }
 }
 
 impl Add<Duration> for Instant {

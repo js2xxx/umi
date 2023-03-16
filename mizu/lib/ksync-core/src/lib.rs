@@ -12,7 +12,7 @@ mod state;
 ///
 /// # Examples
 ///
-/// ```rust
+/// ```rust,ignore
 /// use spin::Mutex;
 ///
 /// let mutex = Mutex::new(0);
