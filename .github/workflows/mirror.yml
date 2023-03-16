@@ -13,8 +13,13 @@ jobs:
         SRC: 'https://github.com/js2xxx/umi.git'
         DST: 'https://gitlab.eduxiji.net/PLNTRY/OSKernel2023-umi.git'
       run: |
-        git clone --mirror "$SRC" && cd `basename "$SRC" .git`
+        echo "Clone the source"
+        git clone --mirror "$SRC" && cd `basename "$SRC"`
+        echo "Set remote"
         git remote set-url --push origin "$DST"
+        echo "Fetch remote"
         git fetch -p origin
+        echo "Update branches"
         git for-each-ref --format 'delete %(refname)' refs/pull | git update-ref --stdin
+        echo "Push to the destination"
         git push --mirror
