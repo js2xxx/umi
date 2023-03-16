@@ -8,18 +8,10 @@ jobs:
   mirror:
     runs-on: ubuntu-latest
     steps:
-    - name: Configure SSH
-      env: 
-        PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
-      run: |
-        mkdir -p ~/.ssh
-        echo "$PRIVATE_KEY" > ~/.ssh/id_rsa
-        chmod 600 ~/.ssh/id_rsa
-        echo "StrictHostKeyChecking no" >> ~/.ssh/config
     - name: Push Mirror
       env:
         SRC: 'https://github.com/js2xxx/umi.git'
-        DST: 'git@gitlab.eduxiji.net:PLNTRY/OSKernel2023-umi.git'
+        DST: 'https://gitlab.eduxiji.net/PLNTRY/OSKernel2023-umi.git'
       run: |
         git clone --mirror "$SRC" && cd `basename "$SRC"`
         git remote set-url --push origin "$DST"
