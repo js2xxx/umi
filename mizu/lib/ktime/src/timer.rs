@@ -160,7 +160,7 @@ impl TimerQueue {
             waker,
         };
         if let Err(batch) = self.pending.enqueue(batch) {
-            ksync::critical(|| {
+            ksync_core::critical(|| {
                 let mut heap = self.heap.lock();
                 self.proc_batch(Some(batch), &mut heap);
             });
@@ -171,7 +171,7 @@ impl TimerQueue {
     fn remove(&self, deadline: Instant, id: usize) {
         let batch = TimerBatch::Remove { deadline, id };
         if let Err(batch) = self.pending.enqueue(batch) {
-            ksync::critical(|| {
+            ksync_core::critical(|| {
                 let mut heap = self.heap.lock();
                 self.proc_batch(Some(batch), &mut heap);
             });
@@ -210,7 +210,7 @@ impl TimerQueue {
     }
 
     pub fn tick(&self) {
-        let wakers = ksync::critical(|| {
+        let wakers = ksync_core::critical(|| {
             let mut heap = self.heap.lock();
             self.proc_batch(None, &mut heap);
 

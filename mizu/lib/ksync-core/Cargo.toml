@@ -1,8 +1,11 @@
 [package]
 edition = "2021"
 license = "MIT OR Apache-2.0"
-name = "ksync"
+name = "ksync-core"
 version = "0.1.0"
 
 [dependencies]
-ksync-core = {path = "../ksync-core"}
+riscv = "0"
+
+[dev-dependencies]
+spin = "0"

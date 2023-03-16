@@ -3,6 +3,6 @@
 pub mod imp;
 mod logger;
 
-pub use ksync::critical;
+pub use ksync_core::critical;
 
 pub use self::logger::init as init_logger;

@@ -9,7 +9,7 @@ test = []
 
 [dependencies]
 # Local crates
-ksync = {path = "../ksync"}
+ksync-core = {path = "../ksync-core"}
 # External crates
 buddy_system_allocator = {version = "0", default-features = false}
 spin = "0"
