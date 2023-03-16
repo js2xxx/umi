@@ -7,6 +7,8 @@ on:
 jobs:
   mirror:
     runs-on: ubuntu-latest
+    env:
+      PASSWORD: ${{ secrets.PASSWORD }}
     steps:
     - name: Push Mirror
       env:
@@ -22,4 +24,6 @@ jobs:
         echo "Update branches"
         git for-each-ref --format 'delete %(refname)' refs/pull | git update-ref --stdin
         echo "Push to the destination"
+        git config user.name PLNTRY
+        git config user.password "$PASSWORD"
         git push --mirror
