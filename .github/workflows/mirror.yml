@@ -7,13 +7,11 @@ on:
 jobs:
   mirror:
     runs-on: ubuntu-latest
-    env:
-      PASSWORD: ${{ secrets.PASSWORD }}
     steps:
     - name: Push Mirror
       env:
         SRC: 'https://github.com/js2xxx/umi.git'
-        DST: 'https://gitlab.eduxiji.net/PLNTRY/OSKernel2023-umi.git'
+        DST: 'https://PLNTRY:${{ secrets.PASSWORD }}@gitlab.eduxiji.net/PLNTRY/OSKernel2023-umi.git'
       run: |
         echo "Clone the source"
         git clone --mirror "$SRC" && cd `basename "$SRC"`
@@ -24,6 +22,4 @@ jobs:
         echo "Update branches"
         git for-each-ref --format 'delete %(refname)' refs/pull | git update-ref --stdin
         echo "Push to the destination"
-        git config user.name PLNTRY
-        git config user.password "$PASSWORD"
         git push --mirror
