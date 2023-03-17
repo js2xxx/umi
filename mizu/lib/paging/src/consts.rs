@@ -1,4 +1,6 @@
-use crate::{LAddr, PAddr};
+use core::ptr::NonNull;
+
+use crate::{LAddr, PAddr, Table};
 
 pub const PAGE_SHIFT: usize = 12;
 pub const PAGE_SIZE: usize = 1 << PAGE_SHIFT;
@@ -21,4 +23,18 @@ pub enum Error {
     },
     RangeEmpty,
     EntryExistent(bool),
+}
+
+/// # Safety
+///
+/// The `alloc` function must return a pointer that has its ownership,
+/// representing a zeroed `Table`.
+pub unsafe trait PageAlloc {
+    fn alloc(&self) -> Option<NonNull<Table>>;
+
+    /// # Safety
+    ///
+    /// `ptr` must has its ownership and must be previously returned by the
+    /// `alloc` function.
+    unsafe fn dealloc(&self, ptr: NonNull<Table>);
 }

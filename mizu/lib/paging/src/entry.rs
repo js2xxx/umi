@@ -6,7 +6,9 @@ use core::{
 use bitflags::bitflags;
 use static_assertions::const_assert;
 
-use crate::{Level, PAddr, ENTRY_SIZE_SHIFT, NR_ENTRIES};
+use crate::{
+    Error, LAddr, Level, PAddr, PageAlloc, ENTRY_SIZE_SHIFT, ID_OFFSET, NR_ENTRIES, PAGE_SIZE,
+};
 
 bitflags! {
     pub struct Attr: usize {
@@ -29,6 +31,10 @@ impl Attr {
     #[inline]
     pub const fn builder() -> AttrBuilder {
         AttrBuilder::new()
+    }
+
+    pub const fn has_table(&self) -> bool {
+        self.contains(Attr::READABLE.union(Attr::WRITABLE).union(Attr::EXECUTABLE))
     }
 }
 
@@ -105,12 +111,129 @@ impl Entry {
     pub const fn new(addr: PAddr, attr: Attr, level: Level) -> Self {
         Self(((*addr & level.paddr_mask()) >> 2) | attr.bits)
     }
+
+    #[inline]
+    pub fn reset(&mut self) {
+        *self = Entry(0);
+    }
+
+    pub fn table(&self, level: Level) -> Option<&Table> {
+        let (addr, attr) = self.get(Level::pt());
+        if attr.contains(Attr::VALID) && attr.has_table() && level != Level::pt() {
+            let ptr = addr.to_laddr(ID_OFFSET);
+            Some(unsafe { &*ptr.cast() })
+        } else {
+            None
+        }
+    }
+
+    pub fn table_mut(&mut self, level: Level) -> Option<&mut Table> {
+        let (addr, attr) = self.get(Level::pt());
+        if attr.contains(Attr::VALID) && attr.has_table() && level != Level::pt() {
+            let ptr = addr.to_laddr(ID_OFFSET);
+            Some(unsafe { &mut *ptr.cast() })
+        } else {
+            None
+        }
+    }
+
+    /// Get the page table stored in the entry, or create a new empty one if the
+    /// entry is empty.
+    ///
+    /// This function is usually used when creating new mappings.
+    ///
+    /// # Errors
+    ///
+    /// Return an error if the entry is already a valid leaf entry, or memory
+    /// exhaustion when creating a new table.
+    pub fn table_or_create(
+        &mut self,
+        level: Level,
+        alloc: &impl PageAlloc,
+    ) -> Result<&mut Table, Error> {
+        let (addr, attr) = self.get(Level::pt());
+        if !attr.has_table() || level == Level::pt() {
+            return Err(Error::EntryExistent(true));
+        }
+        Ok(if attr.contains(Attr::VALID) {
+            let ptr = addr.to_laddr(ID_OFFSET);
+            unsafe { &mut *ptr.cast() }
+        } else {
+            let mut ptr = alloc.alloc().ok_or(Error::OutOfMemory)?;
+            let addr = LAddr::from(ptr).to_paddr(ID_OFFSET);
+            *self = Self::new(addr, Attr::VALID, Level::pt());
+            unsafe { ptr.as_mut() }
+        })
+    }
+
+    /// Get the page table stored in the entry, or split it if its a larger leaf
+    /// entry.
+    ///
+    /// This function is usually used when reprotecting mappings.
+    ///
+    /// # Errors
+    ///
+    /// Return an error if the entry has no valid mapping, or memory exhaustion
+    /// when creating a new table.
+    pub fn table_or_split(
+        &mut self,
+        level: Level,
+        alloc: &impl PageAlloc,
+    ) -> Result<&mut Table, Error> {
+        let (addr, attr) = self.get(Level::pt());
+        if !attr.contains(Attr::VALID) || level == Level::pt() {
+            return Err(Error::EntryExistent(false));
+        }
+        Ok(if attr.has_table() {
+            let ptr = addr.to_laddr(ID_OFFSET);
+            unsafe { &mut *ptr.cast() }
+        } else {
+            let mut ptr = alloc.alloc().ok_or(Error::OutOfMemory)?;
+
+            let item_level = level.decrease().expect("Item level");
+            let table = unsafe { ptr.as_mut() };
+            let addrs = (0..NR_ENTRIES).map(|n| PAddr::new(*addr + n * PAGE_SIZE));
+            for (item, addr) in table.iter_mut().zip(addrs) {
+                *item = Self::new(addr, attr, item_level);
+            }
+
+            let table_addr = LAddr::from(ptr).to_paddr(ID_OFFSET);
+            *self = Self::new(table_addr, Attr::VALID, Level::pt());
+            table
+        })
+    }
+
+    /// Destroy the table stored in the entry, if any. Doesn't have any effect
+    /// on the data if not the case.
+    ///
+    /// This function is usually used when destroying mappings.
+    ///
+    /// # Arguments
+    ///
+    /// - `drop`: The drop function of the table, using it to destroy data in
+    ///   the table. Returns whether the table should be destroyed.
+    pub fn destroy_table(
+        &mut self,
+        level: Level,
+        drop: impl FnOnce(&mut Table) -> bool,
+        alloc: &impl PageAlloc,
+    ) {
+        let (addr, attr) = self.get(Level::pt());
+        if attr.contains(Attr::VALID) && attr.has_table() && level != Level::pt() {
+            let ptr = addr.to_laddr(ID_OFFSET);
+            let table = unsafe { &mut *ptr.cast::<Table>() };
+            if drop(table) {
+                self.reset();
+                unsafe { alloc.dealloc(table.into()) }
+            }
+        }
+    }
 }
 
 impl fmt::Debug for Entry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let (addr, attr) = self.get(Level::pt());
-        write!(f, "Entry(addr={:?}, attr={:?})", addr, attr)
+        write!(f, "Entry({addr:?}: {attr:?})")
     }
 }
 

@@ -1,7 +1,7 @@
 use core::{
     alloc::Layout,
     num::NonZeroUsize,
-    ops::{Deref, DerefMut, Range},
+    ops::{Add, AddAssign, Deref, DerefMut, Range, Sub, SubAssign},
     ptr::NonNull,
 };
 
@@ -26,6 +26,34 @@ impl PAddr {
 
     pub fn in_page_offset(self) -> usize {
         self.0 & crate::PAGE_MASK
+    }
+}
+
+impl Add<usize> for PAddr {
+    type Output = Self;
+
+    fn add(self, rhs: usize) -> Self::Output {
+        PAddr::new(*self + rhs)
+    }
+}
+
+impl AddAssign<usize> for PAddr {
+    fn add_assign(&mut self, rhs: usize) {
+        **self += rhs
+    }
+}
+
+impl Sub<usize> for PAddr {
+    type Output = Self;
+
+    fn sub(self, rhs: usize) -> Self::Output {
+        PAddr::new(*self - rhs)
+    }
+}
+
+impl SubAssign<usize> for PAddr {
+    fn sub_assign(&mut self, rhs: usize) {
+        **self -= rhs
     }
 }
 
