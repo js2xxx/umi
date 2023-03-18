@@ -17,19 +17,19 @@ impl Allocator {
     ///
     /// The function must be called only once during initialization
     pub unsafe fn init(&self, start: usize, len: usize) {
-        ksync::critical(|| self.0.lock().init(start, len));
+        ksync_core::critical(|| self.0.lock().init(start, len));
     }
 }
 
 unsafe impl GlobalAlloc for Allocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let res = ksync::critical(|| self.0.lock().alloc(layout));
+        let res = ksync_core::critical(|| self.0.lock().alloc(layout));
         res.map_or(ptr::null_mut(), NonNull::as_ptr)
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         if let Some(ptr) = NonNull::new(ptr) {
-            ksync::critical(|| self.0.lock().dealloc(ptr, layout))
+            ksync_core::critical(|| self.0.lock().dealloc(ptr, layout))
         }
     }
 }

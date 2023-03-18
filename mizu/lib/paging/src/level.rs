@@ -51,6 +51,11 @@ impl Level {
             ret
         }
     }
+
+    #[inline]
+    pub const fn decrease(&self) -> Option<Level> {
+        self.0.checked_sub(1).map(Level)
+    }
 }
 
 #[const_trait]

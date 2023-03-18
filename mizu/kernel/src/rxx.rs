@@ -128,7 +128,7 @@ unsafe extern "C" fn _start() -> ! {
     )
 }
 
-#[cfg(not(feature = "test"))]
+#[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))]
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
     use sbi_rt::{Shutdown, SystemFailure};
