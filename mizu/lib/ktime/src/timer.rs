@@ -99,7 +99,7 @@ impl Stream for Timer {
             return Poll::Pending;
         }
         let now = Instant::now();
-        if now <= self.deadline {
+        if now >= self.deadline {
             if let Some((id, _)) = self.handle.take() {
                 TIMER_QUEUE.remove(self.deadline, id);
             }
@@ -237,7 +237,14 @@ mod tests {
     #[test]
     fn test_timer() {
         let (tx, rx) = mpsc::channel();
-        let test = async {
+        let notify = thread::spawn(move || loop {
+            let try_recv = rx.try_recv();
+            if try_recv.is_ok() {
+                break;
+            }
+            timer_tick()
+        });
+        smol::block_on(async {
             let start = Instant::now();
 
             let dur = Duration::from_millis(10);
@@ -252,16 +259,12 @@ mod tests {
             let delta = timer.next().await.unwrap() - deadline;
             assert!(delta < Duration::from_millis(1));
 
-            tx.send(()).unwrap()
-        };
-        let notify = thread::spawn(move || loop {
-            let try_recv = rx.try_recv();
-            if try_recv.is_ok() {
-                break;
-            }
-            timer_tick()
+            let start = Instant::now();
+            crate::sleep(dur).await;
+            assert!(start.elapsed() >= dur);
         });
-        smol::block_on(test);
+
+        tx.send(()).unwrap();
         notify.join().unwrap();
     }
 }

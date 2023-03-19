@@ -5,7 +5,7 @@ name = "ktime"
 version = "0.1.0"
 
 [features]
-test = ["ktime-core/test"]
+test = ["ktime-core/test", "dep:smol"]
 
 [dependencies]
 # Local crates
@@ -14,7 +14,5 @@ ktime-core = {path = "../ktime-core"}
 # External crates
 futures-lite = {version = "1", default-features = false, features = ["alloc"]}
 heapless = "0"
+smol = {version = "1", optional = true}
 spin = "0"
-
-[dev-dependencies]
-smol = "1"

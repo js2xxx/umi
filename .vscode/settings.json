@@ -5,5 +5,9 @@
         "x86_64-unknown-linux-gnu",
     ],
     "rust-analyzer.check.allTargets": false,
-    "rust-analyzer.check.command": "clippy"
+    "rust-analyzer.check.command": "clippy",
+    "rust-analyzer.runnables.extraArgs": [
+        "--features",
+        "test"
+    ]
 }

@@ -15,7 +15,7 @@ ifeq ($(MODE),release)
     CARGO_ARGS += --release
 endif
 
-.PHONY: build test
+.PHONY: build
 
 build:
 	cargo build $(CARGO_ARGS)
@@ -24,10 +24,3 @@ build:
 		$(KERNEL_RAW) -o $(ROOT)/kernel-qemu
 	llvm-readelf $(ROOT)/kernel-qemu -Ces > $(KERNEL_META)
 	llvm-objdump $(ROOT)/kernel-qemu -Cd > $(KERNEL_ASM)
-
-test:
-ifeq ($(MODE),debug)
-	cargo test --workspace --features test
-else
-	cargo bench --workspace --features test
-endif
