@@ -31,7 +31,11 @@ debug: build
 	qemu-system-riscv64 $(QEMU_ARGS) -s -S
 
 test:
-	cd mizu/kernel && make test
+ifeq ($(MODE),debug)
+	cargo test --all-targets --features test
+else
+	cargo bench --all-targets --features test
+endif
 
 clean:
 	cargo clean

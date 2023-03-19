@@ -430,25 +430,40 @@ pub fn unbounded<T>() -> (Sender<T, SegQueue<T>>, Receiver<T, SegQueue<T>>) {
 #[cfg(test)]
 mod tests {
     use core::{pin::pin, time::Duration};
+    use std::{sync::mpsc, thread};
 
     use futures_lite::StreamExt;
-    use ktime::Timer;
+    use ktime::{sleep, timer_tick, Instant};
 
     use super::*;
     #[test]
     fn test_channel() {
+        let (ticker_tx, rx) = mpsc::channel();
+        let ticker = thread::spawn(move || loop {
+            let try_recv = rx.try_recv();
+            if try_recv.is_ok() {
+                break;
+            }
+            timer_tick()
+        });
+        let duration = Duration::from_millis(10);
         smol::block_on(async {
             let (tx, rx) = bounded(1);
+            let instant = Instant::now();
+            assert!(tx.send(()).await.is_ok());
             let rx = smol::spawn(async move {
-                Timer::after(Duration::from_millis(500)).await;
+                sleep(duration).await;
                 let count = pin!(rx.streamed()).count().await;
                 assert_eq!(count, 3);
             });
             assert!(tx.send(()).await.is_ok());
-            assert!(tx.send(()).await.is_ok());
+            let delta = instant.elapsed() - duration;
+            assert!(delta < Duration::from_millis(1));
             assert!(tx.send(()).await.is_ok());
             drop(tx);
-            rx.await
-        })
+            rx.await;
+        });
+        ticker_tx.send(()).unwrap();
+        ticker.join().unwrap();
     }
 }
