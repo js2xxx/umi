@@ -10,4 +10,9 @@ ksync-core = {path = "../ksync-core"}
 ktime = {path = "../ktime"}
 # External crates
 arsc-rs = {git = "https://github.com/js2xxx/arsc"}
+crossbeam-queue = {version = "0", default-features = false, features = ["alloc", "nightly"]}
 event-listener = {git = "https://github.com/js2xxx/event-listener", default-features = false}
+futures-lite = {version = "1", default-features = false, features = ["alloc"]}
+
+[dev-dependencies]
+smol = "1"
