@@ -65,18 +65,17 @@ impl Scheduler {
         let result: Option<(&Scheduler, usize)> =
             SCHED.iter().take(nr_harts).fold(None, |out, sched| {
                 let count = sched.count.load(Ordering::Acquire);
-                Some(match out {
-                    None => (sched, count),
-                    Some((s, c)) => {
-                        let minimize_count = c < count;
-                        // Relaxed because it cannot be spawned while running.
-                        let stick_to_last = s.cpu == info.last_cpu.load(Ordering::Relaxed);
-                        if minimize_count || stick_to_last {
-                            (s, c)
-                        } else {
-                            (sched, count)
-                        }
+                Some(if let Some((s, c)) = out {
+                    let minimize_count = c < count;
+                    // Relaxed because it cannot be spawned while running.
+                    let stick_to_last = s.cpu == info.last_cpu.load(Ordering::Relaxed);
+                    if minimize_count || stick_to_last {
+                        (s, c)
+                    } else {
+                        (sched, count)
                     }
+                } else {
+                    (sched, count)
                 })
             });
         if let Some((sched, _)) = result {

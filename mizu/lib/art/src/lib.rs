@@ -3,10 +3,11 @@
 
 extern crate alloc;
 
+mod queue;
 mod sched;
 mod task;
 
-pub use self::{sched::SCHED, task::SchedInfo};
+pub use self::{queue::*, sched::SCHED, task::SchedInfo};
 
 static mut NR_HARTS: usize = 0;
 /// Initialize the `ART` module.
