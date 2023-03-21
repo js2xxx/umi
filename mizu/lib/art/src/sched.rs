@@ -131,6 +131,25 @@ impl Worker {
             self.rq.push(task, |task| injector.push(task))
         }
     }
+
+    /// Take the preempted task to the run queue and prevent it from preempting.
+    ///
+    /// If the function is called directly after a returned-true `task.run()`,
+    /// then the task must have been stored in this worker's `preempt_slot`
+    /// because of the following reasons:
+    ///
+    /// 1. Other tasks cannot be scheduled into this worker after `task.run()`
+    /// ends, because the `enqueue` function only operates on its current
+    /// worker;
+    ///
+    /// 2. The task can only be scheduled into this worker, because the
+    /// `async_task` implemetation calls the schedule function only after
+    /// polling the future if it's woken by any waker when running.
+    fn unpreempt_yielded(&mut self, injector: &SegQueue<Runnable>) {
+        if let Some(task) = self.preempt_slot.take() {
+            self.rq.push(task, |task| injector.push(task))
+        }
+    }
 }
 
 impl Context {
@@ -169,13 +188,19 @@ impl Context {
 
             let next = self.next_task(tick, &mut self.worker.borrow_mut());
             if let Some(task) = next {
-                task.run();
+                if task.run() {
+                    let mut worker = self.worker.borrow_mut();
+                    worker.unpreempt_yielded(&self.executor.injector);
+                }
                 continue;
             }
 
             let stealed = self.steal_task(&mut rng, &mut self.worker.borrow_mut());
             if let Some(task) = stealed {
-                task.run();
+                if task.run() {
+                    let mut worker = self.worker.borrow_mut();
+                    worker.unpreempt_yielded(&self.executor.injector);
+                }
                 continue;
             }
 
