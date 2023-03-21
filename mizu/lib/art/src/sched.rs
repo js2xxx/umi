@@ -11,6 +11,7 @@ use core::{
         AtomicBool,
         Ordering::{Acquire, Release},
     },
+    task::Waker,
 };
 
 use arsc_rs::Arsc;
@@ -21,15 +22,23 @@ use rand_chacha::{
     ChaChaRng,
 };
 use scoped_tls::scoped_thread_local;
+use smallvec::SmallVec;
 
 use crate::queue::{Local, Stealer};
 
 const WORKER_CAP: usize = 64;
 const WORKER_TICK_INTERVAL: u32 = 17;
+const DEFERRED_CAP: usize = 5;
 
-struct Context {
-    worker: RefCell<Local<Runnable, WORKER_CAP>>,
+struct Worker {
+    rq: Local<Runnable, WORKER_CAP>,
+    preempt: Option<Runnable>,
+}
+
+pub(crate) struct Context {
+    worker: RefCell<Worker>,
     executor: Arsc<Executor>,
+    pub(crate) deferred: RefCell<SmallVec<[Waker; DEFERRED_CAP]>>,
 }
 
 pub struct Executor {
@@ -38,7 +47,7 @@ pub struct Executor {
     shutdown: AtomicBool,
 }
 
-scoped_thread_local!(static CX: Context);
+scoped_thread_local!(pub(crate) static CX: Context);
 
 impl Executor {
     /// Create a new executor with `num` runners and a `init` future.
@@ -92,17 +101,32 @@ impl Executor {
         self.shutdown.store(true, Release)
     }
 
-    fn startup(worker: Local<Runnable, WORKER_CAP>, executor: Arsc<Executor>) {
+    fn startup(rq: Local<Runnable, WORKER_CAP>, executor: Arsc<Executor>) {
         let cx = Context {
-            worker: RefCell::new(worker),
+            worker: RefCell::new(Worker { rq, preempt: None }),
             executor,
+            deferred: RefCell::new(SmallVec::new()),
         };
         CX.set(&cx, || cx.run())
     }
 }
 
+impl Worker {
+    #[inline]
+    fn pop(&mut self) -> Option<Runnable> {
+        self.preempt.take().or_else(|| self.rq.pop())
+    }
+
+    #[inline]
+    fn push(&mut self, task: Runnable, injector: &SegQueue<Runnable>) {
+        if let Some(last) = self.preempt.replace(task) {
+            self.rq.push(last, |task| injector.push(task))
+        }
+    }
+}
+
 impl Context {
-    fn next_task(&self, tick: u32, worker: &mut Local<Runnable, WORKER_CAP>) -> Option<Runnable> {
+    fn next_task(&self, tick: u32, worker: &mut Worker) -> Option<Runnable> {
         if tick % WORKER_TICK_INTERVAL == 0 {
             self.executor.injector.pop().or_else(|| worker.pop())
         } else {
@@ -110,18 +134,14 @@ impl Context {
         }
     }
 
-    fn steal_task(
-        &self,
-        rand: &mut ChaChaRng,
-        worker: &mut Local<Runnable, WORKER_CAP>,
-    ) -> Option<Runnable> {
+    fn steal_task(&self, rand: &mut ChaChaRng, worker: &mut Worker) -> Option<Runnable> {
         let stealers = &self.executor.stealers;
 
         let len = stealers.len();
         let offset = (rand.next_u64().wrapping_mul(len as u64) >> 32) as usize;
 
         let mut iter = stealers.iter().cycle().skip(offset).take(len);
-        let task = iter.find_map(|stealer| stealer.steal_into_and_pop(worker));
+        let task = iter.find_map(|stealer| stealer.steal_into_and_pop(&mut worker.rq));
         task.or_else(|| self.executor.injector.pop())
     }
 
@@ -151,14 +171,16 @@ impl Context {
                 continue;
             }
 
-            hint::spin_loop()
+            hint::spin_loop();
+
+            self.deferred.borrow_mut().drain(..).for_each(Waker::wake)
         }
     }
 
     fn enqueue(task: Runnable) {
         CX.with(|cx| {
             if let Ok(mut worker) = cx.worker.try_borrow_mut() {
-                worker.push(task, |task| cx.executor.injector.push(task));
+                worker.push(task, &cx.executor.injector);
             } else {
                 cx.executor.injector.push(task)
             }
