@@ -1,87 +1,147 @@
-use core::{
-    future::Future,
-    hint,
-    sync::atomic::{AtomicUsize, Ordering},
-};
+//! Work-stealing async executor, based on [`Tokio`]'s implementation.
+//! 
+//! [`Tokio`]: https://tokio.rs/
 
-use array_macro::array;
+use alloc::{boxed::Box, vec::Vec};
+use core::{cell::RefCell, future::Future, hint};
+
 use arsc_rs::Arsc;
-use async_task::{FallibleTask, Runnable};
-use config::MAX_HARTS;
+use async_task::{Runnable, Task};
 use crossbeam_queue::SegQueue;
-use heapless::mpmc::MpMcQueue;
+use rand_chacha::{
+    rand_core::{RngCore, SeedableRng},
+    ChaChaRng,
+};
+use scoped_tls::scoped_thread_local;
 
-use crate::task::SchedInfo;
+use crate::queue::{Local, Stealer};
 
-static BACKUP: SegQueue<RunTask> = SegQueue::new();
-pub static SCHED: [Scheduler; MAX_HARTS] = array![
-    i => Scheduler {
-        cpu: i,
-        queue: MpMcQueue::new(),
-        count: AtomicUsize::new(0),
-    };
-    MAX_HARTS
-];
+const WORKER_CAP: usize = 64;
+const WORKER_TICK_INTERVAL: u32 = 17;
 
-struct RunTask {
-    inner: Runnable,
-    info: Arsc<SchedInfo>,
+struct Context {
+    worker: RefCell<Local<Runnable, WORKER_CAP>>,
+    executor: Arsc<Executor>,
 }
 
-pub struct Scheduler {
-    cpu: usize,
-    queue: MpMcQueue<RunTask, 128>,
-    count: AtomicUsize,
+pub struct Executor {
+    injector: SegQueue<Runnable>,
+    stealers: Box<[Stealer<Runnable, WORKER_CAP>]>,
 }
 
-impl Scheduler {
-    pub fn run(&'static self) -> ! {
-        loop {
-            let task = self.queue.dequeue().or_else(|| BACKUP.pop());
-            match task {
-                Some(task) => {
-                    task.info.last_cpu.store(self.cpu, Ordering::Relaxed);
-                    task.inner.run();
+scoped_thread_local!(static CX: Context);
 
-                    self.count.fetch_sub(1, Ordering::AcqRel);
-                }
-                None => hint::spin_loop(),
-            }
-        }
-    }
-
-    pub fn spawn<F>(&self, task: F, info: Arsc<SchedInfo>) -> FallibleTask<()>
+impl Executor {
+    /// Create a new executor with `num` runners and a `init` future.
+    ///
+    /// The caller should iterate over the returned startup functions and run
+    /// them concurrently.
+    pub fn new<F>(num: usize, init: F) -> (Arsc<Self>, impl Iterator<Item = impl FnOnce()>)
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        let schedule = move |task| Self::enqueue(task, info.clone());
-        let (task, handle) = async_task::spawn(task, schedule);
-        task.schedule();
-        handle.fallible()
+        let workers = (0..num).map(|_| Local::new()).collect::<Vec<_>>();
+
+        let stealers = workers
+            .iter()
+            .map(|w| w.stealer())
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+
+        let executor = Arsc::new(Executor {
+            injector: SegQueue::new(),
+            stealers,
+        });
+
+        let e2 = executor.clone();
+        let (init, handle) = async_task::spawn(init, move |task| e2.injector.push(task));
+        init.schedule();
+        handle.detach();
+
+        let e2 = executor.clone();
+        let startup = workers.into_iter().map(move |worker| {
+            let e = e2.clone();
+            || Self::startup(worker, e)
+        });
+        (executor, startup)
     }
 
-    fn enqueue(inner: Runnable, info: Arsc<SchedInfo>) {
-        let nr_harts = unsafe { crate::NR_HARTS };
-        let result: Option<(&Scheduler, usize)> =
-            SCHED.iter().take(nr_harts).fold(None, |out, sched| {
-                let count = sched.count.load(Ordering::Acquire);
-                Some(if let Some((s, c)) = out {
-                    let minimize_count = c < count;
-                    // Relaxed because it cannot be spawned while running.
-                    let stick_to_last = s.cpu == info.last_cpu.load(Ordering::Relaxed);
-                    if minimize_count || stick_to_last {
-                        (s, c)
-                    } else {
-                        (sched, count)
-                    }
-                } else {
-                    (sched, count)
-                })
-            });
-        if let Some((sched, _)) = result {
-            if let Err(next) = sched.queue.enqueue(RunTask { inner, info }) {
-                BACKUP.push(next)
-            }
+    pub fn spawn<F, T>(&self, fut: F) -> Task<T>
+    where
+        F: Future<Output = T> + Send + 'static,
+        T: Send + 'static,
+    {
+        let (task, handle) = async_task::spawn(fut, Context::enqueue);
+        task.schedule();
+        handle
+    }
+
+    fn startup(worker: Local<Runnable, WORKER_CAP>, executor: Arsc<Executor>) {
+        let cx = Context {
+            worker: RefCell::new(worker),
+            executor,
+        };
+        CX.set(&cx, || cx.run())
+    }
+}
+
+impl Context {
+    fn next_task(&self, tick: u32, worker: &mut Local<Runnable, WORKER_CAP>) -> Option<Runnable> {
+        if tick % WORKER_TICK_INTERVAL == 0 {
+            self.executor.injector.pop().or_else(|| worker.pop())
+        } else {
+            worker.pop().or_else(|| self.executor.injector.pop())
         }
+    }
+
+    fn steal_task(
+        &self,
+        rand: &mut ChaChaRng,
+        worker: &mut Local<Runnable, WORKER_CAP>,
+    ) -> Option<Runnable> {
+        let stealers = &self.executor.stealers;
+
+        let len = stealers.len();
+        let offset = (rand.next_u64().wrapping_mul(len as u64) >> 32) as usize;
+
+        let mut iter = stealers.iter().cycle().skip(offset).take(len);
+        let task = iter.find_map(|stealer| stealer.steal_into_and_pop(worker));
+        task.or_else(|| self.executor.injector.pop())
+    }
+
+    fn run(&self) {
+        let mut tick = 0u32;
+        let mut rng = ChaChaRng::from_seed({
+            let mut s = [0; 32];
+            crate::rand::seed(&mut s);
+            s
+        });
+        loop {
+            tick = tick.wrapping_add(1);
+
+            let next = self.next_task(tick, &mut self.worker.borrow_mut());
+            if let Some(task) = next {
+                task.run();
+                continue;
+            }
+
+            let stealed = self.steal_task(&mut rng, &mut self.worker.borrow_mut());
+            if let Some(task) = stealed {
+                task.run();
+                continue;
+            }
+
+            hint::spin_loop()
+        }
+    }
+
+    fn enqueue(task: Runnable) {
+        CX.with(|cx| {
+            if let Ok(mut worker) = cx.worker.try_borrow_mut() {
+                worker.push(task, |task| cx.executor.injector.push(task));
+            } else {
+                cx.executor.injector.push(task)
+            }
+        })
     }
 }

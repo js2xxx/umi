@@ -1,4 +1,4 @@
-//! Work-stealing queues based on [`Tokio`]'s implementation
+//! Work-stealing queues based on [`Tokio`]'s implementation.
 //!
 //! [`Tokio`]: https://tokio.rs/
 
@@ -9,7 +9,6 @@ use core::{
 };
 
 use arsc_rs::Arsc;
-use crossbeam_queue::SegQueue;
 
 struct Inner<T, const N: usize> {
     head: AtomicU64,
@@ -80,7 +79,7 @@ impl<T, const N: usize> Local<T, N> {
         Local(inner)
     }
 
-    pub fn push(&mut self, mut value: T, backup: &SegQueue<T>) {
+    pub fn push(&mut self, mut value: T, mut inject: impl FnMut(T)) {
         let tail = loop {
             let head = self.0.head.load(Acquire);
             let (steal, real) = unpack(head);
@@ -91,10 +90,10 @@ impl<T, const N: usize> Local<T, N> {
                 break tail;
             }
             if steal != real {
-                backup.push(value);
+                inject(value);
                 return;
             }
-            match self.push_contended(value, real, tail, backup) {
+            match self.push_contended(value, real, tail, &mut inject) {
                 Ok(()) => return,
                 Err(v) => value = v,
             }
@@ -111,7 +110,7 @@ impl<T, const N: usize> Local<T, N> {
         value: T,
         head: u32,
         tail: u32,
-        backup: &SegQueue<T>,
+        mut inject: impl FnMut(T),
     ) -> Result<(), T> {
         assert_eq!(
             tail.wrapping_sub(head) as usize,
@@ -128,13 +127,13 @@ impl<T, const N: usize> Local<T, N> {
             return Err(value);
         }
 
-        backup.push(value);
+        inject(value);
         let batch = (head..next_head).map(|head| {
             let index = head as usize & Self::MASK;
             // SAFETY: Successful CAS assumed ownership of these values.
             unsafe { self.0.buffer[index].get().read().assume_init() }
         });
-        batch.for_each(|value| backup.push(value));
+        batch.for_each(inject);
 
         Ok(())
     }
