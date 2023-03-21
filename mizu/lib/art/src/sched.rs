@@ -32,7 +32,8 @@ const DEFERRED_CAP: usize = 5;
 
 struct Worker {
     rq: Local<Runnable, WORKER_CAP>,
-    preempt: Option<Runnable>,
+    preempt_slot: Option<Runnable>,
+    preempt: bool,
 }
 
 pub(crate) struct Context {
@@ -103,7 +104,11 @@ impl Executor {
 
     fn startup(rq: Local<Runnable, WORKER_CAP>, executor: Arsc<Executor>) {
         let cx = Context {
-            worker: RefCell::new(Worker { rq, preempt: None }),
+            worker: RefCell::new(Worker {
+                rq,
+                preempt_slot: None,
+                preempt: true,
+            }),
             executor,
             deferred: RefCell::new(SmallVec::new()),
         };
@@ -114,13 +119,16 @@ impl Executor {
 impl Worker {
     #[inline]
     fn pop(&mut self) -> Option<Runnable> {
-        self.preempt.take().or_else(|| self.rq.pop())
+        self.preempt_slot.take().or_else(|| self.rq.pop())
     }
 
-    #[inline]
     fn push(&mut self, task: Runnable, injector: &SegQueue<Runnable>) {
-        if let Some(last) = self.preempt.replace(task) {
-            self.rq.push(last, |task| injector.push(task))
+        if self.preempt {
+            if let Some(last) = self.preempt_slot.replace(task) {
+                self.rq.push(last, |task| injector.push(task))
+            }
+        } else {
+            self.rq.push(task, |task| injector.push(task))
         }
     }
 }
@@ -173,7 +181,9 @@ impl Context {
 
             hint::spin_loop();
 
-            self.deferred.borrow_mut().drain(..).for_each(Waker::wake)
+            self.worker.borrow_mut().preempt = false;
+            self.deferred.borrow_mut().drain(..).for_each(Waker::wake);
+            self.worker.borrow_mut().preempt = true;
         }
     }
 
