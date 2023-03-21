@@ -1,9 +1,17 @@
 //! Work-stealing async executor, based on [`Tokio`]'s implementation.
-//! 
+//!
 //! [`Tokio`]: https://tokio.rs/
 
 use alloc::{boxed::Box, vec::Vec};
-use core::{cell::RefCell, future::Future, hint};
+use core::{
+    cell::RefCell,
+    future::Future,
+    hint,
+    sync::atomic::{
+        AtomicBool,
+        Ordering::{Acquire, Release},
+    },
+};
 
 use arsc_rs::Arsc;
 use async_task::{Runnable, Task};
@@ -27,6 +35,7 @@ struct Context {
 pub struct Executor {
     injector: SegQueue<Runnable>,
     stealers: Box<[Stealer<Runnable, WORKER_CAP>]>,
+    shutdown: AtomicBool,
 }
 
 scoped_thread_local!(static CX: Context);
@@ -36,8 +45,9 @@ impl Executor {
     ///
     /// The caller should iterate over the returned startup functions and run
     /// them concurrently.
-    pub fn new<F>(num: usize, init: F) -> (Arsc<Self>, impl Iterator<Item = impl FnOnce()>)
+    pub fn new<G, F>(num: usize, init: G) -> (Arsc<Self>, impl Iterator<Item = impl FnOnce()>)
     where
+        G: FnOnce(Arsc<Executor>) -> F,
         F: Future<Output = ()> + Send + 'static,
     {
         let workers = (0..num).map(|_| Local::new()).collect::<Vec<_>>();
@@ -51,10 +61,12 @@ impl Executor {
         let executor = Arsc::new(Executor {
             injector: SegQueue::new(),
             stealers,
+            shutdown: AtomicBool::new(false),
         });
 
         let e2 = executor.clone();
-        let (init, handle) = async_task::spawn(init, move |task| e2.injector.push(task));
+        let schedule = move |task| e2.injector.push(task);
+        let (init, handle) = async_task::spawn(init(executor.clone()), schedule);
         init.schedule();
         handle.detach();
 
@@ -74,6 +86,10 @@ impl Executor {
         let (task, handle) = async_task::spawn(fut, Context::enqueue);
         task.schedule();
         handle
+    }
+
+    pub fn shutdown(&self) {
+        self.shutdown.store(true, Release)
     }
 
     fn startup(worker: Local<Runnable, WORKER_CAP>, executor: Arsc<Executor>) {
@@ -118,6 +134,10 @@ impl Context {
         });
         loop {
             tick = tick.wrapping_add(1);
+
+            if self.executor.shutdown.load(Acquire) {
+                break;
+            }
 
             let next = self.next_task(tick, &mut self.worker.borrow_mut());
             if let Some(task) = next {
