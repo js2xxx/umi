@@ -107,6 +107,7 @@ impl LAddr {
         NonNull::new_unchecked(self.0)
     }
 
+    /// transfer kernel va to corresponding la
     #[inline]
     pub fn to_paddr(self, id_off: usize) -> PAddr {
         PAddr(self.val() - id_off)
