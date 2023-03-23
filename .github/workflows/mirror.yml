@@ -3,23 +3,86 @@ on:
     branches: ["master"]
   pull_request:
     branches: ["master"]
-    
+
 jobs:
   mirror:
     runs-on: ubuntu-latest
+    env:
+      SRC: "https://github.com/js2xxx/umi.git"
+      DST: "https://PLNTRY:${{ secrets.PASSWORD }}@gitlab.eduxiji.net/PLNTRY/OSKernel2023-umi.git"
     steps:
-    - name: Push Mirror
-      env:
-        SRC: 'https://github.com/js2xxx/umi.git'
-        DST: 'https://PLNTRY:${{ secrets.PASSWORD }}@gitlab.eduxiji.net/PLNTRY/OSKernel2023-umi.git'
-      run: |
-        echo "Clone the source"
-        git clone --mirror "$SRC" && cd `basename "$SRC"`
-        echo "Set remote"
-        git remote set-url --push origin "$DST"
-        echo "Fetch remote"
-        git fetch -p origin
-        echo "Update branches"
-        git for-each-ref --format 'delete %(refname)' refs/pull | git update-ref --stdin
-        echo "Push to the destination"
-        git push --mirror
+      - name: Clone the source
+        run: git clone --mirror "$SRC" && cd `basename "$SRC"`
+
+      - name: Set remote
+        run: git remote set-url --push origin "$DST"
+
+      - name: Fetch remote
+        run: git fetch -p origin
+
+      - name: Update branches
+        run: git for-each-ref --format 'delete %(refname)' refs/pull | git update-ref --stdin
+
+      - name: Push to the destination
+        run: git push --mirror
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install Rust toolchains
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: clippy
+
+      - name: Check clippy
+        run: cargo clippy --target riscv64imac-unknown-none-elf
+
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install Rust toolchains
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt
+
+      - name: Check format
+        run: cargo fmt --all --check
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install Rust toolchains
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: llvm-tools
+
+      - name: Install other dependencies
+        run: sudo apt install make
+
+      - name: build
+        run: make build
+
+      - name: build release
+        run: make build MODE=release
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install Rust toolchains
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: llvm-tools
+
+      - name: Install other dependencies
+        run: sudo apt install make
+
+      - name: test
+        run: make test
