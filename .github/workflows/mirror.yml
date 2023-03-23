@@ -1,3 +1,5 @@
+name: "Mirror to Gitlab"
+
 on:
   push:
     branches: ["master"]

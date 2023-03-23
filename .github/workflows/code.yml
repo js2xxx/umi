@@ -1,3 +1,5 @@
+name: "Code check"
+
 on:
   push:
     branches: ["master"]
