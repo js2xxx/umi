@@ -1,6 +1,6 @@
 use core::{
     fmt,
-    ops::{Deref, DerefMut}, ptr, panic, error,
+    ops::{Deref, DerefMut},
 };
 
 use bitflags::bitflags;
@@ -261,7 +261,7 @@ impl Table {
 
     /// NOTES: this func is only used for Sv39
     /// retrun binded pa with given la and flags
-    /// if not found, return 0.
+    /// if not found, return Error
     pub fn la2pa(&self, la:LAddr, is_kernel:bool, need_alloc:bool) -> Result<PAddr,Error>{
         if la < LAddr::from(config::KERNEL_START) { 
             return Err(Error::OutOfMemory);
@@ -271,21 +271,23 @@ impl Table {
             if la < PAddr::new(config::KERNEL_START).to_laddr(ID_OFFSET) {
                 return Err(Error::OutOfMemory);
             }
-            return Ok(la.to_paddr(ID_OFFSET)); 
+            return Ok(la.to_paddr(ID_OFFSET));
         }
         let mut pte: Entry;
-        let t: &Table = self;
-        for l in 2u8..0 {
+        let mut t: &Table = self;
+        for l in (0..2u8).rev() {
             let level = Level::new(l);
             pte = t[level.addr_idx(la.val(),false)];
-            // TODO: need alloc function
+            if need_alloc {
+                // TODO: need alloc function
+            }
             if pte.table(level).is_none() { return Err(Error::EntryExistent(false)); }
             t = pte.table(level).unwrap();
         }
         pte = t[Level::new(3).addr_idx(la.val(),false)];
         let (pa, attr) = pte.get(Level::pt());
-        if attr.contains(Attr::VALID) { return Ok(pa) }
-        else { return Err(Error::EntryExistent(false))};
+        if attr.contains(Attr::VALID) { Ok(pa) }
+        else { Err(Error::EntryExistent(false))}
     }
 
 }

@@ -19,7 +19,7 @@ pub const PPN_SIZE: usize = PA_SIZE - PAGE_SHIFT;
 pub const FLAG_NUM: usize = 10;
 
 #[derive(Copy, Clone, Debug)]
- pub enum Error {
+pub enum Error {
     OutOfMemory,
     AddrMisaligned {
         vstart: Option<LAddr>,
