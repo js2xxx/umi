@@ -11,6 +11,7 @@ export DEBUG_DIR   	:= $(ROOT)/debug
 all: build
 
 build:
+	mkdir -p debug
 	cd mizu/kernel && make build
 
 QEMU_ARGS := -monitor stdio \
