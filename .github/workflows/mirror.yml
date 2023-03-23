@@ -12,7 +12,7 @@ jobs:
       DST: "https://PLNTRY:${{ secrets.PASSWORD }}@gitlab.eduxiji.net/PLNTRY/OSKernel2023-umi.git"
     steps:
       - name: Clone the source
-        run: git clone --mirror "$SRC" && 
+        run: git clone --mirror "$SRC"
 
       - name: Set remote
         run: cd `basename "$SRC"` && git remote set-url --push origin "$DST"
@@ -67,10 +67,10 @@ jobs:
           sudo apt install make
           cargo install cargo-binutils
 
-      - name: build
+      - name: Build
         run: make build
 
-      - name: build release
+      - name: Build release
         run: make build MODE=release
 
   test:
@@ -88,5 +88,5 @@ jobs:
           sudo apt install make
           cargo install cargo-binutils
 
-      - name: test
+      - name: Test
         run: make test
