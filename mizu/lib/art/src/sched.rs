@@ -14,7 +14,7 @@ use core::{
 };
 
 use arsc_rs::Arsc;
-use async_task::{Runnable, Task};
+use async_task::{Runnable, ScheduleInfo, Task, WithInfo};
 use crossbeam_queue::SegQueue;
 use rand_chacha::{
     rand_core::{RngCore, SeedableRng},
@@ -88,7 +88,7 @@ impl Executor {
         F: Future<Output = T> + Send + 'static,
         T: Send + 'static,
     {
-        let (task, handle) = async_task::spawn2(fut, Context::enqueue);
+        let (task, handle) = async_task::spawn(fut, WithInfo(Context::enqueue));
         task.schedule();
         handle
     }
@@ -176,10 +176,10 @@ impl Context {
         }
     }
 
-    fn enqueue(task: Runnable, yielded: bool) {
+    fn enqueue(task: Runnable, sched_info: ScheduleInfo) {
         CX.with(|cx| {
             if let Ok(mut worker) = cx.worker.try_borrow_mut() {
-                worker.push(task, &cx.executor.injector, yielded);
+                worker.push(task, &cx.executor.injector, sched_info.woken_while_running);
             } else {
                 cx.executor.injector.push(task)
             }
