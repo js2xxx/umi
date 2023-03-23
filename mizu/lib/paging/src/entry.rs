@@ -5,7 +5,6 @@ use core::{
 
 use bitflags::bitflags;
 use static_assertions::const_assert;
-use config::KERNEL_START;
 
 use crate::{
     Error, LAddr, Level, PAddr, PageAlloc, ENTRY_SIZE_SHIFT, ID_OFFSET, NR_ENTRIES, PAGE_SIZE,
