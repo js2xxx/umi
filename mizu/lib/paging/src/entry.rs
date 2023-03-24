@@ -27,7 +27,7 @@ bitflags! {
     }
 }
 
-/// attribute of page based on 
+/// attribute of page based on
 impl Attr {
     #[inline]
     pub const fn builder() -> AttrBuilder {
@@ -94,12 +94,11 @@ impl const Default for AttrBuilder {
 
 /// pgtbl entries: 44 bit PPN | 12 bit offset
 #[derive(Copy, Clone)]
-pub struct Entry(usize);    
+pub struct Entry(usize);
 const_assert!(core::mem::size_of::<Entry>() == 1 << ENTRY_SIZE_SHIFT);
 
 impl Entry {
-
-    // get entry's pa (no offset) and its attribute 
+    // get entry's pa (no offset) and its attribute
     #[inline]
     pub const fn get(self, level: Level) -> (PAddr, Attr) {
         let addr = (self.0 << 2) & level.paddr_mask();
@@ -147,8 +146,8 @@ impl Entry {
     /// This function is usually used when creating new mappings.
     ///
     /// # Errors
-    /// Return an error if the entry is already a valid **leaf entry**, or memory
-    /// exhaustion when creating a new table.
+    /// Return an error if the entry is already a valid **leaf entry**, or
+    /// memory exhaustion when creating a new table.
     pub fn table_or_create(
         &mut self,
         level: Level,
@@ -169,8 +168,8 @@ impl Entry {
         })
     }
 
-    /// Get the page table stored in the entry, or split it if it's a larger leaf
-    /// entry.
+    /// Get the page table stored in the entry, or split it if it's a larger
+    /// leaf entry.
     ///
     /// This function is usually used when reprotecting mappings.
     ///
@@ -261,11 +260,11 @@ impl Table {
     /// NOTES: this func is only used for Sv39
     /// retrun binded pa with given la and flags
     /// if not found, return Error
-    pub fn la2pa(&self, la:LAddr, is_kernel:bool, need_alloc:bool) -> Result<PAddr,Error>{
-        if la < LAddr::from(config::KERNEL_START) { 
+    pub fn la2pa(&self, la: LAddr, is_kernel: bool, need_alloc: bool) -> Result<PAddr, Error> {
+        if la < LAddr::from(config::KERNEL_START) {
             return Err(Error::OutOfMemory);
         }
-        if is_kernel { 
+        if is_kernel {
             // kernel addr has to be mapped high
             if la < PAddr::new(config::KERNEL_START).to_laddr(ID_OFFSET) {
                 return Err(Error::OutOfMemory);
@@ -276,19 +275,23 @@ impl Table {
         let mut t: &Table = self;
         for l in (0..2u8).rev() {
             let level = Level::new(l);
-            pte = t[level.addr_idx(la.val(),false)];
+            pte = t[level.addr_idx(la.val(), false)];
             if need_alloc {
                 // TODO: need alloc function
             }
-            if pte.table(level).is_none() { return Err(Error::EntryExistent(false)); }
+            if pte.table(level).is_none() {
+                return Err(Error::EntryExistent(false));
+            }
             t = pte.table(level).unwrap();
         }
-        pte = t[Level::new(3).addr_idx(la.val(),false)];
+        pte = t[Level::new(3).addr_idx(la.val(), false)];
         let (pa, attr) = pte.get(Level::pt());
-        if attr.contains(Attr::VALID) { Ok(pa) }
-        else { Err(Error::EntryExistent(false))}
+        if attr.contains(Attr::VALID) {
+            Ok(pa)
+        } else {
+            Err(Error::EntryExistent(false))
+        }
     }
-
 }
 
 impl const Default for Table {

@@ -1,8 +1,7 @@
 use crate::{NR_ENTRIES, NR_ENTRIES_SHIFT, PAGE_SHIFT};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Level(u8);   // the u8 indicates what level it is.
-
+pub struct Level(u8); // the u8 indicates what level it is.
 
 // something about rv pgtbl levels, 2->0 from root to leaf
 impl Level {
@@ -28,7 +27,6 @@ impl Level {
     pub const fn page_size(&self) -> usize {
         1usize << self.page_shift()
     }
-
 
     /// return eg: level n in sv39: 0...011...1 (12+9n *1*s)
     #[inline]
