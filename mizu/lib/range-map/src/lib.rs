@@ -26,6 +26,14 @@ impl<K, V> RangeMap<K, V> {
             inner: BTreeMap::new(),
         }
     }
+
+    pub fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
 }
 
 impl<K: Ord, V> RangeMap<K, V> {
@@ -195,6 +203,24 @@ impl<K: Ord, V> RangeMap<K, V> {
         self.inner
             .get_key_value(start)
             .map(move |(start, (end, value))| (start..end, value))
+    }
+
+    pub fn remove<Q>(&mut self, start: &Q) -> Option<V>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        self.inner.remove(start).map(|(_, value)| value)
+    }
+
+    pub fn remove_entry<Q>(&mut self, start: &Q) -> Option<(Range<K>, V)>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        self.inner
+            .remove_entry(start)
+            .map(|(start, (end, value))| (start..end, value))
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (Range<&K>, &V)> + '_ {
