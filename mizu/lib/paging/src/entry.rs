@@ -350,23 +350,21 @@ macro_rules! table_1g {
 
 #[cfg(test)]
 mod tests {
-    use core::assert_matches::{self, assert_matches};
-
     use crate::{Error, LAddr, Table};
 
     #[test]
     fn test_la2pa() {
         assert_eq!(
             Err(Error::OutOfMemory),
-            Table::new().la2pa(LAddr::from(0), true)
+            Table::new().la2pa(LAddr::from(0u64), true)
         );
         assert_eq!(
             Err(Error::OutOfMemory),
-            Table::new().la2pa(LAddr::from(0xffff_ff00_0000_0000), false)
+            Table::new().la2pa(LAddr::from(0xffff_ff00_0000_0000u64), false)
         );
         assert_eq!(
             Err(Error::OutOfMemory),
-            Table::new().la2pa(LAddr::from(0xffff_ff00_0000_0000), true)
+            Table::new().la2pa(LAddr::from(0xffff_ff00_0000_0000u64), true)
         );
     }
 }
