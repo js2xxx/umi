@@ -147,6 +147,7 @@ impl Entry {
     /// This function is usually used when creating new mappings.
     ///
     /// # Errors
+    ///
     /// Return an error if the entry is already a valid **leaf entry**, or
     /// memory exhaustion when creating a new table.
     pub fn table_or_create(
@@ -349,21 +350,21 @@ macro_rules! table_1g {
 
 #[cfg(test)]
 mod tests {
-    use core::assert_matches::assert_matches;
+    use core::assert_matches::{self, assert_matches};
 
     use crate::{Error, LAddr, Table};
 
     #[test]
     fn test_la2pa() {
-        assert_matches!(
+        assert_eq!(
             Err(Error::OutOfMemory),
             Table::new().la2pa(LAddr::from(0), true)
         );
-        assert_matches!(
+        assert_eq!(
             Err(Error::OutOfMemory),
             Table::new().la2pa(LAddr::from(0xffff_ff00_0000_0000), false)
         );
-        assert_matches!(
+        assert_eq!(
             Err(Error::OutOfMemory),
             Table::new().la2pa(LAddr::from(0xffff_ff00_0000_0000), true)
         );

@@ -21,7 +21,7 @@ pub const FLAG_NUM: usize = 10;
 pub const BLANK_BEGIN: usize = (1 << 38) - 1;
 pub const BLANK_END: usize = CANONICAL_PREFIX - 1;
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Error {
     OutOfMemory,
     AddrMisaligned {
