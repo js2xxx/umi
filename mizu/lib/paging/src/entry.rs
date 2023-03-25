@@ -277,12 +277,9 @@ impl Table {
     ///
     /// If `la` is illegal, `Error::PerssionDenied`.
     pub fn la2pa(&self, la: LAddr, is_kernel: bool) -> Result<PAddr, Error> {
-        const KWENEL_ILLEGAL_END: usize = config::KERNEL_START + ID_OFFSET - 1;
-        match la.val() {
-            0..=KWENEL_ILLEGAL_END if is_kernel => return Err(Error::PermissionDenied),
-            BLANK_BEGIN..=BLANK_END => return Err(Error::PermissionDenied),
-            _ => (),
-        };
+        if la.val() >= BLANK_BEGIN && la.val() >= BLANK_END {
+            return Err(Error::PermissionDenied);
+        }
         let mut pte: Entry;
         let mut t: &Table = self;
         for l in (0..2u8).rev() {
