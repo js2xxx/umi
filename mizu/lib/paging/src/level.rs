@@ -28,13 +28,17 @@ impl Level {
         1usize << self.page_shift()
     }
 
-    /// Return 0...011...1 (12+9n *1*s) if `self.0 = n`.
+    /// If `self.0 = n`, return
+    ///
+    ///     0...011...1  /* (12+9n)  1s */
     #[inline]
     pub const fn page_mask(&self) -> usize {
         self.page_size() - 1
     }
 
-    /// Return 1...100...0 (12+9n *0*s) if `self.0 = n`.
+    /// If `self.0 = n`, return
+    ///
+    ///     1...100...0 /* (12+9n)  0s */
     #[inline]
     pub const fn paddr_mask(&self) -> usize {
         ((1 << 56) - 1) & !self.page_mask()

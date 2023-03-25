@@ -4,7 +4,6 @@ use core::{
 };
 
 use bitflags::bitflags;
-use config::KERNEL_START;
 use static_assertions::const_assert;
 
 use crate::{
@@ -275,6 +274,8 @@ impl Table {
     /// If not found, `Error::EntryExistent(false)`.
     ///
     /// If `la` is illegal, `Error::OutOfMemory`.
+    ///
+    /// If `pa` is found without `USER_ACCESS` and `is_kernel = false`
     pub fn la2pa(&self, la: LAddr, is_kernel: bool) -> Result<PAddr, Error> {
         const KWENEL_ILLEGAL_END: usize = config::KERNEL_START + ID_OFFSET - 1;
         match la.val() {
@@ -348,19 +349,21 @@ macro_rules! table_1g {
 
 #[cfg(test)]
 mod tests {
+    use core::assert_matches::assert_matches;
+
     use crate::{Error, LAddr, Table};
 
     #[test]
     fn test_la2pa() {
-        assert_eq!(
+        assert_matches!(
             Err(Error::OutOfMemory),
             Table::new().la2pa(LAddr::from(0), true)
         );
-        assert_eq!(
+        assert_matches!(
             Err(Error::OutOfMemory),
             Table::new().la2pa(LAddr::from(0xffff_ff00_0000_0000), false)
         );
-        assert_eq!(
+        assert_matches!(
             Err(Error::OutOfMemory),
             Table::new().la2pa(LAddr::from(0xffff_ff00_0000_0000), true)
         );
