@@ -268,15 +268,14 @@ impl Table {
     ///
     /// # Arguments
     ///
-    /// - `is_kernel`: the type of pgtbl
+    /// - `is_kernel`: the type of pgtbl, If `is_kernel = true`, `la` shoud be
+    ///   valid.
     ///
     /// # Error
     ///
     /// If not found, `Error::EntryExistent(false)`.
     ///
-    /// If `la` is illegal, `Error::OutOfMemory`.
-    ///
-    /// If `pa` is found without `USER_ACCESS` and `is_kernel = false`
+    /// If `la` is illegal, `Error::PerssionDenied`.
     pub fn la2pa(&self, la: LAddr, is_kernel: bool) -> Result<PAddr, Error> {
         const KWENEL_ILLEGAL_END: usize = config::KERNEL_START + ID_OFFSET - 1;
         match la.val() {
