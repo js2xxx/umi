@@ -7,7 +7,8 @@ use bitflags::bitflags;
 use static_assertions::const_assert;
 
 use crate::{
-    Error, LAddr, Level, PAddr, PageAlloc, ENTRY_SIZE_SHIFT, ID_OFFSET, NR_ENTRIES, PAGE_SIZE,
+    Error, LAddr, Level, PAddr, PageAlloc, BLANK_BEGIN, BLANK_END, ENTRY_SIZE_SHIFT, ID_OFFSET,
+    NR_ENTRIES, PAGE_SIZE,
 };
 
 bitflags! {
@@ -27,6 +28,7 @@ bitflags! {
     }
 }
 
+/// attribute of page based on
 impl Attr {
     #[inline]
     pub const fn builder() -> AttrBuilder {
@@ -91,11 +93,13 @@ impl const Default for AttrBuilder {
     }
 }
 
+/// pgtbl entries: 44 bit PPN | 12 bit offset
 #[derive(Copy, Clone)]
 pub struct Entry(usize);
 const_assert!(core::mem::size_of::<Entry>() == 1 << ENTRY_SIZE_SHIFT);
 
 impl Entry {
+    // get entry's pa (no offset) and its attribute
     #[inline]
     pub const fn get(self, level: Level) -> (PAddr, Attr) {
         let addr = (self.0 << 2) & level.paddr_mask();
@@ -144,8 +148,8 @@ impl Entry {
     ///
     /// # Errors
     ///
-    /// Return an error if the entry is already a valid leaf entry, or memory
-    /// exhaustion when creating a new table.
+    /// Return an error if the entry is already a valid **leaf entry**, or
+    /// memory exhaustion when creating a new table.
     pub fn table_or_create(
         &mut self,
         level: Level,
@@ -166,8 +170,8 @@ impl Entry {
         })
     }
 
-    /// Get the page table stored in the entry, or split it if its a larger leaf
-    /// entry.
+    /// Get the page table stored in the entry, or split it if it's a larger
+    /// leaf entry.
     ///
     /// This function is usually used when reprotecting mappings.
     ///
@@ -254,6 +258,50 @@ impl Table {
     pub const fn new() -> Self {
         Table([Default::default(); NR_ENTRIES])
     }
+
+    /// Retrun corresponding pa with given la.
+    ///
+    /// # TODO:
+    ///
+    /// this function need to be complemented after the kernel address layout is
+    /// clear.
+    ///
+    /// # Arguments
+    ///
+    /// - `is_kernel`: the type of pgtbl, If `is_kernel = true`, `la` shoud be
+    ///   valid.
+    ///
+    /// # Error
+    ///
+    /// If not found, `Error::EntryExistent(false)`.
+    ///
+    /// If `la` is illegal, `Error::PerssionDenied`.
+    pub fn la2pa(&self, la: LAddr, is_kernel: bool) -> Result<PAddr, Error> {
+        if la.val() >= BLANK_BEGIN && la.val() <= BLANK_END {
+            return Err(Error::PermissionDenied);
+        }
+        let mut pte: Entry;
+        let mut t: &Table = self;
+        for l in (0..2u8).rev() {
+            let level = Level::new(l);
+            pte = t[level.addr_idx(la.val(), false)];
+            t = match pte.table(level) {
+                None => return Err(Error::EntryExistent(false)),
+                Some(tb) => tb,
+            };
+        }
+        pte = t[Level::pt().addr_idx(la.val(), false)];
+        let (pa, attr) = pte.get(Level::pt());
+        if attr.contains(Attr::VALID) {
+            if attr.contains(Attr::USER_ACCESS) || is_kernel {
+                Ok(pa)
+            } else {
+                Err(Error::PermissionDenied)
+            }
+        } else {
+            Err(Error::EntryExistent(false))
+        }
+    }
 }
 
 impl const Default for Table {
@@ -294,4 +342,17 @@ macro_rules! table_1g {
         }
     };
     [] => { Table::new() };
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{Error, LAddr, Table};
+
+    #[test]
+    fn test_la2pa() {
+        assert_eq!(
+            Err(Error::PermissionDenied),
+            Table::new().la2pa(LAddr::from(0xffff_ff00_0000_0000u64), false)
+        );
+    }
 }

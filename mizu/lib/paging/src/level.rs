@@ -1,8 +1,9 @@
 use crate::{NR_ENTRIES, NR_ENTRIES_SHIFT, PAGE_SHIFT};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Level(u8);
+pub struct Level(u8); // the u8 indicates what level it is.
 
+// something about rv pgtbl levels, 2->0 from root to leaf
 impl Level {
     pub const fn new(level: u8) -> Self {
         assert!(level < 3, "RISC-V sv39 paging only supports 3 levels");
@@ -27,11 +28,17 @@ impl Level {
         1usize << self.page_shift()
     }
 
+    /// If `self.0 = n`, return
+    ///
+    ///     0...011...1  /* (12+9n)  1s */
     #[inline]
     pub const fn page_mask(&self) -> usize {
         self.page_size() - 1
     }
 
+    /// If `self.0 = n`, return
+    ///
+    ///     1...100...0 /* (12+9n)  0s */
     #[inline]
     pub const fn paddr_mask(&self) -> usize {
         ((1 << 56) - 1) & !self.page_mask()
@@ -42,6 +49,11 @@ impl Level {
         Level(3).page_mask() & !self.page_mask()
     }
 
+    /// Return PPN \[ `self.0` \] with given `la` and `end`.
+    ///
+    /// # Examples
+    ///
+    /// If `self.0 = 0`, return the lowest 9-bit PPN of `la`.
     #[inline]
     pub const fn addr_idx(&self, laddr: usize, end: bool) -> usize {
         let ret = ((laddr & self.laddr_mask()) >> self.page_shift()) & (NR_ENTRIES - 1);

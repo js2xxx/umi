@@ -2,6 +2,7 @@ use core::ptr::NonNull;
 
 use crate::{LAddr, PAddr, Table};
 
+/// also PA_OFFSET, only fixed when fixed pgsize
 pub const PAGE_SHIFT: usize = 12;
 pub const PAGE_SIZE: usize = 1 << PAGE_SHIFT;
 pub const PAGE_MASK: usize = PAGE_SIZE - 1;
@@ -13,7 +14,14 @@ pub const NR_ENTRIES: usize = 1 << NR_ENTRIES_SHIFT;
 pub const CANONICAL_PREFIX: usize = 0xffff_ffc0_0000_0000;
 pub const ID_OFFSET: usize = CANONICAL_PREFIX;
 
-#[derive(Copy, Clone, Debug)]
+pub const PA_SIZE: usize = 56;
+pub const PPN_SIZE: usize = PA_SIZE - PAGE_SHIFT;
+pub const FLAG_NUM: usize = 10;
+
+pub const BLANK_BEGIN: usize = (1 << 38) - 1;
+pub const BLANK_END: usize = CANONICAL_PREFIX - 1;
+
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Error {
     OutOfMemory,
     AddrMisaligned {
@@ -23,6 +31,7 @@ pub enum Error {
     },
     RangeEmpty,
     EntryExistent(bool),
+    PermissionDenied,
 }
 
 /// # Safety
