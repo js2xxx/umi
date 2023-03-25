@@ -28,13 +28,13 @@ impl Level {
         1usize << self.page_shift()
     }
 
-    /// Return 0...011...1 (12+9n *1*s) if `self.0 = n`
+    /// Return 0...011...1 (12+9n *1*s) if `self.0 = n`.
     #[inline]
     pub const fn page_mask(&self) -> usize {
         self.page_size() - 1
     }
 
-    /// Return 1...100...0 (12+9n *0*s) if `self.0 = n`
+    /// Return 1...100...0 (12+9n *0*s) if `self.0 = n`.
     #[inline]
     pub const fn paddr_mask(&self) -> usize {
         ((1 << 56) - 1) & !self.page_mask()
@@ -45,9 +45,11 @@ impl Level {
         Level(3).page_mask() & !self.page_mask()
     }
 
-    /// Return PPN based on level with given la and end
+    /// Return PPN \[ `self.0` \] with given `la` and `end`.
     ///
-    /// Example: if level = 0, return the lowest 9-bit PPN of la
+    /// # Examples
+    ///
+    /// If `self.0 = 0`, return the lowest 9-bit PPN of `la`.
     #[inline]
     pub const fn addr_idx(&self, laddr: usize, end: bool) -> usize {
         let ret = ((laddr & self.laddr_mask()) >> self.page_shift()) & (NR_ENTRIES - 1);

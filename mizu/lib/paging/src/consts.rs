@@ -18,6 +18,9 @@ pub const PA_SIZE: usize = 56;
 pub const PPN_SIZE: usize = PA_SIZE - PAGE_SHIFT;
 pub const FLAG_NUM: usize = 10;
 
+pub const BLANK_BEGIN: usize = (1 << 38) - 1;
+pub const BLANK_END: usize = CANONICAL_PREFIX - 1;
+
 #[derive(Copy, Clone, Debug)]
 pub enum Error {
     OutOfMemory,
@@ -28,6 +31,7 @@ pub enum Error {
     },
     RangeEmpty,
     EntryExistent(bool),
+    PermissionDenied,
 }
 
 /// # Safety

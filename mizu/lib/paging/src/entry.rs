@@ -4,10 +4,12 @@ use core::{
 };
 
 use bitflags::bitflags;
+use config::KERNEL_START;
 use static_assertions::const_assert;
 
 use crate::{
-    Error, LAddr, Level, PAddr, PageAlloc, ENTRY_SIZE_SHIFT, ID_OFFSET, NR_ENTRIES, PAGE_SIZE,
+    Error, LAddr, Level, PAddr, PageAlloc, BLANK_BEGIN, BLANK_END, ENTRY_SIZE_SHIFT, ID_OFFSET,
+    NR_ENTRIES, PAGE_SIZE,
 };
 
 bitflags! {
@@ -257,23 +259,29 @@ impl Table {
         Table([Default::default(); NR_ENTRIES])
     }
 
-    /// Retrun corresponding pa with given la and flags
+    /// Retrun corresponding pa with given la.
+    ///
+    /// # TODO:
+    ///
+    /// this function need to be complemented after the kernel address layout is
+    /// clear.
+    ///
+    /// # Arguments
+    ///
+    /// - `is_kernel`: the type of pgtbl
     ///
     /// # Error
-    /// if not found, `Error::EntryExistent(false)`
     ///
-    /// if la is illegal, `Error::OutOfMemory`
+    /// If not found, `Error::EntryExistent(false)`.
+    ///
+    /// If `la` is illegal, `Error::OutOfMemory`.
     pub fn la2pa(&self, la: LAddr, is_kernel: bool) -> Result<PAddr, Error> {
-        if la < LAddr::from(config::KERNEL_START) {
-            return Err(Error::OutOfMemory);
-        }
-        if is_kernel {
-            // kernel addr has to be mapped high
-            if la < PAddr::new(config::KERNEL_START).to_laddr(ID_OFFSET) {
-                return Err(Error::OutOfMemory);
-            }
-            return Ok(la.to_paddr(ID_OFFSET));
-        }
+        const KWENEL_ILLEGAL_END: usize = config::KERNEL_START + ID_OFFSET - 1;
+        match la.val() {
+            0..=KWENEL_ILLEGAL_END if is_kernel => return Err(Error::OutOfMemory),
+            BLANK_BEGIN..=BLANK_END => return Err(Error::OutOfMemory),
+            _ => (),
+        };
         let mut pte: Entry;
         let mut t: &Table = self;
         for l in (0..2u8).rev() {
@@ -284,10 +292,14 @@ impl Table {
                 Some(tb) => tb,
             };
         }
-        pte = t[Level::new(3).addr_idx(la.val(), false)];
+        pte = t[Level::pt().addr_idx(la.val(), false)];
         let (pa, attr) = pte.get(Level::pt());
         if attr.contains(Attr::VALID) {
-            Ok(pa)
+            if attr.contains(Attr::USER_ACCESS) || is_kernel {
+                Ok(pa)
+            } else {
+                Err(Error::PermissionDenied)
+            }
         } else {
             Err(Error::EntryExistent(false))
         }
@@ -332,4 +344,25 @@ macro_rules! table_1g {
         }
     };
     [] => { Table::new() };
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{Error, LAddr, Table};
+
+    #[test]
+    fn test_la2pa() {
+        assert_eq!(
+            Err(Error::OutOfMemory),
+            Table::new().la2pa(LAddr::from(0), true)
+        );
+        assert_eq!(
+            Err(Error::OutOfMemory),
+            Table::new().la2pa(LAddr::from(0xffff_ff00_0000_0000), false)
+        );
+        assert_eq!(
+            Err(Error::OutOfMemory),
+            Table::new().la2pa(LAddr::from(0xffff_ff00_0000_0000), true)
+        );
+    }
 }
