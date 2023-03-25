@@ -4,7 +4,6 @@
 extern crate alloc;
 
 pub mod queue;
-mod rand;
 mod sched;
 
 pub use self::sched::Executor;
