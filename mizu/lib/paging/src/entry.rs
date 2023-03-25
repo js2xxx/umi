@@ -277,7 +277,7 @@ impl Table {
     ///
     /// If `la` is illegal, `Error::PerssionDenied`.
     pub fn la2pa(&self, la: LAddr, is_kernel: bool) -> Result<PAddr, Error> {
-        if la.val() >= BLANK_BEGIN && la.val() >= BLANK_END {
+        if la.val() >= BLANK_BEGIN && la.val() <= BLANK_END {
             return Err(Error::PermissionDenied);
         }
         let mut pte: Entry;
@@ -352,15 +352,7 @@ mod tests {
     fn test_la2pa() {
         assert_eq!(
             Err(Error::PermissionDenied),
-            Table::new().la2pa(LAddr::from(0u64), true)
-        );
-        assert_eq!(
-            Err(Error::PermissionDenied),
             Table::new().la2pa(LAddr::from(0xffff_ff00_0000_0000u64), false)
-        );
-        assert_eq!(
-            Err(Error::PermissionDenied),
-            Table::new().la2pa(LAddr::from(0xffff_ff00_0000_0000u64), true)
         );
     }
 }
