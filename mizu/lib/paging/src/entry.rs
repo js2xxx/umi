@@ -257,10 +257,13 @@ impl Table {
         Table([Default::default(); NR_ENTRIES])
     }
 
-    /// NOTES: this func is only used for Sv39
-    /// retrun binded pa with given la and flags
-    /// if not found, return Error
-    pub fn la2pa(&self, la: LAddr, is_kernel: bool, need_alloc: bool) -> Result<PAddr, Error> {
+    /// Retrun corresponding pa with given la and flags
+    ///
+    /// # Error
+    /// if not found, `Error::EntryExistent(false)`
+    ///
+    /// if la is illegal, `Error::OutOfMemory`
+    pub fn la2pa(&self, la: LAddr, is_kernel: bool) -> Result<PAddr, Error> {
         if la < LAddr::from(config::KERNEL_START) {
             return Err(Error::OutOfMemory);
         }
@@ -276,13 +279,10 @@ impl Table {
         for l in (0..2u8).rev() {
             let level = Level::new(l);
             pte = t[level.addr_idx(la.val(), false)];
-            if need_alloc {
-                // TODO: need alloc function
-            }
-            if pte.table(level).is_none() {
-                return Err(Error::EntryExistent(false));
-            }
-            t = pte.table(level).unwrap();
+            t = match pte.table(level) {
+                None => return Err(Error::EntryExistent(false)),
+                Some(tb) => tb,
+            };
         }
         pte = t[Level::new(3).addr_idx(la.val(), false)];
         let (pa, attr) = pte.get(Level::pt());
