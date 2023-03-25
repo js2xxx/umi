@@ -280,8 +280,8 @@ impl Table {
     pub fn la2pa(&self, la: LAddr, is_kernel: bool) -> Result<PAddr, Error> {
         const KWENEL_ILLEGAL_END: usize = config::KERNEL_START + ID_OFFSET - 1;
         match la.val() {
-            0..=KWENEL_ILLEGAL_END if is_kernel => return Err(Error::OutOfMemory),
-            BLANK_BEGIN..=BLANK_END => return Err(Error::OutOfMemory),
+            0..=KWENEL_ILLEGAL_END if is_kernel => return Err(Error::PermissionDenied),
+            BLANK_BEGIN..=BLANK_END => return Err(Error::PermissionDenied),
             _ => (),
         };
         let mut pte: Entry;
@@ -355,15 +355,15 @@ mod tests {
     #[test]
     fn test_la2pa() {
         assert_eq!(
-            Err(Error::OutOfMemory),
+            Err(Error::PermissionDenied),
             Table::new().la2pa(LAddr::from(0u64), true)
         );
         assert_eq!(
-            Err(Error::OutOfMemory),
+            Err(Error::PermissionDenied),
             Table::new().la2pa(LAddr::from(0xffff_ff00_0000_0000u64), false)
         );
         assert_eq!(
-            Err(Error::OutOfMemory),
+            Err(Error::PermissionDenied),
             Table::new().la2pa(LAddr::from(0xffff_ff00_0000_0000u64), true)
         );
     }
