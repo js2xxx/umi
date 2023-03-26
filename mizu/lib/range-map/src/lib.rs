@@ -82,7 +82,7 @@ impl<K: Ord, V> RangeMap<K, V> {
 
 pub enum FindResult<K> {
     Found(Range<K>),
-    /// Also means retry if returned after a turn has finished.
+    /// Also means retry if returned after a round has finished.
     Next,
     NotFound,
 }
@@ -140,6 +140,13 @@ impl<K: Ord, V> RangeMap<K, V> {
         predicate(None)
     }
 
+    /// Allocate a range with the given `predicate`.
+    ///
+    /// # Arguments
+    ///
+    /// - `predicate` - receives ranges in one round, or a `None` when a round
+    ///   finished, and returns whether the round should continue, retry or break
+    ///   with or without a result.
     pub fn allocate_with<F>(&mut self, mut predicate: F) -> Option<Entry<'_, K, V>>
     where
         F: FnMut(Option<Range<&K>>) -> FindResult<K>,
@@ -361,7 +368,7 @@ impl<R: RngCore> AslrKey<R> {
 
     pub fn find_key_usize(&mut self, key: Option<Range<usize>>) -> FindResult<usize> {
         let Some(key) = key else {
-            // A turn has finished.
+            // A round has finished.
             return if self.retried || self.count == 0 {
                 // Really can't found any.
                 FindResult::NotFound
