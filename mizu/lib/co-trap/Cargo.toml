@@ -4,6 +4,12 @@ license = "MIT OR Apache-2.0"
 name = "co-trap"
 version = "0.1.0"
 
+[features]
+test = []
+
 [dependencies]
+# Local crates
+ksync-core = {path = "../ksync-core"}
+# External crates
 riscv = "0"
 static_assertions = "1"
