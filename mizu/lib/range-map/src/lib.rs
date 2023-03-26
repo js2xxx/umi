@@ -321,7 +321,6 @@ impl<K: Ord, V> RangeMap<K, V> {
     {
         let mut ret = self.map.split_off(range.start.borrow());
         let mut suffix = ret.split_off(range.end.borrow());
-        self.map.append(&mut suffix);
         if let Some(entry) = ret.last_entry() {
             let (end, _) = entry.get();
             if &range.end < end.borrow() {
@@ -329,6 +328,7 @@ impl<K: Ord, V> RangeMap<K, V> {
                 self.map.insert(k, v);
             }
         }
+        self.map.append(&mut suffix);
         ret.into_iter()
             .map(|(start, (end, value))| (start..end, value))
     }
