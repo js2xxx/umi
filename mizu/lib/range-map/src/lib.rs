@@ -145,8 +145,8 @@ impl<K: Ord, V> RangeMap<K, V> {
     /// # Arguments
     ///
     /// - `predicate` - receives ranges in one round, or a `None` when a round
-    ///   finished, and returns whether the round should continue, retry or break
-    ///   with or without a result.
+    ///   finished, and returns whether the round should continue, retry or
+    ///   break with or without a result.
     pub fn allocate_with<F>(&mut self, mut predicate: F) -> Option<Entry<'_, K, V>>
     where
         F: FnMut(Option<Range<&K>>) -> FindResult<K>,
