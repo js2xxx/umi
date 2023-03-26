@@ -16,10 +16,7 @@ use core::{
 use arsc_rs::Arsc;
 use async_task::{Runnable, ScheduleInfo, Task, WithInfo};
 use crossbeam_queue::SegQueue;
-use rand_chacha::{
-    rand_core::{RngCore, SeedableRng},
-    ChaChaRng,
-};
+use rand_riscv::{rand_core::RngCore, Rng};
 use scoped_tls::scoped_thread_local;
 
 use crate::queue::{Local, Stealer};
@@ -135,7 +132,7 @@ impl Context {
         }
     }
 
-    fn steal_task(&self, rand: &mut ChaChaRng, worker: &mut Worker) -> Option<Runnable> {
+    fn steal_task(&self, rand: &mut Rng, worker: &mut Worker) -> Option<Runnable> {
         let stealers = &self.executor.stealers;
 
         let len = stealers.len();
@@ -148,11 +145,7 @@ impl Context {
 
     fn run(&self) {
         let mut tick = 0u32;
-        let mut rng = ChaChaRng::from_seed({
-            let mut s = [0; 32];
-            crate::rand::seed(&mut s);
-            s
-        });
+        let mut rng = rand_riscv::rng();
         loop {
             tick = tick.wrapping_add(1);
 

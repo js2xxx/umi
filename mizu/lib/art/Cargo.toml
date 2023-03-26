@@ -8,8 +8,10 @@ version = "0.1.0"
 test = []
 
 [dependencies]
+# Local crates
+rand-riscv = {path = "../rand-riscv"}
+# Extenal crates
 arsc-rs = {git = "https://github.com/js2xxx/arsc"}
 async-task = {git = "https://github.com/smol-rs/async-task", branch = "master", default-features = false}
 crossbeam-queue = {version = "0", default-features = false, features = ["alloc", "nightly"]}
-rand_chacha = {version = "0", default-features = false}
 scoped-tls = {git = "https://github.com/js2xxx/scoped-tls", branch = "no_std"}

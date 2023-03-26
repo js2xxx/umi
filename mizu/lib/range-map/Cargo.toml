@@ -1,0 +1,12 @@
+[package]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+name = "range-map"
+version = "0.1.0"
+
+[features]
+test = ["dep:rand"]
+
+[dependencies]
+rand = {version = "0", optional = true}
+rand-riscv = {path = "../rand-riscv"}

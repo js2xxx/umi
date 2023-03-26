@@ -1,3 +1,8 @@
+#![no_std]
+
+pub use rand_chacha::rand_core;
+use rand_chacha::rand_core::SeedableRng;
+
 pub fn seed64() -> u64 {
     #[cfg(target_arch = "riscv64")]
     unsafe {
@@ -33,4 +38,14 @@ pub fn seed(fill: &mut [u8]) {
             let len = fill.len();
             fill.copy_from_slice(&ne_bytes[..len])
         })
+}
+
+pub type Rng = rand_chacha::ChaChaRng;
+
+pub fn rng() -> Rng {
+    Rng::from_seed({
+        let mut seed = [0; 32];
+        self::seed(&mut seed);
+        seed
+    })
 }
