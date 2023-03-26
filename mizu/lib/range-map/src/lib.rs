@@ -16,23 +16,23 @@ use rand_riscv::rand_core::RngCore;
 
 pub struct RangeMap<K, V> {
     range: Range<K>,
-    inner: BTreeMap<K, (K, V)>,
+    map: BTreeMap<K, (K, V)>,
 }
 
 impl<K, V> RangeMap<K, V> {
     pub const fn new(range: Range<K>) -> Self {
         RangeMap {
             range,
-            inner: BTreeMap::new(),
+            map: BTreeMap::new(),
         }
     }
 
     pub fn len(&self) -> usize {
-        self.inner.len()
+        self.map.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.inner.is_empty()
+        self.map.is_empty()
     }
 }
 
@@ -45,13 +45,13 @@ impl<K: Ord, V> RangeMap<K, V> {
             return Err(value);
         }
 
-        let prev = self.inner.range(..&key.end).last();
+        let prev = self.map.range(..&key.end).last();
         if let Some((_, (prev_end, _))) = prev {
             if prev_end > &key.start {
                 return Err(value);
             }
         }
-        let old = self.inner.insert(key.start, (key.end, value));
+        let old = self.map.insert(key.start, (key.end, value));
         debug_assert!(old.is_none());
         Ok(())
     }
@@ -64,15 +64,15 @@ impl<K: Ord, V> RangeMap<K, V> {
             return None;
         }
 
-        let prev = self.inner.range(..&key.end).last();
+        let prev = self.map.range(..&key.end).last();
         if let Some((_, (prev_end, _))) = prev {
             if prev_end > &key.start {
                 return None;
             }
         }
-        Some(match self.inner.entry(key.start) {
-            Vacant(inner) => Entry {
-                inner,
+        Some(match self.map.entry(key.start) {
+            Vacant(entry) => Entry {
+                entry,
                 end: key.end,
             },
             Occupied(_) => unreachable!(),
@@ -98,21 +98,21 @@ impl<K> FindResult<K> {
 }
 
 pub struct Entry<'a, K, V> {
-    inner: VacantEntry<'a, K, (K, V)>,
+    entry: VacantEntry<'a, K, (K, V)>,
     end: K,
 }
 
 impl<'a, K: Ord, V> Entry<'a, K, V> {
     pub fn key(&self) -> Range<&K> {
-        self.inner.key()..&self.end
+        self.entry.key()..&self.end
     }
 
     pub fn into_key(self) -> Range<K> {
-        self.inner.into_key()..self.end
+        self.entry.into_key()..self.end
     }
 
     pub fn insert(self, value: V) -> &'a mut V {
-        &mut self.inner.insert((self.end, value)).1
+        &mut self.entry.insert((self.end, value)).1
     }
 }
 
@@ -122,7 +122,7 @@ impl<K: Ord, V> RangeMap<K, V> {
         F: FnMut(Option<Range<&K>>) -> FindResult<K>,
     {
         let mut start = &self.range.start;
-        for (base, (end, _)) in &self.inner {
+        for (base, (end, _)) in &self.map {
             if start < base {
                 match predicate(Some(start..base)) {
                     FindResult::Next => {}
@@ -152,9 +152,9 @@ impl<K: Ord, V> RangeMap<K, V> {
             }
         };
 
-        Some(match self.inner.entry(key.start) {
-            Vacant(inner) => Entry {
-                inner,
+        Some(match self.map.entry(key.start) {
+            Vacant(entry) => Entry {
+                entry,
                 end: key.end,
             },
             Occupied(_) => unreachable!(),
@@ -184,7 +184,7 @@ impl<K: Ord, V> RangeMap<K, V> {
         K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
-        self.inner.get(start).map(|(_, value)| value)
+        self.map.get(start).map(|(_, value)| value)
     }
 
     pub fn get_mut<Q>(&mut self, start: &Q) -> Option<&mut V>
@@ -192,7 +192,7 @@ impl<K: Ord, V> RangeMap<K, V> {
         K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
-        self.inner.get_mut(start).map(|(_, value)| value)
+        self.map.get_mut(start).map(|(_, value)| value)
     }
 
     pub fn get_key_value<'a, Q>(&'a self, start: &'a Q) -> Option<(Range<&K>, &V)>
@@ -200,7 +200,7 @@ impl<K: Ord, V> RangeMap<K, V> {
         K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
-        self.inner
+        self.map
             .get_key_value(start)
             .map(move |(start, (end, value))| (start..end, value))
     }
@@ -210,7 +210,7 @@ impl<K: Ord, V> RangeMap<K, V> {
         K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
-        self.inner.remove(start).map(|(_, value)| value)
+        self.map.remove(start).map(|(_, value)| value)
     }
 
     pub fn remove_entry<Q>(&mut self, start: &Q) -> Option<(Range<K>, V)>
@@ -218,18 +218,18 @@ impl<K: Ord, V> RangeMap<K, V> {
         K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
-        self.inner
+        self.map
             .remove_entry(start)
             .map(|(start, (end, value))| (start..end, value))
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (Range<&K>, &V)> + '_ {
-        let iter = self.inner.iter();
+        let iter = self.map.iter();
         iter.map(|(start, (end, value))| (start..end, value))
     }
 
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (Range<&K>, &mut V)> + '_ {
-        let iter = self.inner.iter_mut();
+        let iter = self.map.iter_mut();
         iter.map(|(start, (end, value))| (start..&*end, value))
     }
 
@@ -240,7 +240,7 @@ impl<K: Ord, V> RangeMap<K, V> {
         K: Borrow<Q>,
         Q: Ord + 'a,
     {
-        let iter = self.inner.range(range.start.borrow()..);
+        let iter = self.map.range(range.start.borrow()..);
         iter.take_while(move |(_, (end, _))| end.borrow() <= &range.end)
             .map(|(start, (end, value))| (start..end, value))
     }
@@ -255,7 +255,7 @@ impl<K: Ord, V> RangeMap<K, V> {
         K: Borrow<Q>,
         Q: Ord + 'a,
     {
-        let iter = self.inner.range_mut(range.start.borrow()..);
+        let iter = self.map.range_mut(range.start.borrow()..);
         iter.take_while(move |(_, (end, _))| end.borrow() <= &range.end)
             .map(|(start, (end, value))| (start..&*end, value))
     }
@@ -272,7 +272,7 @@ impl<K: Ord, V> RangeMap<K, V> {
         K: Borrow<Q>,
         Q: Ord + 'a,
     {
-        let iter = self.inner.range(..range.end.borrow()).rev();
+        let iter = self.map.range(..range.end.borrow()).rev();
         iter.take_while(move |(_, (end, _))| &range.start < end.borrow())
             .map(|(start, (end, value))| (start..end, value))
     }
@@ -297,7 +297,7 @@ impl<K: Ord, V> RangeMap<K, V> {
         K: Borrow<Q>,
         Q: Ord + 'a,
     {
-        let iter = self.inner.range_mut(..range.end.borrow()).rev();
+        let iter = self.map.range_mut(..range.end.borrow()).rev();
         iter.take_while(move |(_, (end, _))| &range.start < end.borrow())
             .map(|(start, (end, value))| (start..&*end, value))
     }
@@ -312,14 +312,14 @@ impl<K: Ord, V> RangeMap<K, V> {
         K: Borrow<Q>,
         Q: Ord,
     {
-        let mut ret = self.inner.split_off(range.start.borrow());
+        let mut ret = self.map.split_off(range.start.borrow());
         let mut suffix = ret.split_off(range.end.borrow());
-        self.inner.append(&mut suffix);
+        self.map.append(&mut suffix);
         if let Some(entry) = ret.last_entry() {
             let (end, _) = entry.get();
             if &range.end < end.borrow() {
                 let (k, v) = entry.remove_entry();
-                self.inner.insert(k, v);
+                self.map.insert(k, v);
             }
         }
         ret.into_iter()
@@ -333,7 +333,7 @@ impl<K: Ord, V> IntoIterator for RangeMap<K, V> {
     type IntoIter = impl Iterator<Item = (Range<K>, V)>;
 
     fn into_iter(self) -> Self::IntoIter {
-        let iter = self.inner.into_iter();
+        let iter = self.map.into_iter();
         iter.map(|(start, (end, value))| (start..end, value))
     }
 }
