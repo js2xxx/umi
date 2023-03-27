@@ -1,130 +1,124 @@
-//! Enable the S mode context to run as coroutines.
-//!
-//! The S mode code can thus be written linearly, instead of in the form of
-//! `interrupt_handlers` and so on.
-//!
-//! Furthermore, task scheduling in the S mode can be more smooth and simple in
-//! 2 ways:
-//!
-//! 1. No need of manual context-switching, and thus...
-//! 2. No need of one kernel stack per task.
-//!
-//! # Examples
-//!
-//! Task scheduling by some async runtime.
-//! ```rust,no_run
-//! use co_trap::{yield_to_user, TrapFrame};
-//! use riscv::register::scause;
-//!
-//! fn init_context() {
-//!     unsafe { co_trap::init(reent_handler) };
-//!     // Enable interrupts
-//! }
-//!
-//! async fn init_task() -> TrapFrame {
-//!     todo!("init_task")
-//! }
-//!
-//! async fn run_task() {
-//!     let mut frame = init_task().await;
-//!     loop {
-//!         unsafe { yield_to_user(&mut frame) };
-//!         let cause = scause::read();
-//!         // `await` indicates possible task scheduling.
-//!         handle_resume(&mut frame, cause).await;
-//!     }
-//! }
-//!
-//! async fn handle_resume(_frame: &mut TrapFrame, _cause: scause::Scause) {
-//!     todo!("handle_resume");
-//! }
-//!
-//! // Process exceptions or interrupts occurred in S-mode.
-//! extern "C" fn reent_handler(_frame: &mut TrapFrame) {
-//!     // Example:
-//!     // * Panic or reset if an S-mode exception occurred.
-//!     // * Wake wakers of tasks waiting for it if an interrupt occurred.
-//! }
-//! ```
-#![cfg_attr(any(target_arch = "riscv32", target_arch = "riscv64"), no_std)]
+#![cfg_attr(target_arch = "riscv64", no_std)]
+#![feature(const_trait_impl)]
 
-use core::sync::atomic;
+use riscv::register::{
+    scause::Scause,
+    stvec::{self, Stvec, TrapMode},
+};
+use static_assertions::const_assert_eq;
 
-use static_assertions::const_assert;
-
-#[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))]
-mod imp;
+#[cfg(target_arch = "riscv64")]
+core::arch::global_asm!(include_str!("imp.S"));
 
 #[derive(Debug, Clone, Copy, Default)]
 #[repr(C)]
+pub struct Tx {
+    pub ra: usize,     // 12
+    pub sp: usize,     // 13
+    pub gp: usize,     // 14
+    pub tp: usize,     // 15
+    pub a: [usize; 8], // 16..24
+    pub t: [usize; 7], // 24..31
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+#[repr(C)]
+pub struct Gpr {
+    pub s: [usize; 12], // 0..12
+    pub tx: Tx,         // 12..31
+}
+const_assert_eq!(
+    core::mem::size_of::<Gpr>(),
+    core::mem::size_of::<usize>() * 31
+);
+
+#[derive(Clone, Copy, Debug, Default)]
+#[repr(C)]
 pub struct TrapFrame {
-    /// Note that `x{i}` is `x[i - 1]`.
-    pub x: [usize; 31], // 0..248
-    /// the "a0" in `x` (i.e. x10) is actually `sscratch`.
-    pub a0: usize, // 248
-    pub sepc: usize,    // 256
-    pub sstatus: usize, // 264
-
-    rt_stack: usize, // 272
-    rt_ra: usize,    // 280
-}
-const_assert!(core::mem::size_of::<TrapFrame>() == 288);
-
-#[no_mangle]
-static mut REENT_HANDLER: usize = 0;
-
-pub type ReentHandler = extern "C" fn(frame: &mut TrapFrame);
-
-/// Initialize the environment for [trap coroutines].
-///
-/// Note: when using the functionality, interrupts (i.e. `sie`) must be enabled
-/// to ensure the proper resumption to the context.
-///
-/// # Safety
-///
-/// * This function must be called only once during initialization.
-///
-/// * The environment occupies the interrupt entry vector (i.e. `stvec`), so it
-///   must not be changed after initialization.
-///
-/// [trap coroutines]: yield_to_user
-pub unsafe fn init(reent_handler: ReentHandler) {
-    #[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))]
-    unsafe {
-        use riscv::register::{stvec, utvec::TrapMode};
-        extern "C" {
-            fn _intr_entry();
-        }
-        stvec::write(_intr_entry as usize, TrapMode::Direct)
-    }
-    atomic::fence(atomic::Ordering::Release);
-    unsafe { REENT_HANDLER = reent_handler as usize }
-    atomic::fence(atomic::Ordering::Acquire);
+    pub gpr: Gpr,       // 0..31
+    pub sepc: usize,    // 31
+    pub sstatus: usize, // 32
+    pub stval: usize,   // 33
+    pub scause: usize,  // 34
 }
 
-/// Yield to the calling context (i.e. the user context).
-///
-/// The calling context resume back here by raising interrupts or exceptions.
-///
-/// # Safety
-///
-/// `frame` must points to a valid user task context, and the environment must
-/// be [initialized] before any call to this function.
-///
-/// [initialized]: init
-#[inline]
-pub unsafe fn yield_to_user(frame: &mut TrapFrame) {
-    unsafe {
-        debug_assert_ne!(REENT_HANDLER, 0, "Yield before initialization");
+pub fn user_entry() -> usize {
+    extern "C" {
+        fn _user_entry();
+    }
+    _user_entry as _
+}
+
+/// A temporary write to `stvec` register.
+pub struct StvecTemp(Stvec);
+
+impl StvecTemp {
+    /// Creates a new [`StvecGuard`].
+    ///
+    /// # Safety
+    ///
+    /// - Interrupts **MUST BE DISABLED** on the current CPU during the whole
+    ///   lifetime of this struct.
+    /// - `entry` and `mode` must be valid.
+    pub unsafe fn new(entry: usize, mode: TrapMode) -> Self {
+        let old = stvec::read();
+        unsafe { stvec::write(entry, mode) };
+        StvecTemp(old)
+    }
+}
+
+impl Drop for StvecTemp {
+    fn drop(&mut self) {
+        // SAFETY: The caller is aware of that safety notice of `Self::new`.
+        unsafe { stvec::write(self.0.address(), self.0.trap_mode().unwrap()) };
+    }
+}
+
+pub fn yield_to_user(frame: &mut TrapFrame) -> (Scause, usize) {
+    extern "C" {
+        fn _return_to_user(frame: *mut TrapFrame) -> usize;
     }
 
-    #[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))]
-    unsafe {
-        extern "C" {
-            fn _return_to_user(frame: *mut TrapFrame);
+    ksync_core::critical(|| unsafe {
+        let _stvec = StvecTemp::new(user_entry(), TrapMode::Direct);
+        let status = _return_to_user(frame);
+        (core::mem::transmute(frame.scause), status)
+    })
+}
+
+#[doc(hidden)]
+#[repr(C)]
+pub struct FastRet {
+    pub cx: &'static mut TrapFrame,
+    pub status: usize,
+}
+
+/// Set the fast path function (conventional trap handler).
+///
+/// ```
+/// fn some_fast_func(_cx: &mut co_trap::TrapFrame) -> usize {
+///     1 // 0 means returning directly to the user thread, while others will
+///       // be passed to the normal coroutine context.
+/// }
+/// co_trap::fast_func!(some_fast_func);
+/// ```
+///
+/// If a fast path is not desired, just use `co_trap::fast_func!()` instead.
+///
+/// The interrupt **MUST BE DISABLED** during the execution of the function.
+#[macro_export]
+macro_rules! fast_func {
+    ($func:ident) => {
+        #[no_mangle]
+        extern "C" fn _fast_func(cx: &'static mut $crate::TrapFrame) -> $crate::FastRet {
+            let status = ($func)(cx);
+            $crate::FastRet { cx, status }
         }
-        _return_to_user(frame);
-    }
-    #[cfg(not(any(target_arch = "riscv32", target_arch = "riscv64")))]
-    let _ = frame;
+    };
+    () => {
+        #[no_mangle]
+        extern "C" fn _fast_func(cx: &'static mut $crate::TrapFrame) -> $crate::FastRet {
+            $crate::FastRet { cx, status: 1 }
+        }
+    };
 }
