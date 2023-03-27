@@ -12,6 +12,7 @@ use crate::{
 };
 
 bitflags! {
+    #[derive(Debug, Clone, Copy)]
     pub struct Attr: usize {
         const VALID = 1 << 0;
         const READABLE = 1 << 1;
@@ -22,9 +23,9 @@ bitflags! {
         const ACCESSED = 1 << 6;
         const DIRTY = 1 << 7;
 
-        const KERNEL_R = Self::VALID.bits | Self::READABLE.bits | Self::GLOBAL.bits;
-        const KERNEL_RW = Self::KERNEL_R.bits | Self::WRITABLE.bits;
-        const KERNEL_RWX = Self::KERNEL_RW.bits | Self::EXECUTABLE.bits;
+        const KERNEL_R = Self::VALID.bits() | Self::READABLE.bits() | Self::GLOBAL.bits();
+        const KERNEL_RW = Self::KERNEL_R.bits() | Self::WRITABLE.bits();
+        const KERNEL_RWX = Self::KERNEL_RW.bits() | Self::EXECUTABLE.bits();
     }
 }
 
@@ -113,7 +114,7 @@ impl Entry {
 
     #[inline]
     pub const fn new(addr: PAddr, attr: Attr, level: Level) -> Self {
-        Self(((*addr & level.paddr_mask()) >> 2) | attr.bits)
+        Self(((*addr & level.paddr_mask()) >> 2) | attr.bits())
     }
 
     #[inline]
