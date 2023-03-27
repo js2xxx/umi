@@ -155,11 +155,11 @@ impl SigSet {
     }
 
     pub const fn contains_index(self, other: usize) -> bool {
-        let other = match 1u64.checked_shl(other as u32) {
+        let other = match Sig::from_index(other) {
             Some(other) => other,
             None => return false,
         };
-        !self.0 & other == 0
+        self.contains(other)
     }
 }
 
