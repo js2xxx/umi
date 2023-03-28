@@ -220,7 +220,7 @@ impl<T, F: Flavor<T>> Receiver<T, F> {
         }
     }
 
-    pub fn streamed(&self) -> impl Stream<Item = T> + '_ {
+    pub fn streamed(self) -> impl Stream<Item = T> {
         stream::unfold(self, |this| async move {
             match this.recv().await {
                 Ok(data) => Some((data, this)),
@@ -429,7 +429,7 @@ pub fn unbounded<T>() -> (Sender<T, SegQueue<T>>, Receiver<T, SegQueue<T>>) {
 
 #[cfg(test)]
 mod tests {
-    use core::{pin::pin, time::Duration};
+    use core::time::Duration;
     use std::{sync::mpsc, thread};
 
     use futures_lite::StreamExt;
@@ -453,7 +453,7 @@ mod tests {
             assert!(tx.send(()).await.is_ok());
             let rx = smol::spawn(async move {
                 sleep(duration).await;
-                let count = pin!(rx.streamed()).count().await;
+                let count = rx.streamed().count().await;
                 assert_eq!(count, 3);
             });
             assert!(tx.send(()).await.is_ok());
