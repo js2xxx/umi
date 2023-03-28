@@ -161,6 +161,24 @@ impl SigSet {
         };
         self.contains(other)
     }
+
+    pub fn insert(&mut self, sig: Sig) -> bool {
+        if self.contains(sig) {
+            false
+        } else {
+            *self |= sig;
+            true
+        }
+    }
+
+    pub fn remove(&mut self, sig: Sig) -> bool {
+        if self.contains(sig) {
+            *self &= !sig;
+            true
+        } else {
+            false
+        }
+    }
 }
 
 impl Iterator for SigSet {
@@ -170,7 +188,7 @@ impl Iterator for SigSet {
         (self.0 != 0).then(|| {
             let next = self.0.trailing_zeros();
             self.0 -= 1 << next;
-            Sig(next as i32)
+            Sig((next + 1) as i32)
         })
     }
 }
@@ -220,5 +238,28 @@ impl const Not for SigSet {
 
     fn not(self) -> Self::Output {
         SigSet(!self.0)
+    }
+}
+
+impl const Not for Sig {
+    type Output = SigSet;
+
+    fn not(self) -> Self::Output {
+        !SigSet::from(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sigset() {
+        let mut ss = SigSet::from(Sig::SIGBUS) | Sig::SIGFPE | Sig::SIGPROF;
+        assert_eq!(ss.remove(Sig::SIGABRT), false);
+        assert_eq!(ss.remove(Sig::SIGFPE), true);
+        assert_eq!(ss.next(), Some(Sig::SIGBUS));
+        assert_eq!(ss.next(), Some(Sig::SIGPROF));
+        assert_eq!(ss.next(), None)
     }
 }
