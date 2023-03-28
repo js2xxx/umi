@@ -60,11 +60,11 @@ impl ActionSet {
     }
 
     pub fn get(&self, sig: Sig) -> Action {
-        ksync_core::critical(|| *self.data[sig.index()].lock())
+        ksync::critical(|| *self.data[sig.index()].lock())
     }
 
     pub fn replace(&self, sig: Sig, new: Action) -> Action {
-        ksync_core::critical(|| {
+        ksync::critical(|| {
             let mut action = self.data[sig.index()].lock();
             let old = mem::replace(&mut *action, new);
             if sig.should_never_capture() {
