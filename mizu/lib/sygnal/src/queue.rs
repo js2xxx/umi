@@ -1,6 +1,9 @@
 use core::{
     array,
+    future::Future,
+    pin::Pin,
     sync::atomic::{AtomicU64, Ordering::SeqCst},
+    task::{ready, Context, Poll},
 };
 
 use crossbeam_queue::ArrayQueue;
@@ -85,14 +88,48 @@ impl Signals {
         Some(info)
     }
 
-    pub fn wait_one(&self, sig: Sig) -> EventListener {
-        self.pending[sig.index()].event.listen()
+    pub fn wait_one(&self, sig: Sig) -> WaitOne {
+        WaitOne {
+            pending: &self.pending[sig.index()],
+            set: &self.set,
+            listener: None,
+        }
     }
 
-    pub async fn wait(&self, sigset: SigSet) -> Sig {
-        let wait_one = |sig| self.wait_one(sig).map(move |_| sig);
+    pub async fn wait(&self, sigset: SigSet) -> SigInfo {
+        let wait_one = move |sig| self.wait_one(sig);
         let wait_any = future::select_all(sigset.map(wait_one));
         wait_any.await.0
+    }
+}
+
+pub struct WaitOne<'a> {
+    pending: &'a SigPending,
+    set: &'a AtomicU64,
+    listener: Option<EventListener>,
+}
+
+impl Future for WaitOne<'_> {
+    type Output = SigInfo;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        loop {
+            match self.pending.queue.pop() {
+                Some(info) => {
+                    if self.pending.queue.is_empty() {
+                        self.set.fetch_and(!info.sig.mask(), SeqCst);
+                    }
+                    break Poll::Ready(info);
+                }
+                None => match self.listener.as_mut() {
+                    Some(listener) => {
+                        ready!(listener.poll_unpin(cx));
+                        self.listener = None;
+                    }
+                    None => self.listener = Some(self.pending.event.listen()),
+                },
+            }
+        }
     }
 }
 
