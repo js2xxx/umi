@@ -1,6 +1,5 @@
 use core::{
     fmt,
-    marker::PhantomData,
     sync::atomic::{AtomicBool, AtomicUsize, Ordering::*},
 };
 
@@ -9,10 +8,12 @@ use crossbeam_queue::{ArrayQueue, SegQueue};
 use event_listener::Event;
 use futures_lite::{stream, Stream};
 
-pub trait Flavor<T> {
-    fn push(&self, data: T) -> Option<T>;
+pub trait Flavor {
+    type Item;
 
-    fn pop(&self) -> Option<T>;
+    fn push(&self, data: Self::Item) -> Option<Self::Item>;
+
+    fn pop(&self) -> Option<Self::Item>;
 
     fn is_empty(&self) -> bool;
 
@@ -23,7 +24,9 @@ pub trait Flavor<T> {
     fn capacity(&self) -> usize;
 }
 
-impl<T> Flavor<T> for SegQueue<T> {
+impl<T> Flavor for SegQueue<T> {
+    type Item = T;
+
     fn push(&self, data: T) -> Option<T> {
         self.push(data);
         None
@@ -50,7 +53,9 @@ impl<T> Flavor<T> for SegQueue<T> {
     }
 }
 
-impl<T> Flavor<T> for ArrayQueue<T> {
+impl<T> Flavor for ArrayQueue<T> {
+    type Item = T;
+
     fn push(&self, data: T) -> Option<T> {
         self.push(data).err()
     }
@@ -76,17 +81,16 @@ impl<T> Flavor<T> for ArrayQueue<T> {
     }
 }
 
-struct Channel<T, F: Flavor<T>> {
+struct Channel<F: Flavor> {
     queue: F,
     send: Event,
     recv: Event,
     closed: AtomicBool,
     sender: AtomicUsize,
     receiver: AtomicUsize,
-    _marker: PhantomData<T>,
 }
 
-impl<T, F: Flavor<T>> Channel<T, F> {
+impl<F: Flavor> Channel<F> {
     fn close(&self) -> bool {
         if !self.closed.swap(true, SeqCst) {
             self.send.notify(usize::MAX);
@@ -102,12 +106,12 @@ impl<T, F: Flavor<T>> Channel<T, F> {
     }
 }
 
-pub struct Sender<T, F: Flavor<T>> {
-    channel: Arsc<Channel<T, F>>,
+pub struct Sender<F: Flavor> {
+    channel: Arsc<Channel<F>>,
 }
 
-impl<T, F: Flavor<T>> Sender<T, F> {
-    pub fn try_send(&self, data: T) -> Result<(), TrySendError<T>> {
+impl<F: Flavor> Sender<F> {
+    pub fn try_send(&self, data: F::Item) -> Result<(), TrySendError<F::Item>> {
         if self.channel.is_closed() {
             return Err(TrySendError { data, closed: true });
         }
@@ -121,7 +125,7 @@ impl<T, F: Flavor<T>> Sender<T, F> {
         Ok(())
     }
 
-    pub async fn send(&self, mut data: T) -> Result<(), SendError<T>> {
+    pub async fn send(&self, mut data: F::Item) -> Result<(), SendError<F::Item>> {
         let mut listener = None;
         loop {
             data = match self.try_send(data) {
@@ -169,7 +173,7 @@ impl<T, F: Flavor<T>> Sender<T, F> {
     }
 }
 
-impl<T, F: Flavor<T>> Clone for Sender<T, F> {
+impl<F: Flavor> Clone for Sender<F> {
     fn clone(&self) -> Self {
         let count = self.channel.sender.fetch_add(1, SeqCst);
         assert!(
@@ -182,7 +186,7 @@ impl<T, F: Flavor<T>> Clone for Sender<T, F> {
     }
 }
 
-impl<T, F: Flavor<T>> Drop for Sender<T, F> {
+impl<F: Flavor> Drop for Sender<F> {
     fn drop(&mut self) {
         if self.channel.sender.fetch_sub(1, SeqCst) == 1 {
             self.channel.close();
@@ -190,12 +194,12 @@ impl<T, F: Flavor<T>> Drop for Sender<T, F> {
     }
 }
 
-pub struct Receiver<T, F: Flavor<T>> {
-    channel: Arsc<Channel<T, F>>,
+pub struct Receiver<F: Flavor> {
+    channel: Arsc<Channel<F>>,
 }
 
-impl<T, F: Flavor<T>> Receiver<T, F> {
-    pub fn try_recv(&self) -> Result<T, TryRecvError<T>> {
+impl<F: Flavor> Receiver<F> {
+    pub fn try_recv(&self) -> Result<F::Item, TryRecvError<F::Item>> {
         let data = self.channel.queue.pop();
         if self.channel.is_closed() {
             Err(TryRecvError::Closed(data))
@@ -206,7 +210,7 @@ impl<T, F: Flavor<T>> Receiver<T, F> {
         }
     }
 
-    pub async fn recv(&self) -> Result<T, RecvError<T>> {
+    pub async fn recv(&self) -> Result<F::Item, RecvError<F::Item>> {
         let mut listener = None;
         loop {
             match self.try_recv() {
@@ -220,7 +224,7 @@ impl<T, F: Flavor<T>> Receiver<T, F> {
         }
     }
 
-    pub fn streamed(self) -> impl Stream<Item = T> {
+    pub fn streamed(self) -> impl Stream<Item = F::Item> {
         stream::unfold(self, |this| async move {
             match this.recv().await {
                 Ok(data) => Some((data, this)),
@@ -262,7 +266,7 @@ impl<T, F: Flavor<T>> Receiver<T, F> {
     }
 }
 
-impl<T, F: Flavor<T>> Clone for Receiver<T, F> {
+impl<F: Flavor> Clone for Receiver<F> {
     fn clone(&self) -> Self {
         let count = self.channel.receiver.fetch_add(1, SeqCst);
         assert!(
@@ -275,7 +279,7 @@ impl<T, F: Flavor<T>> Clone for Receiver<T, F> {
     }
 }
 
-impl<T, F: Flavor<T>> Drop for Receiver<T, F> {
+impl<F: Flavor> Drop for Receiver<F> {
     fn drop(&mut self) {
         if self.channel.receiver.fetch_sub(1, SeqCst) == 1 {
             self.channel.close();
@@ -283,7 +287,7 @@ impl<T, F: Flavor<T>> Drop for Receiver<T, F> {
     }
 }
 
-impl<T, F: Flavor<T>> Unpin for Receiver<T, F> {}
+impl<F: Flavor> Unpin for Receiver<F> {}
 
 pub struct TrySendError<T> {
     data: T,
@@ -391,15 +395,14 @@ impl<T> fmt::Display for RecvError<T> {
     }
 }
 
-pub fn bounded<T>(capacity: usize) -> (Sender<T, ArrayQueue<T>>, Receiver<T, ArrayQueue<T>>) {
+pub fn with_flavor<F: Flavor>(queue: F) -> (Sender<F>, Receiver<F>) {
     let channel = Arsc::new(Channel {
-        queue: ArrayQueue::new(capacity),
+        queue,
         send: Event::new(),
         recv: Event::new(),
         closed: AtomicBool::new(false),
         sender: AtomicUsize::new(1),
         receiver: AtomicUsize::new(1),
-        _marker: PhantomData,
     });
     (
         Sender {
@@ -409,22 +412,12 @@ pub fn bounded<T>(capacity: usize) -> (Sender<T, ArrayQueue<T>>, Receiver<T, Arr
     )
 }
 
-pub fn unbounded<T>() -> (Sender<T, SegQueue<T>>, Receiver<T, SegQueue<T>>) {
-    let channel = Arsc::new(Channel {
-        queue: SegQueue::new(),
-        send: Event::new(),
-        recv: Event::new(),
-        closed: AtomicBool::new(false),
-        sender: AtomicUsize::new(1),
-        receiver: AtomicUsize::new(1),
-        _marker: PhantomData,
-    });
-    (
-        Sender {
-            channel: channel.clone(),
-        },
-        Receiver { channel },
-    )
+pub fn bounded<T>(capacity: usize) -> (Sender<ArrayQueue<T>>, Receiver<ArrayQueue<T>>) {
+    self::with_flavor(ArrayQueue::new(capacity))
+}
+
+pub fn unbounded<T>() -> (Sender<SegQueue<T>>, Receiver<SegQueue<T>>) {
+    self::with_flavor(SegQueue::new())
 }
 
 #[cfg(test)]
