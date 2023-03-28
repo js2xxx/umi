@@ -163,6 +163,17 @@ impl SigSet {
     }
 }
 
+impl Iterator for SigSet {
+    type Item = Sig;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        (self.0 != 0).then(|| {
+            let next = self.0.trailing_zeros();
+            Sig(next as i32)
+        })
+    }
+}
+
 macro_rules! impl_binary {
     ($trait:ident, $rhs_ty:ident, $func:ident => | $l:ident, $r:ident | $expr:expr) => {
         impl const $trait<$rhs_ty> for SigSet {

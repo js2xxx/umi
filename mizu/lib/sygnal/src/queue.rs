@@ -4,15 +4,22 @@ use core::{
 };
 
 use crossbeam_queue::ArrayQueue;
+use futures_util::{future, FutureExt};
+use ksync::event::{Event, EventListener};
 use rv39_paging::LAddr;
 
 use crate::{Sig, SigSet, NR_SIGNALS};
 
 const CAP_PER_SIG: usize = 8;
 
+struct SigPending {
+    queue: ArrayQueue<SigInfo>,
+    event: Event,
+}
+
 pub struct Signals {
     set: AtomicU64,
-    pending: [ArrayQueue<SigInfo>; NR_SIGNALS],
+    pending: [SigPending; NR_SIGNALS],
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -35,7 +42,14 @@ impl Signals {
     pub fn new() -> Self {
         Signals {
             set: AtomicU64::new(0),
-            pending: array::from_fn(|_| ArrayQueue::new(CAP_PER_SIG)),
+            pending: array::from_fn(|index| SigPending {
+                queue: ArrayQueue::new(match Sig::from_index(index) {
+                    // Each legacy signal only needs 1 entry.
+                    Some(sig) if sig.is_legacy() => 1,
+                    _ => CAP_PER_SIG,
+                }),
+                event: Event::new(),
+            }),
         }
     }
 
@@ -43,7 +57,11 @@ impl Signals {
         let old: SigSet = self.set.fetch_or(info.sig.mask(), SeqCst).into();
 
         if !(info.sig.is_legacy() && old.contains(info.sig)) {
-            let _ = self.pending[info.sig.index()].push(info);
+            let sig_pending = &self.pending[info.sig.index()];
+            let res = sig_pending.queue.push(info);
+            if res.is_ok() {
+                sig_pending.event.notify_additional(1);
+            }
         }
     }
 
@@ -59,12 +77,22 @@ impl Signals {
 
         let (info, is_empty) = iter
             .filter(|&(index, _)| !masked.contains_index(index))
-            .find_map(|(_, queue)| queue.pop().map(|s| (s, queue.is_empty())))?;
+            .find_map(|(_, pending)| pending.queue.pop().map(|s| (s, pending.queue.is_empty())))?;
 
         if is_empty {
             self.set.fetch_and(!info.sig.mask(), SeqCst);
         }
         Some(info)
+    }
+
+    pub fn wait_one(&self, sig: Sig) -> EventListener {
+        self.pending[sig.index()].event.listen()
+    }
+
+    pub async fn wait(&self, sigset: SigSet) -> Sig {
+        let wait_one = |sig| self.wait_one(sig).map(move |_| sig);
+        let wait_any = future::select_all(sigset.map(wait_one));
+        wait_any.await.0
     }
 }
 
