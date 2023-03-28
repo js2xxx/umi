@@ -169,6 +169,7 @@ impl Iterator for SigSet {
     fn next(&mut self) -> Option<Self::Item> {
         (self.0 != 0).then(|| {
             let next = self.0.trailing_zeros();
+            self.0 -= 1 << next;
             Sig(next as i32)
         })
     }
