@@ -238,7 +238,10 @@ impl<F: Flavor> Receiver<F> {
     }
 
     pub fn recv(&self) -> Recv<'_, F> {
-        Recv { receiver: self, listener: None }
+        Recv {
+            receiver: self,
+            listener: None,
+        }
     }
 
     pub fn streamed(self) -> impl Stream<Item = F::Item> {
