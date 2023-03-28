@@ -23,6 +23,28 @@ pub struct Timer {
     handle: Option<(usize, Waker)>,
 }
 
+impl From<Instant> for Timer {
+    fn from(value: Instant) -> Self {
+        Timer::deadline(value)
+    }
+}
+
+impl From<Duration> for Timer {
+    fn from(value: Duration) -> Self {
+        Timer::after(value)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+#[repr(transparent)]
+pub struct Period(pub Duration);
+
+impl From<Period> for Timer {
+    fn from(value: Period) -> Self {
+        Timer::period(value.0)
+    }
+}
+
 impl Timer {
     pub fn deadline(deadline: Instant) -> Self {
         Timer {
