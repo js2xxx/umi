@@ -1,12 +1,15 @@
 use core::{
     fmt,
+    future::Future,
+    pin::Pin,
     sync::atomic::{AtomicBool, AtomicUsize, Ordering::*},
+    task::{ready, Context, Poll},
 };
 
 use arsc_rs::Arsc;
 use crossbeam_queue::{ArrayQueue, SegQueue};
-use event_listener::Event;
-use futures_lite::{stream, Stream};
+use event_listener::{Event, EventListener};
+use futures_lite::{stream, FutureExt, Stream};
 
 pub trait Flavor {
     type Item;
@@ -125,18 +128,11 @@ impl<F: Flavor> Sender<F> {
         Ok(())
     }
 
-    pub async fn send(&self, mut data: F::Item) -> Result<(), SendError<F::Item>> {
-        let mut listener = None;
-        loop {
-            data = match self.try_send(data) {
-                Ok(()) => break Ok(()),
-                Err(err) if err.is_full() => err.data,
-                Err(err) => break Err(SendError { data: err.data }),
-            };
-            match listener.take() {
-                Some(listener) => listener.await,
-                None => listener = Some(self.channel.send.listen()),
-            }
+    pub fn send(&self, data: F::Item) -> Send<'_, F> {
+        Send {
+            sender: self,
+            data: Some(data),
+            listener: None,
         }
     }
 
@@ -170,6 +166,37 @@ impl<F: Flavor> Sender<F> {
 
     pub fn sender_count(&self) -> usize {
         self.channel.sender.load(SeqCst)
+    }
+}
+
+#[must_use = "futures do nothing unless polled"]
+pub struct Send<'a, F: Flavor> {
+    sender: &'a Sender<F>,
+    data: Option<F::Item>,
+    listener: Option<EventListener>,
+}
+
+impl<F: Flavor> Unpin for Send<'_, F> {}
+
+impl<F: Flavor> Future for Send<'_, F> {
+    type Output = Result<(), SendError<F::Item>>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        loop {
+            let data = match self.sender.try_send(self.data.take().unwrap()) {
+                Ok(()) => break Poll::Ready(Ok(())),
+                Err(err) if err.is_full() => err.data,
+                Err(err) => break Poll::Ready(Err(SendError { data: err.data })),
+            };
+            self.data = Some(data);
+            match self.listener.as_mut() {
+                Some(listener) => {
+                    ready!(listener.poll(cx));
+                    self.listener = None;
+                }
+                None => self.listener = Some(self.sender.channel.send.listen()),
+            }
+        }
     }
 }
 
@@ -210,18 +237,8 @@ impl<F: Flavor> Receiver<F> {
         }
     }
 
-    pub async fn recv(&self) -> Result<F::Item, RecvError<F::Item>> {
-        let mut listener = None;
-        loop {
-            match self.try_recv() {
-                Ok(data) => break Ok(data),
-                Err(TryRecvError::Closed(data)) => break Err(RecvError { data }),
-                Err(TryRecvError::Empty) => match listener.take() {
-                    Some(listener) => listener.await,
-                    None => listener = Some(self.channel.recv.listen()),
-                },
-            }
-        }
+    pub fn recv(&self) -> Recv<'_, F> {
+        Recv { receiver: self, listener: None }
     }
 
     pub fn streamed(self) -> impl Stream<Item = F::Item> {
@@ -263,6 +280,32 @@ impl<F: Flavor> Receiver<F> {
 
     pub fn sender_count(&self) -> usize {
         self.channel.sender.load(SeqCst)
+    }
+}
+
+#[must_use = "futures do nothing unless polled"]
+pub struct Recv<'a, F: Flavor> {
+    receiver: &'a Receiver<F>,
+    listener: Option<EventListener>,
+}
+
+impl<F: Flavor> Future for Recv<'_, F> {
+    type Output = Result<F::Item, RecvError<F::Item>>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        loop {
+            match self.receiver.try_recv() {
+                Ok(data) => break Poll::Ready(Ok(data)),
+                Err(TryRecvError::Closed(data)) => break Poll::Ready(Err(RecvError { data })),
+                Err(TryRecvError::Empty) => match self.listener.as_mut() {
+                    Some(listener) => {
+                        ready!(listener.poll(cx));
+                        self.listener = None;
+                    }
+                    None => self.listener = Some(self.receiver.channel.recv.listen()),
+                },
+            }
+        }
     }
 }
 
