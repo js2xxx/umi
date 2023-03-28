@@ -14,5 +14,6 @@ ktime-core = {path = "../ktime-core"}
 # External crates
 futures-lite = {version = "1", default-features = false, features = ["alloc"]}
 heapless = "0"
+pin-project = "1"
 smol = {version = "1", optional = true}
 spin = "0"
