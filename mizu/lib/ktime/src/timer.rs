@@ -10,7 +10,7 @@ use core::{
 use futures_lite::{Future, Stream};
 use heapless::mpmc::MpMcQueue;
 use ktime_core::Instant;
-use spin::{Mutex, MutexGuard};
+use spin::Mutex;
 
 /// Async timer, based on [`async-io`]'s implementation.
 ///
@@ -200,11 +200,7 @@ impl TimerQueue {
         }
     }
 
-    fn proc_batch(
-        &self,
-        more: Option<TimerBatch>,
-        heap: &mut MutexGuard<BTreeMap<(Instant, usize), Waker>>,
-    ) {
+    fn proc_batch(&self, more: Option<TimerBatch>, heap: &mut BTreeMap<(Instant, usize), Waker>) {
         if let Some(batch) = more {
             match batch {
                 TimerBatch::Insert {

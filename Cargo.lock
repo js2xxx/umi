@@ -537,11 +537,9 @@ dependencies = [
  "ktime",
  "log",
  "r0",
- "range-map",
  "riscv",
  "rv39-paging",
  "sbi-rt",
- "sygnal",
 ]
 
 [[package]]
