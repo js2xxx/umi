@@ -40,7 +40,7 @@ jobs:
 
   mirror:
     runs-on: ubuntu-latest
-    needs: [approve, deploy]
+    needs: [deploy]
     environment:
       name: Integrate Pull Request
     env:
