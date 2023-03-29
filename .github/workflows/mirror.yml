@@ -22,19 +22,34 @@ jobs:
           ref: deployed
           fetch-depth: 0
 
+      - name: Config git
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git config pull.rebase true
+
       - name: Rebase on master
-        run: git rebase master
+        run: |
+          git fetch --all
+          git pull --all
+          git checkout master
+          git checkout deployed
+          git rebase master
+          git pull --all
+          git push
 
       - name: Revendor dependencies
         run: sh scripts/revendor.sh
 
       - name: Test build
-        run: make all
+        run: |
+          cargo install cargo-binutils
+          make all MODE=release
 
       - name: Deploy to the branch
         run: |
-          git config user.name github-actions
-          git config user.email github-actions@github.com
+          date > deployment-time.log
+          git add .
           git commit -m "Deployment"
           git push
 
