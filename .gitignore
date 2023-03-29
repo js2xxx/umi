@@ -1,4 +1,4 @@
 target
 /debug
-Cargo.lock
 kernel-qemu
+sbi-qemu

@@ -6,6 +6,8 @@ export ROOT			:= $(shell pwd)
 export TARGET_DIR 	:= $(ROOT)/target/$(TARGET)/$(MODE)
 export DEBUG_DIR   	:= $(ROOT)/debug
 
+export SBI := $(ROOT)/third-party/bin/rustsbi-$(BOARD).bin
+
 .PHONY: all build run debug test clean
 
 all: build
@@ -13,6 +15,7 @@ all: build
 build:
 	mkdir -p debug
 	cd mizu/kernel && make build
+	cp $(SBI) $(ROOT)/sbi-qemu
 
 QEMU_ARGS := -monitor stdio \
 	-kernel kernel-qemu \
@@ -22,7 +25,7 @@ QEMU_ARGS := -monitor stdio \
 
 ifeq ($(BOARD), qemu-virt)
 	QEMU_ARGS += -machine virt \
-		-bios default
+		-bios sbi-qemu
 endif
 
 run: build
