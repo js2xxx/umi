@@ -10,12 +10,37 @@ jobs:
   approve:
     runs-on: ubuntu-latest
     steps:
-    - name: Approve
-      run: echo All PR should be approved first to prevent any malicious code to be mirrored to the destination.
+      - name: Approve
+        run: echo All PR should be approved first to prevent any malicious code to be mirrored to the destination.
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: [approve]
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          ref: deployed
+          fetch-depth: 0
+
+      - name: Rebase on master
+        run: git rebase master
+
+      - name: Revendor dependencies
+        run: sh scripts/revendor.sh
+
+      - name: Test build
+        run: make all
+
+      - name: Deploy to the branch
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git commit -m "Deployment"
+          git push
 
   mirror:
     runs-on: ubuntu-latest
-    needs: [approve]
+    needs: [approve, deploy]
     environment:
       name: Integrate Pull Request
     env:
