@@ -83,6 +83,6 @@ impl Sub for Instant {
 impl fmt::Debug for Instant {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let display = self.0 as f64 / 1_000_000.0;
-        fmt::Display::fmt(&display, f)
+        write!(f, "{display:.6}")
     }
 }

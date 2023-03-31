@@ -47,7 +47,7 @@ impl Executor {
     ///
     /// The caller should iterate over the returned startup functions and run
     /// them concurrently.
-    pub fn new<G, F>(num: usize, init: G) -> (Arsc<Self>, impl Iterator<Item = impl FnOnce()>)
+    pub fn start<G, F>(num: usize, init: G) -> impl Iterator<Item = impl FnOnce() + Send>
     where
         G: FnOnce(Arsc<Executor>) -> F,
         F: Future<Output = ()> + Send + 'static,
@@ -72,12 +72,10 @@ impl Executor {
         init.schedule();
         handle.detach();
 
-        let e2 = executor.clone();
-        let startup = workers.into_iter().map(move |worker| {
-            let e = e2.clone();
+        workers.into_iter().map(move |worker| {
+            let e = executor.clone();
             || Self::startup(worker, e)
-        });
-        (executor, startup)
+        })
     }
 
     pub fn spawn<F, T>(&self, fut: F) -> Task<T>

@@ -528,6 +528,7 @@ dependencies = [
 name = "mizu"
 version = "0.1.0"
 dependencies = [
+ "arsc-rs",
  "art",
  "co-trap",
  "config",
