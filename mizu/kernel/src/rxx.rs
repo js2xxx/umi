@@ -51,7 +51,7 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
     if !GLOBAL_INIT.load(Relaxed) {
         r0::zero_bss(&mut _sbss, &mut _ebss);
 
-        // Can't use cmpxchg here, because `init_data` will reinitialize it to zero.
+        // Can't use cmpxchg here, because `zero_bss` will reinitialize it to zero.
         GLOBAL_INIT.store(true, Release);
         BSP_ID.store(hartid, Release);
     }
@@ -72,6 +72,7 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
     // Disable interrupt in `ksync`.
     unsafe { ksync::disable() };
 
+    // Init default kernel trap handler.
     unsafe { crate::trap::init() };
 
     if is_bsp(hartid) {
