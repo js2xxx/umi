@@ -19,7 +19,7 @@ use sbi_rt::{NoReason, Shutdown};
 #[thread_local]
 static mut X: i32 = 123;
 
-fn main(_hartid: usize) -> ! {
+fn main(hartid: usize, payload: usize) -> ! {
     unsafe { assert_eq!(X, 123) };
 
     println!("Hello world!");

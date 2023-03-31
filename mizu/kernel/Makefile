@@ -22,5 +22,5 @@ build:
 	cp $(KERNEL_RAW)  $(KERNEL_SYM)
 	rust-strip --strip-debug --strip-symbol="" \
 		$(KERNEL_RAW) -o $(ROOT)/kernel-qemu
-	rust-readobj $(ROOT)/kernel-qemu -Ces > $(KERNEL_META)
+	rust-objdump $(ROOT)/kernel-qemu -xR > $(KERNEL_META)
 	rust-objdump $(ROOT)/kernel-qemu -Cd > $(KERNEL_ASM)

@@ -1,12 +1,13 @@
 #[cfg(not(feature = "test"))]
 use core::arch::asm;
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
 
 use rv39_paging::{table_1g, AddrExt, Attr, Entry, Level, PAddr, Table, ID_OFFSET};
 
 #[no_mangle]
 static BOOT_PAGES: Table = const {
-    let low_start = config::KERNEL_START.round_down(Level::max());
-    let high_start = low_start + ID_OFFSET;
+    let low_start = config::KERNEL_START_PHYS.round_down(Level::max());
+    let high_start = config::KERNEL_START.round_down(Level::max());
     let delta = Level::max().page_size();
 
     table_1g![
@@ -17,17 +18,25 @@ static BOOT_PAGES: Table = const {
     ]
 };
 
+static BSP_ID: AtomicUsize = AtomicUsize::new(0);
+static GLOBAL_INIT: AtomicBool = AtomicBool::new(false);
+
+pub fn bsp_id() -> usize {
+    BSP_ID.load(Relaxed)
+}
+
+pub fn is_bsp(hartid: usize) -> bool {
+    hartid == bsp_id()
+}
+
 #[cfg(not(feature = "test"))]
 #[no_mangle]
-unsafe extern "C" fn __rt_init(hartid: usize) {
+unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
+    use core::sync::atomic::Ordering::Release;
+
     extern "C" {
         static mut _sbss: u32;
         static mut _ebss: u32;
-
-        static mut _sdata: u32;
-        static mut _edata: u32;
-
-        static _sidata: u32;
 
         static _stdata: u32;
         static _etdata: u32;
@@ -35,9 +44,13 @@ unsafe extern "C" fn __rt_init(hartid: usize) {
         static mut _sheap: u32;
         static mut _eheap: u32;
     }
-    if hartid == 0 {
+
+    if !GLOBAL_INIT.load(Relaxed) {
         r0::zero_bss(&mut _sbss, &mut _ebss);
-        r0::init_data(&mut _sdata, &mut _edata, &_sidata);
+
+        // Can't use cmpxchg here, because `init_data` will reinitialize it to zero.
+        GLOBAL_INIT.store(true, Release);
+        BSP_ID.store(hartid, Release);
     }
 
     // Initialize TLS
@@ -56,18 +69,20 @@ unsafe extern "C" fn __rt_init(hartid: usize) {
     // Disable interrupt in `ksync`.
     unsafe { ksync::disable() };
 
-    // Init logger.
-    unsafe { klog::init_logger(log::Level::Debug) };
+    if is_bsp(hartid) {
+        // Init logger.
+        unsafe { klog::init_logger(log::Level::Debug) };
 
-    // Init the kernel heap.
-    unsafe { kalloc::init(&mut _sheap, &mut _eheap) };
-
-    unsafe {
-        static mut A: usize = 12345;
-
-        assert_eq!(A, 12345);
+        // Init the kernel heap.
+        unsafe { kalloc::init(&mut _sheap, &mut _eheap) };
     }
-    crate::main(hartid)
+
+    // unsafe {
+    //     static mut A: usize = 12345;
+
+    //     assert_eq!(A, 12345);
+    // }
+    crate::main(hartid, payload)
 }
 
 #[cfg(not(feature = "test"))]
@@ -79,46 +94,43 @@ unsafe extern "C" fn _start() -> ! {
         csrw sie, 0
         csrw sip, 0
 
+        // Load ID offset to jump to higher half
+        li t3, {ID_OFFSET}
+
         // Set the boot page tables
         la t0, {BOOT_PAGES}
+        sub t0, t0, t3
         srli t0, t0, 12
         li t1, 0x8000000000000000
         add t0, t0, t1
         csrw satp, t0
-
-        // Load ID offset to jump to higher half
-        li t3, {ID_OFFSET}
+        sfence.vma
     
         // Set global pointer
         .option push
         .option norelax
         la gp, __global_pointer$
-        add gp, gp, t3
         .option pop
 
         // Set thread pointer
         .option push
         .option norelax
         la tp, _stp
-        lui t0, %hi(_tdata_size)
-        add t0, t0, %lo(_tdata_size)
+        la t0, _tdata_size
         mul t0, a0, t0
         add tp, tp, t0
-        add tp, tp, t3
         .option pop
 
         // Set stack pointer
-        la sp, _estack
-        lui t0, %hi(_stack_size)
-        add t0, t0, %lo(_stack_size)
-        mul t0, a0, t0
-        sub sp, sp, t0
-        add sp, sp, t3
+        la sp, _sstack
+        la t0, _stack_size
+        addi t1, a0, 1
+        mul t0, t1, t0
+        add sp, sp, t0
 
         mv s0, sp
 
         la t0, {_init}
-        add t0, t0, t3
         jr t0
         ", 
         _init = sym __rt_init,
@@ -132,7 +144,6 @@ unsafe extern "C" fn _start() -> ! {
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
     use sbi_rt::{Shutdown, SystemFailure};
-    klog::print!(""); // MAGIC, test it before removing.
     log::error!("kernel {info}");
     sbi_rt::system_reset(Shutdown, SystemFailure);
     loop {
