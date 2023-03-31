@@ -3,7 +3,9 @@ use core::arch::asm;
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
 
 use rv39_paging::{table_1g, AddrExt, Attr, Entry, Level, PAddr, Table, ID_OFFSET};
+use static_assertions::const_assert_eq;
 
+const_assert_eq!(config::KERNEL_START_PHYS + ID_OFFSET, config::KERNEL_START);
 #[no_mangle]
 static BOOT_PAGES: Table = const {
     let low_start = config::KERNEL_START_PHYS.round_down(Level::max());
@@ -19,7 +21,6 @@ static BOOT_PAGES: Table = const {
 };
 
 static BSP_ID: AtomicUsize = AtomicUsize::new(0);
-static GLOBAL_INIT: AtomicBool = AtomicBool::new(false);
 
 pub fn bsp_id() -> usize {
     BSP_ID.load(Relaxed)
@@ -33,6 +34,8 @@ pub fn is_bsp(hartid: usize) -> bool {
 #[no_mangle]
 unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
     use core::sync::atomic::Ordering::Release;
+
+    static GLOBAL_INIT: AtomicBool = AtomicBool::new(false);
 
     extern "C" {
         static mut _sbss: u32;
@@ -69,6 +72,8 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
     // Disable interrupt in `ksync`.
     unsafe { ksync::disable() };
 
+    unsafe { crate::trap::init() };
+
     if is_bsp(hartid) {
         // Init logger.
         unsafe { klog::init_logger(log::Level::Debug) };
@@ -77,11 +82,11 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
         unsafe { kalloc::init(&mut _sheap, &mut _eheap) };
     }
 
-    // unsafe {
-    //     static mut A: usize = 12345;
+    unsafe {
+        static mut A: usize = 12345;
 
-    //     assert_eq!(A, 12345);
-    // }
+        assert_eq!(A, 12345);
+    }
     crate::main(hartid, payload)
 }
 

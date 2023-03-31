@@ -541,6 +541,7 @@ dependencies = [
  "riscv",
  "rv39-paging",
  "sbi-rt",
+ "static_assertions",
 ]
 
 [[package]]

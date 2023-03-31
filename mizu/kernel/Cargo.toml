@@ -30,6 +30,7 @@ log = "0"
 r0 = "1"
 riscv = "0"
 sbi-rt = {git = "https://github.com/js2xxx/sbi-rt", branch = "multitarget"}
+static_assertions = "1"
 
 [build-dependencies]
 config = {path = "../lib/config", default-features = false}
