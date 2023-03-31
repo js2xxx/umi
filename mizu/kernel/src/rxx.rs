@@ -22,12 +22,19 @@ static BOOT_PAGES: Table = const {
 
 static BSP_ID: AtomicUsize = AtomicUsize::new(0);
 
+#[thread_local]
+static mut HART_ID: usize = 0;
+
 pub fn bsp_id() -> usize {
     BSP_ID.load(Relaxed)
 }
 
-pub fn is_bsp(hartid: usize) -> bool {
-    hartid == bsp_id()
+pub fn hart_id() -> usize {
+    unsafe { HART_ID }
+}
+
+pub fn is_bsp() -> bool {
+    hart_id() == bsp_id()
 }
 
 #[cfg(not(feature = "test"))]
@@ -42,7 +49,7 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
         static mut _ebss: u32;
 
         static _stdata: u32;
-        static _etdata: u32;
+        static _tdata_size: u32;
 
         static mut _sheap: u32;
         static mut _eheap: u32;
@@ -63,10 +70,8 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
         asm!("mv {0}, tp", out(reg) tp);
 
         let dst = tp as *mut u32;
-        dst.copy_from_nonoverlapping(
-            &_stdata,
-            ((&_etdata) as *const u32).offset_from(&_stdata) as usize,
-        );
+        dst.copy_from_nonoverlapping(&_stdata, (&_tdata_size) as *const u32 as usize);
+        HART_ID = hartid;
     }
 
     // Disable interrupt in `ksync`.
@@ -75,7 +80,7 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
     // Init default kernel trap handler.
     unsafe { crate::trap::init() };
 
-    if is_bsp(hartid) {
+    if is_bsp() {
         // Init logger.
         unsafe { klog::init_logger(log::Level::Debug) };
 
@@ -83,12 +88,7 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
         unsafe { kalloc::init(&mut _sheap, &mut _eheap) };
     }
 
-    unsafe {
-        static mut A: usize = 12345;
-
-        assert_eq!(A, 12345);
-    }
-    crate::main(hartid, payload)
+    crate::main(payload)
 }
 
 #[cfg(not(feature = "test"))]
@@ -150,7 +150,7 @@ unsafe extern "C" fn _start() -> ! {
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
     use sbi_rt::{Shutdown, SystemFailure};
-    log::error!("kernel {info}");
+    log::error!("#{} kernel {info}", hart_id());
     sbi_rt::system_reset(Shutdown, SystemFailure);
     loop {
         unsafe { core::arch::asm!("wfi") }

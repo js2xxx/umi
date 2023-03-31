@@ -12,3 +12,12 @@ rustflags = [
   "-Clink-arg=--pack-dyn-relocs=relr",
   "-Ztls-model=local-exec",
 ]
+
+[profile.dev]
+incremental = true
+lto = 'thin'
+opt-level = 1
+
+[profile.release]
+lto = 'fat'
+opt-level = 3

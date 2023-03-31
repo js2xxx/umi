@@ -16,22 +16,16 @@ extern crate klog;
 extern crate alloc;
 
 use alloc::boxed::Box;
-use core::{hint, sync::atomic::AtomicBool};
+use core::hint;
 
 use arsc_rs::Arsc;
 use art::Executor;
 use sbi_rt::{NoReason, Shutdown};
 
-#[thread_local]
-static mut X: i32 = 123;
+fn main(payload: usize) -> ! {
+    run_art(payload);
 
-fn main(hartid: usize, payload: usize) -> ! {
-    unsafe { assert_eq!(X, 123) };
-
-    println!("Hello world from #{hartid}!");
-    run_art(hartid, payload);
-
-    if rxx::is_bsp(hartid) {
+    if rxx::is_bsp() {
         sbi_rt::system_reset(Shutdown, NoReason);
     }
     loop {
@@ -39,11 +33,9 @@ fn main(hartid: usize, payload: usize) -> ! {
     }
 }
 
-fn run_art(hartid: usize, payload: usize) {
-    static NEXT: AtomicBool = AtomicBool::new(true);
-
+fn run_art(payload: usize) {
     type Payload = *mut Box<dyn FnOnce() + Send>;
-    if hartid == rxx::bsp_id() {
+    if rxx::is_bsp() {
         log::debug!("Starting ART");
         let mut runners = Executor::start(config::MAX_HARTS, init);
         let me = runners.next().unwrap();
@@ -55,21 +47,15 @@ fn run_art(hartid: usize, payload: usize) {
 
             let payload: Payload = Box::into_raw(Box::new(Box::new(runner)));
 
-            NEXT.store(false, core::sync::atomic::Ordering::SeqCst);
             let ret = sbi_rt::hart_start(id, config::KERNEL_START_PHYS, payload as usize);
 
             if let Some(err) = ret.err() {
                 log::error!("failed to start hart {id} due to error {err:?}");
-            } else {
-                while !NEXT.load(core::sync::atomic::Ordering::SeqCst) {
-                    hint::spin_loop()
-                }
             }
         }
         me();
     } else {
-        log::debug!("Running ART from #{hartid}");
-        NEXT.store(true, core::sync::atomic::Ordering::SeqCst);
+        log::debug!("Running ART from #{}", rxx::hart_id());
 
         let runner = payload as Payload;
         // SAFETY: The payload must come from the BSP.
@@ -77,11 +63,11 @@ fn run_art(hartid: usize, payload: usize) {
     }
 }
 
-async fn init(_: Arsc<Executor>) {
+async fn init(executor: Arsc<Executor>) {
     println!("Hello from executor");
     let i = ktime::Instant::now();
     while i.elapsed().as_secs() < 1 {
-        core::hint::spin_loop();
+        hint::spin_loop()
     }
-    sbi_rt::system_reset(Shutdown, NoReason);
+    executor.shutdown()
 }
