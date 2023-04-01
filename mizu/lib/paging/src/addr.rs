@@ -172,3 +172,11 @@ impl<T: ?Sized> const From<NonNull<T>> for LAddr {
         LAddr(ptr.as_ptr().cast())
     }
 }
+
+impl Add<usize> for LAddr {
+    type Output = Self;
+
+    fn add(self, rhs: usize) -> Self::Output {
+        LAddr::from(self.val() + rhs)
+    }
+}
