@@ -2,6 +2,8 @@
 ///
 /// This PAddr and Entry should be fixed after kernel laddr layout,
 /// such as guard pages, is clear.
+extern crate alloc;
+use alloc::collections::BTreeSet;
 use core::{
     fmt,
     ops::{Deref, DerefMut},
@@ -99,7 +101,7 @@ impl const Default for AttrBuilder {
 }
 
 /// pgtbl entries: 44 bit PPN | 12 bit offset
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Ord, Eq, PartialEq, PartialOrd)]
 pub struct Entry(usize);
 const_assert!(core::mem::size_of::<Entry>() == 1 << ENTRY_SIZE_SHIFT);
 
@@ -264,18 +266,23 @@ impl Table {
         Table([Default::default(); NR_ENTRIES])
     }
 
-    pub fn la2pte(&mut self, la: LAddr) -> Result<&mut Entry, Error> {
+    pub fn la2pte(&mut self, la: LAddr) -> (Result<&mut Entry, Error>, BTreeSet<(Entry, Level)>) {
+        let mut touch_mark: BTreeSet<(Entry, Level)> = BTreeSet::new();
         let mut pte: &mut Entry;
         let mut t: &mut Table = self;
         for l in (0..2u8).rev() {
             let level = Level::new(l);
             pte = &mut t[level.addr_idx(la.val(), false)];
+            touch_mark.insert((*pte, level));
             t = match pte.table_mut(level) {
-                None => return Err(Error::EntryExistent(false)),
+                None => return (Err(Error::EntryExistent(false)), touch_mark),
                 Some(tb) => tb,
             };
         }
-        return Ok(&mut t[Level::pt().addr_idx(la.val(), false)]);
+        (
+            Ok(&mut t[Level::pt().addr_idx(la.val(), false)]),
+            touch_mark,
+        )
     }
 
     pub fn la2pte_alloc(
@@ -312,7 +319,7 @@ impl Table {
         if la.val() >= BLANK_BEGIN && la.val() <= BLANK_END {
             return Err(Error::PermissionDenied);
         }
-        let pte: Entry = match self.la2pte(la) {
+        let pte: Entry = match self.la2pte(la).0 {
             Ok(et) => *et,
             Err(e) => return Err(e),
         };
@@ -336,7 +343,7 @@ impl Table {
                 phys: (None),
             });
         }
-        let pte = match self.la2pte(la) {
+        let pte = match self.la2pte(la).0 {
             Err(e) => return Err(e),
             Ok(et) => et,
         };
@@ -378,6 +385,10 @@ impl Table {
         for _i in 0..npages {
             pte = match self.la2pte_alloc(latmp, alloc_func) {
                 Ok(e) => e,
+                Err(Error::OutOfMemory) => {
+                    // ignore the last one, which may be 2kB at most.
+                    return self.user_unmap(la, _i - 1, alloc_func, true);
+                }
                 Err(e) => return Err(e),
             };
             let (pa, attr) = pte.get(Level::pt());
@@ -404,8 +415,8 @@ impl Table {
         &mut self,
         la: LAddr,
         npages: usize,
+        alloc_func: &impl PageAlloc,
         need_free: bool,
-        free: impl Fn(&mut PAddr) -> bool,
     ) -> Result<Entry, Error> {
         if la.in_page_offset() != 0 {
             return Err(Error::AddrMisaligned {
@@ -416,25 +427,39 @@ impl Table {
         }
         let mut latmp = la;
         let mut pte = &mut Entry(0);
+        let mut entry_set: BTreeSet<(Entry, Level)> = BTreeSet::new();
         for _i in 0..npages {
-            pte = match self.la2pte(latmp) {
-                Ok(e) => e,
+            let (res, mut bs) = self.la2pte(latmp);
+            match res {
+                Ok(et) => pte = et,
                 Err(e) => return Err(e),
             };
-            let (mut paddr, attr) = pte.get(Level::pt());
+            entry_set.append(&mut bs);
+            let (_pa, attr) = pte.get(Level::pt());
             if attr.contains(Attr::VALID) {
                 if attr.has_table() {
                     return Err(Error::PermissionDenied);
                 } else {
                     pte.reset();
-                    if need_free && !free(&mut paddr) {
-                        return Err(Error::OutOfMemory);
+                    if need_free {
+                        todo!()
+                        // TODO: A Delloc func for unmapped paddr s
                     }
                 }
             } else {
                 return Err(Error::PermissionDenied);
             }
             latmp = latmp + PAGE_SIZE;
+        }
+        // check unused table
+        for i in entry_set {
+            let mut et = i.0;
+            let l = i.1;
+            et.destroy_table(
+                l,
+                |table: &mut Table| table.0.iter().all(|&e| !e.get(l).1.contains(Attr::VALID)),
+                alloc_func,
+            )
         }
         Ok(*pte)
     }
