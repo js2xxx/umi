@@ -9,5 +9,7 @@ version = "0.1.0"
 co-trap = {path = "../co-trap"}
 # External crates
 ahash = {version = "0", default-features = false}
+enum-primitive-derive = "0"
 futures-util = {version = "0", default-features = false, features = ["alloc"]}
 hashbrown = {version = "0", default-features = false, features = ["inline-more"]}
+num-traits = {version = "0", default-features = false}
