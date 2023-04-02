@@ -4,7 +4,8 @@
 
 extern crate alloc;
 
+mod error;
 mod handler;
 mod raw_reg;
 
-pub use self::{handler::*, raw_reg::*};
+pub use self::{error::*, handler::*, raw_reg::*};

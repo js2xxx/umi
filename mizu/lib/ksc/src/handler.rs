@@ -13,12 +13,14 @@ use hashbrown::HashMap;
 
 use crate::RawReg;
 
+pub type Boxed<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
+
 pub trait Handler: 'static {
     fn handle(&self, tf: &mut TrapFrame);
 }
 
 pub trait AsyncHandler: 'static {
-    fn handle<'a>(&self, tf: &'a mut TrapFrame) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
+    fn handle<'a>(&self, tf: &'a mut TrapFrame) -> Boxed<'a>;
 }
 
 pub trait IntoHandler<Param> {
@@ -74,7 +76,7 @@ macro_rules! impl_fn {
             R::Output: RawReg,
             Z: Fn($($arg),*) -> R + 'static,
         {
-            fn handle<'a>(&self, tf: &'a mut TrapFrame) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+            fn handle<'a>(&self, tf: &'a mut TrapFrame) -> Boxed<'a> {
                 $(
                     #[allow(non_snake_case)]
                     let $arg = tf.syscall_arg::<${index()}>();
@@ -159,7 +161,7 @@ impl AsyncHandlers {
 }
 
 #[must_use = "futures do nothing unless polled"]
-pub struct Handle<'a>(Option<Pin<Box<dyn Future<Output = ()> + Send + 'a>>>);
+pub struct Handle<'a>(Option<Boxed<'a>>);
 
 impl Unpin for Handle<'_> {}
 
