@@ -1,6 +1,6 @@
 #[cfg(not(feature = "test"))]
 use core::arch::asm;
-use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
+use core::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 
 use rv39_paging::{table_1g, AddrExt, Attr, Entry, Level, PAddr, Table, ID_OFFSET};
 use static_assertions::const_assert_eq;

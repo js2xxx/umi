@@ -387,7 +387,7 @@ impl Table {
                 Ok(e) => e,
                 Err(Error::OutOfMemory) => {
                     // ignore the last one, which may be 2kB at most.
-                    return self.user_unmap(la, _i - 1, alloc_func, true);
+                    return self.user_unmap(la, _i - 1, alloc_func);
                 }
                 Err(e) => return Err(e),
             };
