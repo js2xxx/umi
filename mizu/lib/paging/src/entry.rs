@@ -416,7 +416,6 @@ impl Table {
         la: LAddr,
         npages: usize,
         alloc_func: &impl PageAlloc,
-        need_free: bool,
     ) -> Result<Entry, Error> {
         if la.in_page_offset() != 0 {
             return Err(Error::AddrMisaligned {
@@ -441,10 +440,6 @@ impl Table {
                     return Err(Error::PermissionDenied);
                 } else {
                     pte.reset();
-                    if need_free {
-                        todo!()
-                        // TODO: A Delloc func for unmapped paddr s
-                    }
                 }
             } else {
                 return Err(Error::PermissionDenied);
