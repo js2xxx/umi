@@ -144,14 +144,18 @@ where
     }
 }
 
-pub trait IntoHandler<'a, S, O, Marker> {
-    type Handler: Handler<'a, State = S, Output = O>;
+pub trait IntoHandler<Marker> {
+    type Handler: for<'any> Handler<'any, State = Self::State<'any>, Output = Self::Output<'any>>;
+    type State<'a>;
+    type Output<'a>;
 
     fn handler(self) -> Self::Handler;
 }
 
-impl<'a, S, O, H: Handler<'a, State = S, Output = O>> IntoHandler<'a, S, O, ()> for H {
+impl<H: for<'any> Handler<'any>> IntoHandler<()> for H {
     type Handler = H;
+    type State<'a> = <H as Handler<'a>>::State;
+    type Output<'a> = <H as Handler<'a>>::Output;
 
     fn handler(self) -> Self::Handler {
         self
@@ -159,11 +163,13 @@ impl<'a, S, O, H: Handler<'a, State = S, Output = O>> IntoHandler<'a, S, O, ()> 
 }
 
 pub enum AsFunc {}
-impl<'a, F, Marker> IntoHandler<'a, F::State, F::Output, (AsFunc, Marker)> for F
+impl<F, Marker> IntoHandler<(AsFunc, Marker)> for F
 where
-    F: HandlerFunc<'a, Marker>,
+    F: for<'any> HandlerFunc<'any, Marker>,
 {
     type Handler = FunctionHandler<F, Marker>;
+    type State<'a> = <F as HandlerFunc<'a, Marker>>::State;
+    type Output<'a> = <F as HandlerFunc<'a, Marker>>::Output;
 
     fn handler(self) -> Self::Handler {
         FunctionHandler {
@@ -174,11 +180,13 @@ where
 }
 
 pub enum AsFut {}
-impl<'a, Z, Marker> IntoHandler<'a, Z::State, Boxed<'a, Z::Output>, (AsFut, Marker)> for Async<Z>
+impl<Z, Marker> IntoHandler<(AsFut, Marker)> for Async<Z>
 where
-    Z: HandlerFut<'a, Marker>,
+    Z: for<'any> HandlerFut<'any, Marker>,
 {
     type Handler = FutureHandler<Z, Marker>;
+    type State<'a> = <Z as HandlerFut<'a, Marker>>::State;
+    type Output<'a> = Boxed<'a, <Z as HandlerFut<'a, Marker>>::Output>;
 
     fn handler(self) -> Self::Handler {
         FutureHandler {
@@ -204,17 +212,9 @@ impl<S, O: Send> Handlers<S, O> {
 
     pub fn map<H, Marker: 'static>(mut self, scn: u8, handler: H) -> Self
     where
-        H: for<'any> HandlerFunc<'any, Marker, State = S, Output = O> + 'static,
+        H: for<'any> IntoHandler<Marker, State<'any> = S, Output<'any> = O> + 'static,
     {
         self.map.insert(scn, Box::new(handler.handler()));
-        self
-    }
-
-    pub fn map_handler<H>(mut self, scn: u8, handler: H) -> Self
-    where
-        H: for<'any> Handler<'any, State = S, Output = O> + 'static,
-    {
-        self.map.insert(scn, Box::new(handler));
         self
     }
 
@@ -239,17 +239,10 @@ impl<S, O> AHandlers<S, O> {
 
     pub fn map<H, Marker: 'static>(mut self, scn: u8, handler: H) -> Self
     where
-        H: for<'any> HandlerFut<'any, Marker, State = S, Output = O> + 'static,
+        Async<H>:
+            for<'any> IntoHandler<Marker, State<'any> = S, Output<'any> = Boxed<'any, O>> + 'static,
     {
         self.map.insert(scn, Box::new(Async(handler).handler()));
-        self
-    }
-
-    pub fn map_handler<H>(mut self, scn: u8, handler: H) -> Self
-    where
-        H: for<'any> Handler<'any, State = S, Output = Boxed<'any, O>> + 'static,
-    {
-        self.map.insert(scn, Box::new(handler));
         self
     }
 
