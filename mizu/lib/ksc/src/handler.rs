@@ -93,21 +93,21 @@ all_tuples!(impl_arg, 0, 7, P);
 
 pub trait Handler<'a>: Send + Sync {
     type State;
-    type Output: Send + 'a;
+    type Output: 'a;
 
     fn handle(&self, state: &'a mut Self::State, tf: &'a mut TrapFrame) -> Self::Output;
 }
 
 pub trait HandlerFunc<'a, Marker>: Send + Sync {
     type State;
-    type Output: Send + 'a;
+    type Output: 'a;
 
     fn handle(&self, state: &'a mut Self::State, tf: &'a mut TrapFrame) -> Self::Output;
 }
 
 pub trait HandlerFut<'a, Marker>: Send + Sync {
     type State;
-    type Output: Send + 'a;
+    type Output: 'a;
 
     fn handle(&self, state: &'a mut Self::State, tf: &'a mut TrapFrame) -> Boxed<'a, Self::Output>;
 }
@@ -116,7 +116,7 @@ impl<'a, F, S, O, A> HandlerFunc<'a, for<'any> fn(&'any mut S, UserCx<'any, A>)>
 where
     F: Fn(&'a mut S, UserCx<'a, A>) -> O + Send + Sync,
     S: 'a,
-    O: Send + 'a,
+    O: 'a,
 {
     type State = S;
     type Output = O;
@@ -131,7 +131,7 @@ where
     F: Fn(&'a mut S, UserCx<'a, A>) -> O + Send + Sync,
     S: 'a,
     O: Future + Send + 'a,
-    O::Output: Send + 'a,
+    O::Output: 'a,
 {
     type State = S;
     type Output = O::Output;
@@ -241,7 +241,7 @@ pub struct Handlers<S, O> {
     map: HashMap<u8, AnyHandler<S, O>, RandomState>,
 }
 
-impl<S, O: Send> Handlers<S, O> {
+impl<S, O> Handlers<S, O> {
     pub fn new(seed: usize) -> Self {
         Handlers {
             map: HashMap::with_hasher(RandomState::with_seed(seed)),
