@@ -1,5 +1,9 @@
 use alloc::boxed::Box;
-use core::{marker::PhantomData, pin::Pin};
+use core::{
+    marker::PhantomData,
+    ops::{Deref, DerefMut},
+    pin::Pin,
+};
 
 use ahash::RandomState;
 use co_trap::TrapFrame;
@@ -16,10 +20,15 @@ pub type Boxed<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 /// Pass a function prototype to the generic parameter to utilize its max
 /// functionality:
 ///
-/// ```ignore
-/// let user: UserCx<'_, fn(u32, *const u8) -> usize> = /* ... */;
+/// ```
+/// use ksc::UserCx;
 ///
-/// let (a, b): (u32, *const u8) = user.arg();
+/// let mut tf = Default::default();
+///
+/// let user: UserCx<'_, fn(u32, *const u8) -> usize> =
+///     UserCx::from(&mut tf);
+///
+/// let (a, b): (u32, *const u8) = user.args();
 /// user.ret(a as usize + b as usize);
 /// ```
 pub struct UserCx<'a, A> {
@@ -27,9 +36,32 @@ pub struct UserCx<'a, A> {
     _marker: PhantomData<A>,
 }
 
+impl<'a, A> From<&'a mut TrapFrame> for UserCx<'a, A> {
+    fn from(tf: &'a mut TrapFrame) -> Self {
+        UserCx {
+            tf,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<'a, A> Deref for UserCx<'a, A> {
+    type Target = TrapFrame;
+
+    fn deref(&self) -> &Self::Target {
+        self.tf
+    }
+}
+
+impl<'a, A> DerefMut for UserCx<'a, A> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.tf
+    }
+}
+
 impl<'a, A> UserCx<'a, A> {
-    /// Get the underlying `TrapFrame`.
-    pub fn trap_frame(&mut self) -> &mut TrapFrame {
+    /// Get the underlying `TrapFrame`, consuming `self`.
+    pub fn into_inner(self) -> &'a mut TrapFrame {
         self.tf
     }
 }
@@ -48,7 +80,7 @@ macro_rules! impl_arg {
                 ($(RawReg::from_raw($arg)),*)
             }
 
-            /// Gives the return value to the user context, consuming the struct.
+            /// Gives the return value to the user context, consuming `self`.
             pub fn ret(self, value: T) {
                 self.tf.set_syscall_ret(RawReg::into_raw(value))
             }
@@ -96,11 +128,7 @@ where
     type Output = O;
 
     fn handle(&self, state: &'a mut Self::State, tf: &'a mut TrapFrame) -> Self::Output {
-        let arg = UserCx {
-            tf,
-            _marker: PhantomData,
-        };
-        (self)(state, arg)
+        (self)(state, UserCx::from(tf))
     }
 }
 
