@@ -166,7 +166,8 @@ impl<S, O> Handlers<S, O> {
     ///
     /// # Example
     /// ```
-    /// use ksc::{Handlers, UserCx};
+    /// use ksc::Handlers;
+    /// use co_trap::UserCx;
     ///
     /// fn h0(_: &mut (), _: UserCx<fn()>) {}
     /// fn h1(_: &mut (), _: UserCx<fn(usize) -> usize>) {}
@@ -188,7 +189,8 @@ impl<S, O> Handlers<S, O> {
     ///
     /// # Example
     /// ```
-    /// use ksc::{Handlers, UserCx};
+    /// use ksc::Handlers;
+    /// use co_trap::UserCx;
     ///
     /// fn h0(_: &mut (), _: UserCx<fn()>) {}
     /// fn h1(_: &mut (), _: UserCx<fn(usize) -> usize>) {}
@@ -234,7 +236,8 @@ impl<S, O> AHandlers<S, O> {
     ///
     /// # Example
     /// ```
-    /// use ksc::{AHandlers, UserCx};
+    /// use ksc::AHandlers;
+    /// use co_trap::UserCx;
     ///
     /// async fn h0(_: &mut (), _: UserCx<'_, fn()>) {}
     /// async fn h1(_: &mut (), _: UserCx<'_, fn(usize) -> usize>) {}
@@ -257,7 +260,8 @@ impl<S, O> AHandlers<S, O> {
     ///
     /// # Example
     /// ```
-    /// use ksc::{AHandlers, UserCx};
+    /// use ksc::AHandlers;
+    /// use co_trap::UserCx;
     ///
     /// async fn h0(_: &mut (), _: UserCx<'_, fn()>) {}
     /// async fn h1(_: &mut (), _: UserCx<'_, fn(usize) -> usize>) {}
@@ -291,6 +295,8 @@ impl<S, O> AHandlers<S, O> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::LazyLock;
+
     use super::*;
 
     #[test]
@@ -302,20 +308,20 @@ mod tests {
             *s as usize
         }
 
-        let h = Handlers::new(0).map(0, handler0);
+        static H: LazyLock<Handlers<u8, usize>> = LazyLock::new(|| Handlers::new(0).map(0, handler0));
 
         {
             let mut state = 234;
-            let ret = h.handle(&mut state, &mut TrapFrame::default());
+            let ret = H.handle(&mut state, &mut TrapFrame::default());
             assert_eq!(ret, Some(233));
 
-            let ret = h.handle(&mut state, &mut TrapFrame::default());
+            let ret = H.handle(&mut state, &mut TrapFrame::default());
             assert_eq!(ret, Some(232));
         }
 
         {
             let mut state = 1;
-            let ret = h.handle(&mut state, &mut TrapFrame::default());
+            let ret = H.handle(&mut state, &mut TrapFrame::default());
             assert_eq!(ret, Some(0));
         }
     }
@@ -335,23 +341,23 @@ mod tests {
         };
         Handler::handle(&h, &mut 234, &mut TrapFrame::default());
 
-        let a = async move {
-            let h = AHandlers::new(0).map(0, handler0);
+        static H: LazyLock<AHandlers<u8, usize>> = LazyLock::new(|| AHandlers::new(0).map(0, handler0));
+
+        smol::block_on(async move {
             {
                 let mut state = 234;
-                let ret = h.handle(&mut state, &mut TrapFrame::default()).await;
+                let ret = H.handle(&mut state, &mut TrapFrame::default()).await;
                 assert_eq!(ret, Some(233));
 
-                let ret = h.handle(&mut state, &mut TrapFrame::default()).await;
+                let ret = H.handle(&mut state, &mut TrapFrame::default()).await;
                 assert_eq!(ret, Some(232));
             }
 
             {
                 let mut state = 1;
-                let ret = h.handle(&mut state, &mut TrapFrame::default()).await;
+                let ret = H.handle(&mut state, &mut TrapFrame::default()).await;
                 assert_eq!(ret, Some(0));
             }
-        };
-        smol::block_on(a);
+        });
     }
 }
