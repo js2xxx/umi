@@ -1,5 +1,6 @@
 #![cfg_attr(target_arch = "riscv64", no_std)]
 #![feature(const_trait_impl)]
+#![feature(macro_metavar_expr)]
 
 mod tf;
 
