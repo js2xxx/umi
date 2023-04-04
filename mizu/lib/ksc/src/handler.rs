@@ -1,95 +1,12 @@
 use alloc::boxed::Box;
-use core::{
-    marker::PhantomData,
-    ops::{Deref, DerefMut},
-    pin::Pin,
-};
+use core::{marker::PhantomData, pin::Pin};
 
 use ahash::RandomState;
-use bevy_utils_proc_macros::all_tuples;
-use co_trap::TrapFrame;
+use co_trap::{TrapFrame, UserCx};
 use futures_util::Future;
 use hashbrown::HashMap;
 
-use crate::RawReg;
-
 pub type Boxed<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
-
-/// A wrapper around `TrapFrame` to make it easier to access the arguments and
-/// return values from user's syscalls.
-///
-/// Pass a function prototype to the generic parameter to utilize its max
-/// functionality:
-///
-/// ```
-/// use ksc::UserCx;
-///
-/// let mut tf = Default::default();
-///
-/// let user: UserCx<'_, fn(u32, *const u8) -> usize> =
-///     UserCx::from(&mut tf);
-///
-/// let (a, b): (u32, *const u8) = user.args();
-/// user.ret(a as usize + b as usize);
-/// ```
-pub struct UserCx<'a, A> {
-    tf: &'a mut TrapFrame,
-    _marker: PhantomData<A>,
-}
-
-impl<'a, A> From<&'a mut TrapFrame> for UserCx<'a, A> {
-    fn from(tf: &'a mut TrapFrame) -> Self {
-        UserCx {
-            tf,
-            _marker: PhantomData,
-        }
-    }
-}
-
-impl<'a, A> Deref for UserCx<'a, A> {
-    type Target = TrapFrame;
-
-    fn deref(&self) -> &Self::Target {
-        self.tf
-    }
-}
-
-impl<'a, A> DerefMut for UserCx<'a, A> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.tf
-    }
-}
-
-impl<'a, A> UserCx<'a, A> {
-    /// Get the underlying `TrapFrame`, consuming `self`.
-    pub fn into_inner(self) -> &'a mut TrapFrame {
-        self.tf
-    }
-}
-
-macro_rules! impl_arg {
-    ($($arg:ident),*) => {
-        impl<'a, $($arg: RawReg,)* T: RawReg> UserCx<'a, fn($($arg),*) -> T> {
-            #[allow(clippy::unused_unit)]
-            #[allow(non_snake_case)]
-            #[allow(unused_parens)]
-            /// Get the arguments with the same prototype as the parameters in the function prototype.
-            pub fn args(&self) -> ($($arg),*) {
-                $(
-                    let $arg = self.tf.syscall_arg::<${index()}>();
-                )*
-                ($(RawReg::from_raw($arg)),*)
-            }
-
-            /// Gives the return value to the user context, consuming `self`.
-            pub fn ret(self, value: T) {
-                self.tf.set_syscall_ret(RawReg::into_raw(value))
-            }
-        }
-    };
-}
-
-all_tuples!(impl_arg, 0, 7, P);
 
 pub trait Handler<'a>: Send + Sync {
     type State;
@@ -137,11 +54,7 @@ where
     type Output = O::Output;
 
     fn handle(&self, state: &'a mut Self::State, tf: &'a mut TrapFrame) -> Boxed<'a, Self::Output> {
-        let arg = UserCx {
-            tf,
-            _marker: PhantomData,
-        };
-        Box::pin((self)(state, arg))
+        Box::pin((self)(state, UserCx::from(tf)))
     }
 }
 

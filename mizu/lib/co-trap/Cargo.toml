@@ -9,7 +9,9 @@ test = []
 
 [dependencies]
 # Local crates
+ksc-core = {path = "../ksc-core"}
 ksync-core = {path = "../ksync-core"}
 # External crates
 riscv = "0"
 static_assertions = "1"
+bevy_utils_proc_macros = "0"
