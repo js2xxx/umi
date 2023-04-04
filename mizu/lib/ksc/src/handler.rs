@@ -6,6 +6,7 @@ use core::{
 };
 
 use ahash::RandomState;
+use bevy_utils_proc_macros::all_tuples;
 use co_trap::TrapFrame;
 use futures_util::Future;
 use hashbrown::HashMap;
@@ -68,7 +69,7 @@ impl<'a, A> UserCx<'a, A> {
 
 macro_rules! impl_arg {
     ($($arg:ident),*) => {
-        impl<'a, $($arg: RawReg,)* T: RawReg> UserCx<'a, fn($($arg,)*) -> T> {
+        impl<'a, $($arg: RawReg,)* T: RawReg> UserCx<'a, fn($($arg),*) -> T> {
             #[allow(clippy::unused_unit)]
             #[allow(non_snake_case)]
             #[allow(unused_parens)]
@@ -88,14 +89,7 @@ macro_rules! impl_arg {
     };
 }
 
-impl_arg!();
-impl_arg!(A);
-impl_arg!(A, B);
-impl_arg!(A, B, C);
-impl_arg!(A, B, C, D);
-impl_arg!(A, B, C, D, E);
-impl_arg!(A, B, C, D, E, F);
-impl_arg!(A, B, C, D, E, F, G);
+all_tuples!(impl_arg, 0, 7, P);
 
 pub trait Handler<'a>: Send + Sync {
     type State;

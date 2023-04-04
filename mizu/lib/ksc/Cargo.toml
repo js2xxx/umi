@@ -12,6 +12,7 @@ test = ["dep:smol"]
 co-trap = {path = "../co-trap"}
 # External crates
 ahash = {version = "0", default-features = false}
+bevy_utils_proc_macros = "0"
 enum-primitive-derive = "0"
 futures-util = {version = "0", default-features = false, features = ["alloc"]}
 hashbrown = {version = "0", default-features = false, features = ["inline-more"]}
