@@ -1,6 +1,6 @@
 #[cfg(not(feature = "test"))]
 use core::arch::asm;
-use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
+use core::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 
 use rv39_paging::{table_1g, AddrExt, Attr, Entry, Level, PAddr, Table, ID_OFFSET};
 use static_assertions::const_assert_eq;
@@ -40,7 +40,7 @@ pub fn is_bsp() -> bool {
 #[cfg(not(feature = "test"))]
 #[no_mangle]
 unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
-    use core::sync::atomic::Ordering::Release;
+    use core::sync::atomic::{AtomicBool, Ordering::Release};
 
     static GLOBAL_INIT: AtomicBool = AtomicBool::new(false);
 

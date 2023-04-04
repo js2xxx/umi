@@ -1,6 +1,5 @@
-#![no_std]
+#![cfg_attr(not(test), no_std)]
 #![feature(macro_metavar_expr)]
-#![feature(type_alias_impl_trait)]
 
 extern crate alloc;
 
