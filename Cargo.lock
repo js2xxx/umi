@@ -234,8 +234,10 @@ name = "co-trap"
 version = "0.1.0"
 dependencies = [
  "bevy_utils_proc_macros",
+ "enum-primitive-derive",
  "ksc-core",
  "ksync-core",
+ "num-traits",
  "riscv",
  "static_assertions",
 ]
