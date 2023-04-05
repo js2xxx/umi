@@ -124,22 +124,20 @@ impl Entry {
         *self = Entry(0);
     }
 
-    pub fn table(&self, level: Level) -> Option<&Table> {
+    pub fn table(&self, level: Level, magic_num: usize) -> Option<&Table> {
         let (addr, attr) = self.get(Level::pt());
         if attr.contains(Attr::VALID) && attr.has_table() && level != Level::pt() {
-            let ptr = addr.to_laddr(ID_OFFSET);
-            // TEST: let ptr = addr.to_laddr(0);
+            let ptr = addr.to_laddr(magic_num);
             Some(unsafe { &*ptr.cast() })
         } else {
             None
         }
     }
 
-    pub fn table_mut(&mut self, level: Level) -> Option<&mut Table> {
+    pub fn table_mut(&mut self, level: Level, magic_num: usize) -> Option<&mut Table> {
         let (addr, attr) = self.get(Level::pt());
         if attr.contains(Attr::VALID) && attr.has_table() && level != Level::pt() {
-            let ptr = addr.to_laddr(ID_OFFSET);
-            // TEST: let ptr = addr.to_laddr(0);
+            let ptr = addr.to_laddr(magic_num);
             Some(unsafe { &mut *ptr.cast() })
         } else {
             None
@@ -159,19 +157,18 @@ impl Entry {
         &mut self,
         level: Level,
         alloc: &impl PageAlloc,
+        magic_num: usize,
     ) -> Result<&mut Table, Error> {
         let (addr, attr) = self.get(Level::pt());
         if !attr.has_table() || level == Level::pt() {
             return Err(Error::EntryExistent(true));
         }
         Ok(if attr.contains(Attr::VALID) {
-            let ptr = addr.to_laddr(ID_OFFSET);
-            // TEST: let ptr = addr.to_laddr(0);
+            let ptr = addr.to_laddr(magic_num);
             unsafe { &mut *ptr.cast() }
         } else {
             let mut ptr = alloc.alloc().ok_or(Error::OutOfMemory)?;
-            let addr = LAddr::from(ptr).to_paddr(ID_OFFSET);
-            // TEST: let addr = LAddr::from(ptr).to_paddr(0);
+            let addr = LAddr::from(ptr).to_paddr(magic_num);
             *self = Self::new(addr, Attr::VALID, Level::pt());
             unsafe { ptr.as_mut() }
         })
@@ -228,11 +225,11 @@ impl Entry {
         level: Level,
         drop: impl FnOnce(&mut Table) -> bool,
         alloc: &impl PageAlloc,
+        magic_num: usize,
     ) {
         let (addr, attr) = self.get(Level::pt());
         if attr.contains(Attr::VALID) && attr.has_table() && level != Level::pt() {
-            let ptr = addr.to_laddr(ID_OFFSET);
-            // TEST: let ptr = addr.to_laddr(0);
+            let ptr = addr.to_laddr(magic_num);
             let table = unsafe { &mut *ptr.cast::<Table>() };
             if drop(table) {
                 self.reset();
@@ -267,7 +264,11 @@ impl Table {
         Table([Default::default(); NR_ENTRIES])
     }
 
-    pub fn la2pte(&mut self, la: LAddr) -> (Result<&mut Entry, Error>, BTreeSet<(Entry, Level)>) {
+    pub fn la2pte(
+        &mut self,
+        la: LAddr,
+        magic_num: usize,
+    ) -> (Result<&mut Entry, Error>, BTreeSet<(Entry, Level)>) {
         let mut touch_mark: BTreeSet<(Entry, Level)> = BTreeSet::new();
         let mut pte: &mut Entry;
         let mut t: &mut Table = self;
@@ -275,7 +276,7 @@ impl Table {
             let level = Level::new(l);
             pte = &mut t[level.addr_idx(la.val(), false)];
             touch_mark.insert((*pte, level));
-            t = match pte.table_mut(level) {
+            t = match pte.table_mut(level, magic_num) {
                 None => return (Err(Error::EntryExistent(false)), touch_mark),
                 Some(tb) => tb,
             };
@@ -290,13 +291,14 @@ impl Table {
         &mut self,
         la: LAddr,
         alloc_func: &impl PageAlloc,
+        magic_num: usize,
     ) -> Result<&mut Entry, Error> {
         let mut pte: &mut Entry;
         let mut t: &mut Table = self;
         for l in (1..=2u8).rev() {
             let level = Level::new(l);
             pte = &mut t[level.addr_idx(la.val(), false)];
-            t = match pte.table_or_create(level, alloc_func) {
+            t = match pte.table_or_create(level, alloc_func, magic_num) {
                 Ok(tb) => tb,
                 Err(e) => return Err(e),
             };
@@ -316,11 +318,11 @@ impl Table {
     /// If not found, `Error::EntryExistent(false)`.
     ///
     /// If `la` is illegal, `Error::PerssionDenied`.
-    pub fn la2pa(&mut self, la: LAddr, is_kernel: bool) -> Result<PAddr, Error> {
+    pub fn la2pa(&mut self, la: LAddr, is_kernel: bool, magic_num: usize) -> Result<PAddr, Error> {
         if la.val() >= BLANK_BEGIN && la.val() <= BLANK_END {
             return Err(Error::PermissionDenied);
         }
-        let pte: Entry = match self.la2pte(la).0 {
+        let pte: Entry = match self.la2pte(la, magic_num).0 {
             Ok(et) => *et,
             Err(e) => return Err(e),
         };
@@ -336,7 +338,13 @@ impl Table {
         }
     }
 
-    pub fn reprotect(&mut self, la: LAddr, npages: usize, flag: Attr) -> Result<Entry, Error> {
+    pub fn reprotect(
+        &mut self,
+        la: LAddr,
+        npages: usize,
+        flag: Attr,
+        magic_num: usize,
+    ) -> Result<Entry, Error> {
         if la.in_page_offset() != 0 {
             return Err(Error::AddrMisaligned {
                 vstart: (Some(la)),
@@ -347,7 +355,7 @@ impl Table {
         let mut latmp = la;
         let mut pte = &mut Entry(0);
         for _ in 0..npages {
-            pte = match self.la2pte(latmp).0 {
+            pte = match self.la2pte(latmp, magic_num).0 {
                 Err(e) => return Err(e),
                 Ok(et) => et,
             };
@@ -374,6 +382,7 @@ impl Table {
         flags: Attr,
         npages: usize,
         alloc_func: &impl PageAlloc,
+        magic_num: usize,
     ) -> Result<Entry, Error> {
         if la.in_page_offset() != 0 || pa.in_page_offset() != 0 {
             return Err(Error::AddrMisaligned {
@@ -389,11 +398,11 @@ impl Table {
         let mut patmp = pa;
         let mut pte = &mut Entry(0);
         for i in 0..npages {
-            pte = match self.la2pte_alloc(latmp, alloc_func) {
+            pte = match self.la2pte_alloc(latmp, alloc_func, magic_num) {
                 Ok(e) => e,
                 Err(Error::OutOfMemory) => {
                     // ignore the last one, which may be 2kB at most.
-                    return self.user_unmap(la, i - 1, alloc_func);
+                    return self.user_unmap(la, i - 1, alloc_func, magic_num);
                 }
                 Err(e) => return Err(e),
             };
@@ -422,6 +431,7 @@ impl Table {
         la: LAddr,
         npages: usize,
         alloc_func: &impl PageAlloc,
+        magic_num: usize,
     ) -> Result<Entry, Error> {
         if la.in_page_offset() != 0 {
             return Err(Error::AddrMisaligned {
@@ -434,7 +444,7 @@ impl Table {
         let mut entry_set: BTreeSet<(Entry, Level)> = BTreeSet::new();
         let mut res_pte = Entry(0);
         for _i in 0..npages {
-            let (res, mut bs) = self.la2pte(latmp);
+            let (res, mut bs) = self.la2pte(latmp, magic_num);
             let pte = match res {
                 Ok(et) => et,
                 Err(e) => return Err(e),
@@ -461,6 +471,7 @@ impl Table {
                 l,
                 |table: &mut Table| table.0.iter().all(|&e| !e.get(l).1.contains(Attr::VALID)),
                 alloc_func,
+                magic_num,
             )
         }
         Ok(res_pte)
@@ -510,76 +521,58 @@ macro_rules! table_1g {
 #[cfg(test)]
 mod tests {
 
-    use crate::{Error, LAddr, Table};
+    extern crate alloc;
+    use alloc::alloc::Global;
+    use core::{
+        alloc::{Allocator, Layout},
+        ptr::NonNull,
+    };
+
+    use crate::{Attr, Entry, Error, LAddr, Level, PAddr, PageAlloc, Table, ID_OFFSET, PAGE_SIZE};
 
     #[test]
     fn test_la2pa() {
         assert_eq!(
             Err(Error::PermissionDenied),
-            Table::new().la2pa(LAddr::from(0xffff_ff00_0000_0000u64), false)
+            Table::new().la2pa(LAddr::from(0xffff_ff00_0000_0000u64), false, ID_OFFSET)
         );
     }
 
-    /// Below are framwork of tests for mapfuncs.
-    ///
-    /// Before try testing, you should check **ALL** comments after "`TEST:`"
-    /// mark and replace nearby similar codes with TEST_code.
+    const PAGE_LAYOUT: Layout = unsafe { Layout::from_size_align_unchecked(PAGE_SIZE, PAGE_SIZE) };
 
-    /// test function:
-    /// ```
-    /// #[test]
-    /// fn test_mapfuncs() {
-    ///
-    ///     let a = Alloc();
-    ///     let mut tb = Table::new();
-    ///     let la_start = LAddr::from(0x0000_0000_9000_0000usize);
-    ///     let pa_start = PAddr::new(0x0000_0001_8000_0000);
-    ///
-    ///     assert_eq!(
-    ///         tb.mappages(la_start, pa_start, Attr::empty(), 2, &a),
-    ///         Result::Ok(Entry::new(pa_start + 0x1000, Attr::VALID, Level::pt()))
-    ///     );
-    ///
-    ///     assert_eq!(
-    ///         tb.reprotect(la_start, 2, Attr::KERNEL_R),
-    ///         Result::Ok(Entry::new(pa_start + 0x1000, Attr::KERNEL_R, Level::pt()))
-    ///     );
-    ///
-    ///     assert_eq!(
-    ///         tb.user_unmap(la_start + 0x1000, 1, &a),
-    ///         Result::Ok(Entry::new(pa_start + 0x1000, Attr::KERNEL_R, Level::pt()))
-    ///     );
-    ///
-    ///     assert_eq!(tb.la2pa(la_start, true), Result::Ok(pa_start))
-    /// }
-    /// ```
-    ///
-    /// **necessary** impl for test_mapfuncs:
-    /// ```
-    /// extern crate alloc;
-    /// use alloc::alloc::Global;
-    /// use core::{
-    ///     alloc::{Layout, Allocator},
-    ///     ptr::NonNull
-    /// };
-    /// use crate::{Attr, Entry, Level, Level, PAddr, PageAlloc, PAGE_SIZE, Table};
-    ///
-    /// const PAGE_LAYOUT: Layout = unsafe {
-    ///     Layout::from_size_align_unchecked(PAGE_SIZE, PAGE_SIZE)
-    /// };
-    ///
-    /// struct Alloc();
-    /// unsafe impl PageAlloc for Alloc {
-    ///     fn alloc(&self) -> Option<NonNull<Table>> {
-    ///         Global.allocate(PAGE_LAYOUT).ok().map(NonNull::cast)
-    ///     }
-    ///
-    ///     unsafe fn dealloc(&self, ptr: NonNull<Table>) {
-    ///         Global.deallocate(ptr.cast(), PAGE_LAYOUT)
-    ///     }   
-    /// }
-    /// ```
+    struct Alloc();
+    unsafe impl PageAlloc for Alloc {
+        fn alloc(&self) -> Option<NonNull<Table>> {
+            Global.allocate(PAGE_LAYOUT).ok().map(NonNull::cast)
+        }
+
+        unsafe fn dealloc(&self, ptr: NonNull<Table>) {
+            Global.deallocate(ptr.cast(), PAGE_LAYOUT)
+        }
+    }
+
+    #[test]
     fn test_mapfuncs() {
-        todo!()
+        let a = Alloc();
+        let mut tb = Table::new();
+        let la_start = LAddr::from(0x0000_0000_9000_0000usize);
+        let pa_start = PAddr::new(0x0000_0001_8000_0000);
+
+        assert_eq!(
+            tb.mappages(la_start, pa_start, Attr::empty(), 2, &a, 0),
+            Result::Ok(Entry::new(pa_start + 0x1000, Attr::VALID, Level::pt()))
+        );
+
+        assert_eq!(
+            tb.reprotect(la_start, 2, Attr::KERNEL_R, 0),
+            Result::Ok(Entry::new(pa_start + 0x1000, Attr::KERNEL_R, Level::pt()))
+        );
+
+        assert_eq!(
+            tb.user_unmap(la_start + 0x1000, 1, &a, 0),
+            Result::Ok(Entry::new(pa_start + 0x1000, Attr::KERNEL_R, Level::pt()))
+        );
+
+        assert_eq!(tb.la2pa(la_start, true, 0), Result::Ok(pa_start))
     }
 }
