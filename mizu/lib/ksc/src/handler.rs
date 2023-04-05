@@ -308,7 +308,8 @@ mod tests {
             *s as usize
         }
 
-        static H: LazyLock<Handlers<u8, usize>> = LazyLock::new(|| Handlers::new(0).map(0, handler0));
+        static H: LazyLock<Handlers<u8, usize>> =
+            LazyLock::new(|| Handlers::new(0).map(0, handler0));
 
         {
             let mut state = 234;
@@ -341,7 +342,8 @@ mod tests {
         };
         Handler::handle(&h, &mut 234, &mut TrapFrame::default());
 
-        static H: LazyLock<AHandlers<u8, usize>> = LazyLock::new(|| AHandlers::new(0).map(0, handler0));
+        static H: LazyLock<AHandlers<u8, usize>> =
+            LazyLock::new(|| AHandlers::new(0).map(0, handler0));
 
         smol::block_on(async move {
             {

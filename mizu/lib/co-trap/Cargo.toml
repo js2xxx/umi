@@ -15,3 +15,5 @@ ksync-core = {path = "../ksync-core"}
 riscv = "0"
 static_assertions = "1"
 bevy_utils_proc_macros = "0"
+enum-primitive-derive = "0"
+num-traits = {version = "0", default-features = false}
