@@ -27,6 +27,11 @@ impl PAddr {
     pub fn in_page_offset(self) -> usize {
         self.0 & crate::PAGE_MASK
     }
+
+    #[inline]
+    pub fn val(self) -> usize {
+        self.0
+    }
 }
 
 impl Add<usize> for PAddr {
