@@ -11,8 +11,8 @@ test = ["dep:smol"]
 # Local crates
 co-trap = {path = "../co-trap"}
 ksc-core = {path = "../ksc-core"}
+rand-riscv = {path = "../rand-riscv"}
 # External crates
-ahash = {version = "0", default-features = false}
 bevy_utils_proc_macros = "0"
 futures-util = {version = "0", default-features = false, features = ["alloc"]}
 hashbrown = {version = "0", default-features = false, features = ["inline-more"]}

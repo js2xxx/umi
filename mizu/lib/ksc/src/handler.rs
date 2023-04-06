@@ -1,10 +1,10 @@
 use alloc::boxed::Box;
 use core::{marker::PhantomData, pin::Pin};
 
-use ahash::RandomState;
 use co_trap::{TrapFrame, UserCx};
 use futures_util::Future;
 use hashbrown::HashMap;
+use rand_riscv::RandomState;
 
 pub type Boxed<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -155,9 +155,9 @@ pub struct Handlers<S, O> {
 }
 
 impl<S, O> Handlers<S, O> {
-    pub fn new(seed: usize) -> Self {
+    pub fn new() -> Self {
         Handlers {
-            map: HashMap::with_hasher(RandomState::with_seed(seed)),
+            map: HashMap::with_hasher(RandomState::new()),
         }
     }
 
@@ -173,7 +173,7 @@ impl<S, O> Handlers<S, O> {
     /// fn h1(_: &mut (), _: UserCx<fn(usize) -> usize>) {}
     /// fn h2(_: &mut (), _: UserCx<fn(i32, *const u8) -> u64>) {}
     ///
-    /// let handlers = Handlers::new(0).map(0, h0).map(1, h1).map(2, h2);
+    /// let handlers = Handlers::new().map(0, h0).map(1, h1).map(2, h2);
     /// handlers.handle(&mut (), &mut Default::default());
     /// ```
     pub fn map<H, Marker: 'static>(mut self, scn: u8, handler: H) -> Self
@@ -196,7 +196,7 @@ impl<S, O> Handlers<S, O> {
     /// fn h1(_: &mut (), _: UserCx<fn(usize) -> usize>) {}
     /// fn h2(_: &mut (), _: UserCx<fn(i32, *const u8) -> u64>) {}
     ///
-    /// let mut handlers = Handlers::new(0);
+    /// let mut handlers = Handlers::new();
     /// handlers.insert(0, h0);
     /// handlers.insert(1, h1);
     /// handlers.insert(2, h2);
@@ -218,6 +218,12 @@ impl<S, O> Handlers<S, O> {
     }
 }
 
+impl<S, O> Default for Handlers<S, O> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 type AnyAsyncHandler<S, O> = Box<dyn for<'a> Handler<'a, State = S, Output = Boxed<'a, O>>>;
 /// A collection of async handlers.
 pub struct AHandlers<S, O> {
@@ -225,9 +231,9 @@ pub struct AHandlers<S, O> {
 }
 
 impl<S, O> AHandlers<S, O> {
-    pub fn new(seed: usize) -> Self {
+    pub fn new() -> Self {
         AHandlers {
-            map: HashMap::with_hasher(RandomState::with_seed(seed)),
+            map: HashMap::with_hasher(RandomState::new()),
         }
     }
 
@@ -243,7 +249,7 @@ impl<S, O> AHandlers<S, O> {
     /// async fn h1(_: &mut (), _: UserCx<'_, fn(usize) -> usize>) {}
     /// async fn h2(_: &mut (), _: UserCx<'_, fn(i32, u8) -> u64>) {}
     ///
-    /// let handlers = AHandlers::new(0).map(0, h0).map(1, h1).map(2, h2);
+    /// let handlers = AHandlers::new().map(0, h0).map(1, h1).map(2, h2);
     /// smol::block_on(handlers.handle(&mut (), &mut Default::default()));
     /// ```
     pub fn map<H, Marker: 'static>(mut self, scn: u8, handler: H) -> Self
@@ -267,7 +273,7 @@ impl<S, O> AHandlers<S, O> {
     /// async fn h1(_: &mut (), _: UserCx<'_, fn(usize) -> usize>) {}
     /// async fn h2(_: &mut (), _: UserCx<'_, fn(i32, u8) -> u64>) {}
     ///
-    /// let mut handlers = AHandlers::new(0);
+    /// let mut handlers = AHandlers::new();
     /// handlers.insert(0, h0);
     /// handlers.insert(1, h1);
     /// handlers.insert(2, h2);
@@ -293,6 +299,12 @@ impl<S, O> AHandlers<S, O> {
     }
 }
 
+impl<S, O> Default for AHandlers<S, O> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::LazyLock;
@@ -309,7 +321,7 @@ mod tests {
         }
 
         static H: LazyLock<Handlers<u8, usize>> =
-            LazyLock::new(|| Handlers::new(0).map(0, handler0));
+            LazyLock::new(|| Handlers::new().map(0, handler0));
 
         {
             let mut state = 234;
@@ -343,7 +355,7 @@ mod tests {
         Handler::handle(&h, &mut 234, &mut TrapFrame::default());
 
         static H: LazyLock<AHandlers<u8, usize>> =
-            LazyLock::new(|| AHandlers::new(0).map(0, handler0));
+            LazyLock::new(|| AHandlers::new().map(0, handler0));
 
         smol::block_on(async move {
             {

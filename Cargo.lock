@@ -483,12 +483,12 @@ dependencies = [
 name = "ksc"
 version = "0.1.0"
 dependencies = [
- "ahash",
  "bevy_utils_proc_macros",
  "co-trap",
  "futures-util",
  "hashbrown",
  "ksc-core",
+ "rand-riscv",
  "smol",
 ]
 
@@ -759,6 +759,8 @@ dependencies = [
 name = "rand-riscv"
 version = "0.1.0"
 dependencies = [
+ "ahash",
+ "rand",
  "rand_chacha",
 ]
 
