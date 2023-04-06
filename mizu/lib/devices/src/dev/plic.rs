@@ -70,31 +70,31 @@ impl Plic {
         Plic(base)
     }
 
-    pub fn priority(&self, n: usize) -> u32 {
+    pub fn priority(&self, pin: u32) -> u32 {
         let cell = unsafe { Priority::at(self.0) };
-        cell.map(|s| s.index(n)).read()
+        cell.map(|s| s.index(pin as usize)).read()
     }
 
-    pub fn set_priority(&self, n: usize, priority: u32) {
+    pub fn set_priority(&self, pin: u32, priority: u32) {
         let mut cell = unsafe { Priority::at(self.0) };
-        cell.map_mut(|s| s.index_mut(n)).write(priority)
+        cell.map_mut(|s| s.index_mut(pin as usize)).write(priority)
     }
 
-    pub fn pending(&self, n: usize) -> bool {
-        let (byte, bit_in_byte_mask) = bitmap_index_u32(n);
+    pub fn pending(&self, pin: u32) -> bool {
+        let (byte, bit_in_byte_mask) = bitmap_index_u32(pin as usize);
         let cell = unsafe { Pending::at(self.0) };
         cell.map(|s| s.index(byte)).read() & bit_in_byte_mask != 0
     }
 
-    pub fn is_enabled(&self, n: usize, cx: usize) -> bool {
-        let (byte, bit_in_byte_mask) = bitmap_index_u32(n);
+    pub fn is_enabled(&self, pin: u32, cx: usize) -> bool {
+        let (byte, bit_in_byte_mask) = bitmap_index_u32(pin as usize);
         let all_cell = unsafe { Enable::at(self.0) };
         let cx_cell = all_cell.map(|s| s.index(cx));
         cx_cell.map(|s| s.index(byte)).read() & bit_in_byte_mask != 0
     }
 
-    pub fn enable(&self, n: usize, cx: usize, enable: bool) {
-        let (byte, bit_in_byte_mask) = bitmap_index_u32(n);
+    pub fn enable(&self, pin: u32, cx: usize, enable: bool) {
+        let (byte, bit_in_byte_mask) = bitmap_index_u32(pin as usize);
         let mut all_cell = unsafe { Enable::at(self.0) };
         let mut cx_cell = all_cell.map_mut(|s| s.index_mut(cx));
         let mut cell = cx_cell.map_mut(|s| s.index_mut(byte));
@@ -126,9 +126,9 @@ impl Plic {
         cell.map(|c| &c.claim_complete).read()
     }
 
-    pub fn complete(&self, cx: usize, n: u32) {
+    pub fn complete(&self, cx: usize, pin: u32) {
         let mut cx_cell = unsafe { Cx::at(self.0) };
         let mut cell = cx_cell.map_mut(|s| s.index_mut(cx));
-        cell.map_mut(|c| &mut c.claim_complete).write(n)
+        cell.map_mut(|c| &mut c.claim_complete).write(pin)
     }
 }
