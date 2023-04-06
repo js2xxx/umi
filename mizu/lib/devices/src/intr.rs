@@ -3,7 +3,7 @@ use hashbrown::{hash_map::Entry, HashMap};
 use ksync::{unbounded, Receiver, Sender};
 use rand_riscv::RandomState;
 
-use crate::Plic;
+use crate::dev::Plic;
 
 pub struct IntrManager {
     cx: usize,

@@ -1,6 +1,6 @@
 #![no_std]
 
-mod dev;
+pub mod dev;
 mod intr;
 
-pub use self::{dev::plic::*, intr::*};
+pub use self::intr::*;
