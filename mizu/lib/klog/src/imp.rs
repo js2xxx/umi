@@ -4,9 +4,9 @@ use std::io::Write;
 
 use spin::Mutex;
 
-pub struct Output(());
+struct Console;
 
-impl Output {
+impl Console {
     pub fn write_byte(&mut self, byte: u8) {
         #[cfg(not(feature = "test"))]
         #[allow(deprecated)]
@@ -16,21 +16,26 @@ impl Output {
     }
 }
 
-impl fmt::Write for Output {
+static CONSOLE: Mutex<Console> = Mutex::new(Console);
+
+pub struct Stdout;
+
+impl fmt::Write for Stdout {
     fn write_str(&mut self, s: &str) -> fmt::Result {
-        s.bytes().for_each(|byte| self.write_byte(byte));
-        Ok(())
+        ksync_core::critical(|| {
+            let mut serial = CONSOLE.lock();
+            s.bytes().for_each(|byte| serial.write_byte(byte));
+            Ok(())
+        })
     }
 }
-
-pub static OUTPUT: Mutex<Output> = Mutex::new(Output(()));
 
 #[macro_export]
 macro_rules! print {
     ($($arg:tt)*) => {
         $crate::critical(|| {
             use core::fmt::Write;
-            write!(*$crate::imp::OUTPUT.lock(), $($arg)*).unwrap()
+            write!($crate::Stdout, $($arg)*).unwrap()
         })
     };
 }
@@ -38,12 +43,12 @@ macro_rules! print {
 #[macro_export]
 macro_rules! println {
     () => {
-        $crate::critical(|| $crate::imp::OUTPUT.lock().write_byte(b'\n'))
+        $crate::critical(|| $crate::Stdout.write_byte(b'\n'))
     };
     ($($arg:tt)*) => {
         $crate::critical(|| {
             use core::fmt::Write;
-            writeln!(*$crate::imp::OUTPUT.lock(), $($arg)*).unwrap()
+            writeln!($crate::Stdout, $($arg)*).unwrap()
         })
     };
 }
