@@ -1,4 +1,6 @@
-use ksync::event::Event;
+use futures_util::future::try_join_all;
+use ksync::Semaphore;
+use spin::lock_api::Mutex;
 use virtio_drivers::{
     device::blk::{BlkReq, BlkResp, VirtIOBlk},
     transport::mmio::MmioTransport,
@@ -7,99 +9,106 @@ use virtio_drivers::{
 use crate::{dev::VirtioHal, Interrupt};
 
 pub struct VirtioBlock<H: VirtioHal> {
-    inner: VirtIOBlk<H, MmioTransport>,
+    inner: Mutex<VirtIOBlk<H, MmioTransport>>,
     intr: Interrupt,
-    can_submit: Event,
+    virt_queue: Semaphore,
 }
 
 impl<H: VirtioHal> VirtioBlock<H> {
     pub const SECTOR_SIZE: usize = virtio_drivers::device::blk::SECTOR_SIZE;
 
     pub fn new(mmio: MmioTransport, intr: Interrupt) -> Option<Self> {
-        VirtIOBlk::new(mmio)
-            .map(|inner| VirtioBlock {
-                inner,
+        VirtIOBlk::new(mmio).ok().map(|inner| {
+            let virt_queue = Semaphore::new(inner.virt_queue_size() as usize);
+            VirtioBlock {
+                inner: Mutex::new(inner),
                 intr,
-                can_submit: Event::new(),
-            })
-            .ok()
+                virt_queue,
+            }
+        })
     }
 
     pub fn capacity_blocks(&self) -> u64 {
-        self.inner.capacity()
+        unsafe { (*self.inner.data_ptr()).capacity() }
+    }
+
+    pub fn readonly(&self) -> bool {
+        unsafe { (*self.inner.data_ptr()).readonly() }
+    }
+
+    pub fn virt_queue_size(&self) -> u16 {
+        unsafe { (*self.inner.data_ptr()).virt_queue_size() }
     }
 
     #[inline]
-    async fn submit<F>(&mut self, mut submit: F) -> virtio_drivers::Result<u16>
+    fn i<F, T>(&self, func: F) -> T
     where
-        F: FnMut(&mut VirtIOBlk<H, MmioTransport>) -> virtio_drivers::Result<u16>,
+        F: FnOnce(&mut VirtIOBlk<H, MmioTransport>) -> T,
     {
-        let mut can_submit = None;
+        ksync::critical(|| func(&mut self.inner.lock()))
+    }
+
+    async fn wait_for_token(&self, token: u16) {
         loop {
-            match submit(&mut self.inner) {
-                Ok(token) => break Ok(token),
-                Err(virtio_drivers::Error::QueueFull) => match can_submit.take() {
-                    Some(can_submit) => can_submit.await,
-                    None => can_submit = Some(self.can_submit.listen()),
-                },
-                Err(err) => break Err(err),
+            self.intr.wait().await;
+            let used = self.i(|inner| {
+                inner.ack_interrupt();
+                inner.peek_used()
+            });
+            if used == Some(token) {
+                break;
             }
         }
     }
 
-    async fn read_chunk(&mut self, block: usize, buf: &mut [u8]) -> virtio_drivers::Result {
+    async fn read_chunk(&self, block: usize, buf: &mut [u8]) -> virtio_drivers::Result {
         assert!(buf.len() <= Self::SECTOR_SIZE);
 
         let mut req = BlkReq::default();
         let mut resp = BlkResp::default();
-        let token = self
-            .submit(|inner| unsafe { inner.read_block_nb(block, &mut req, buf, &mut resp) })
-            .await?;
 
-        while self.inner.peek_used() != Some(token) {
-            self.intr.wait().await;
-            self.inner.ack_interrupt();
-        }
+        let res = self.virt_queue.acquire().await;
+        let token = self.i(|blk| unsafe { blk.read_block_nb(block, &mut req, buf, &mut resp) })?;
 
-        unsafe { self.inner.complete_read_block(token, &req, buf, &mut resp) }?;
-        self.can_submit.notify_additional(1);
+        self.wait_for_token(token).await;
+
+        self.i(|blk| unsafe { blk.complete_read_block(token, &req, buf, &mut resp) })?;
+        drop(res);
 
         resp.status().into()
     }
 
-    async fn write_chunk(&mut self, block: usize, buf: &[u8]) -> virtio_drivers::Result {
+    async fn write_chunk(&self, block: usize, buf: &[u8]) -> virtio_drivers::Result {
         assert!(buf.len() <= Self::SECTOR_SIZE);
 
         let mut req = BlkReq::default();
         let mut resp = BlkResp::default();
-        let token = self
-            .submit(|inner| unsafe { inner.write_block_nb(block, &mut req, buf, &mut resp) })
-            .await?;
 
-        while self.inner.peek_used() != Some(token) {
-            self.intr.wait().await;
-            self.inner.ack_interrupt();
-        }
+        let res = self.virt_queue.acquire().await;
+        let token = self.i(|blk| unsafe { blk.write_block_nb(block, &mut req, buf, &mut resp) })?;
 
-        unsafe { self.inner.complete_write_block(token, &req, buf, &mut resp) }?;
-        self.can_submit.notify_additional(1);
+        self.wait_for_token(token).await;
+
+        self.i(|blk| unsafe { blk.complete_write_block(token, &req, buf, &mut resp) })?;
+        drop(res);
 
         resp.status().into()
     }
 
-    pub async fn read(&mut self, mut block: usize, buf: &mut [u8]) -> virtio_drivers::Result {
-        for chunk in buf.chunks_mut(Self::SECTOR_SIZE) {
-            self.read_chunk(block, chunk).await?;
-            block += 1;
-        }
+    pub async fn read(&self, start_block: usize, buf: &mut [u8]) -> virtio_drivers::Result {
+        let iter = (start_block..).zip(buf.chunks_mut(Self::SECTOR_SIZE));
+        let tasks = iter.map(|(block, chunk)| self.read_chunk(block, chunk));
+        try_join_all(tasks).await?;
         Ok(())
     }
 
-    pub async fn write(&mut self, mut block: usize, buf: &[u8]) -> virtio_drivers::Result {
-        for chunk in buf.chunks(Self::SECTOR_SIZE) {
-            self.write_chunk(block, chunk).await?;
-            block += 1;
+    pub async fn write(&self, start_block: usize, buf: &[u8]) -> virtio_drivers::Result {
+        if self.readonly() {
+            return Err(virtio_drivers::Error::Unsupported);
         }
+        let iter = (start_block..).zip(buf.chunks(Self::SECTOR_SIZE));
+        let tasks = iter.map(|(block, chunk)| self.write_chunk(block, chunk));
+        try_join_all(tasks).await?;
         Ok(())
     }
 }

@@ -15,6 +15,7 @@ rv39-paging = {path = "../paging"}
 # External crates
 crossbeam-queue = {version = "0", default-features = false, features = ["alloc", "nightly"]}
 fdt = "0"
+futures-util = {version = "0", default-features = false, features = ["alloc"]}
 hashbrown = {version = "0", default-features = false, features = ["inline-more"]}
 spin = "0"
 static_assertions = "1"
