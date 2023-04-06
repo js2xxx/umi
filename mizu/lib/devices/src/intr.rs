@@ -21,29 +21,32 @@ impl IntrManager {
     }
 
     pub fn insert(&mut self, pin: u32) -> Option<Interrupt> {
-        match self.map.entry(pin) {
+        let rx = match self.map.entry(pin) {
             Entry::Occupied(entry) if entry.get().is_closed() => {
                 let (tx, rx) = unbounded();
                 entry.replace_entry(tx);
-                Some(Interrupt(rx))
+                rx
             }
             Entry::Vacant(entry) => {
                 let (tx, rx) = unbounded();
                 entry.insert(tx);
-                Some(Interrupt(rx))
+                rx
             }
-            _ => None,
-        }
+            _ => return None,
+        };
+        self.plic.enable(pin, self.cx, true);
+        Some(Interrupt(rx))
     }
 
     pub fn notify(&mut self) {
-        let idx = self.plic.claim(self.cx);
-        if let Entry::Occupied(sender) = self.map.entry(idx) {
+        let pin = self.plic.claim(self.cx);
+        if let Entry::Occupied(sender) = self.map.entry(pin) {
             if sender.get().try_send(()).is_err() {
                 sender.remove();
+                self.plic.enable(pin, self.cx, false);
             }
         }
-        self.plic.complete(self.cx, idx);
+        self.plic.complete(self.cx, pin);
     }
 }
 
