@@ -1,0 +1,9 @@
+[package]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+name = "ksc-core"
+version = "0.1.0"
+
+[dependencies]
+enum-primitive-derive = "0"
+num-traits = {version = "0", default-features = false}
