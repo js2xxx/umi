@@ -1,0 +1,21 @@
+[package]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+name = "devices"
+version = "0.1.0"
+
+[features]
+test = []
+
+[dependencies]
+# Local crates
+ksync = {path = "../ksync"}
+rand-riscv = {path = "../rand-riscv"}
+rv39-paging = {path = "../paging"}
+# External crates
+fdt = "0"
+hashbrown = {version = "0", default-features = false, features = ["inline-more"]}
+spin = "0"
+static_assertions = "1"
+volatile = "0"
+crossbeam-queue = {version = "0", default-features = false, features = ["alloc", "nightly"]}
