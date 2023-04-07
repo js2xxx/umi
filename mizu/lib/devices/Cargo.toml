@@ -13,6 +13,7 @@ ksync = {path = "../ksync"}
 rand-riscv = {path = "../rand-riscv"}
 rv39-paging = {path = "../paging"}
 # External crates
+arsc-rs = {git = "https://github.com/js2xxx/arsc"}
 crossbeam-queue = {version = "0", default-features = false, features = ["alloc", "nightly"]}
 fdt = "0"
 futures-util = {version = "0", default-features = false, features = ["alloc"]}
