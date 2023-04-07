@@ -1,5 +1,9 @@
-use futures_util::future::try_join_all;
-use ksync::Semaphore;
+use alloc::boxed::Box;
+use core::iter;
+
+use arsc_rs::Arsc;
+use futures_util::{future::try_join_all, Future};
+use ksync::{event::Event, Semaphore};
 use spin::lock_api::Mutex;
 use virtio_drivers::{
     device::blk::{BlkReq, BlkResp, VirtIOBlk},
@@ -9,35 +13,64 @@ use virtio_drivers::{
 use crate::{dev::VirtioHal, Interrupt};
 
 pub struct VirtioBlock<H: VirtioHal> {
-    inner: Mutex<VirtIOBlk<H, MmioTransport>>,
-    intr: Interrupt,
+    inner: Arsc<Inner<H>>,
     virt_queue: Semaphore,
 }
 
-impl<H: VirtioHal> VirtioBlock<H> {
+struct Inner<H: VirtioHal> {
+    device: Mutex<VirtIOBlk<H, MmioTransport>>,
+    event: Box<[Event]>,
+}
+
+unsafe impl<H: VirtioHal + Send + Sync> Send for Inner<H> {}
+unsafe impl<H: VirtioHal + Send + Sync> Sync for Inner<H> {}
+
+impl<H: VirtioHal + Send + Sync + 'static> VirtioBlock<H> {
     pub const SECTOR_SIZE: usize = virtio_drivers::device::blk::SECTOR_SIZE;
 
-    pub fn new(mmio: MmioTransport, intr: Interrupt) -> Option<Self> {
-        VirtIOBlk::new(mmio).ok().map(|inner| {
-            let virt_queue = Semaphore::new(inner.virt_queue_size() as usize);
-            VirtioBlock {
-                inner: Mutex::new(inner),
-                intr,
-                virt_queue,
-            }
+    pub fn new(
+        mmio: MmioTransport,
+        intr: Interrupt,
+    ) -> Option<(Self, impl Future<Output = ()> + Send + 'static)> {
+        VirtIOBlk::new(mmio).ok().map(|device| {
+            let size = device.virt_queue_size() as usize;
+
+            let inner = Arsc::new(Inner {
+                device: Mutex::new(device),
+                event: iter::repeat_with(Event::new).take(size).collect(),
+            });
+            let i2 = inner.clone();
+            let ack = async move {
+                loop {
+                    if !intr.wait().await {
+                        break;
+                    }
+                    let used = ksync::critical(|| i2.device.lock().peek_used());
+                    if let Some(used) = used {
+                        i2.event[used as usize].notify_additional(1);
+                    }
+                }
+            };
+            (
+                VirtioBlock {
+                    inner,
+                    virt_queue: Semaphore::new(size),
+                },
+                ack,
+            )
         })
     }
 
     pub fn capacity_blocks(&self) -> u64 {
-        unsafe { (*self.inner.data_ptr()).capacity() }
+        unsafe { (*self.inner.device.data_ptr()).capacity() }
     }
 
     pub fn readonly(&self) -> bool {
-        unsafe { (*self.inner.data_ptr()).readonly() }
+        unsafe { (*self.inner.device.data_ptr()).readonly() }
     }
 
     pub fn virt_queue_size(&self) -> u16 {
-        unsafe { (*self.inner.data_ptr()).virt_queue_size() }
+        unsafe { (*self.inner.device.data_ptr()).virt_queue_size() }
     }
 
     #[inline]
@@ -45,21 +78,19 @@ impl<H: VirtioHal> VirtioBlock<H> {
     where
         F: FnOnce(&mut VirtIOBlk<H, MmioTransport>) -> T,
     {
-        ksync::critical(|| func(&mut self.inner.lock()))
+        ksync::critical(|| func(&mut self.inner.device.lock()))
     }
 
     async fn wait_for_token(&self, token: u16) {
-        let used = self.i(|inner| inner.peek_used());
-        if used != Some(token) {
-            loop {
-                self.intr.wait().await;
-                let used = self.i(|inner| {
-                    inner.ack_interrupt();
-                    inner.peek_used()
-                });
-                if used == Some(token) {
-                    break;
-                }
+        let mut listener = None;
+        loop {
+            let used = self.i(|blk| blk.peek_used());
+            if used == Some(token) {
+                break;
+            }
+            match listener.take() {
+                Some(listener) => listener.await,
+                None => listener = Some(self.inner.event[token as usize].listen()),
             }
         }
     }
