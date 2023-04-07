@@ -265,6 +265,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6548a0ad5d2549e111e1f6a11a6c2e2d00ce6a3dafe22948d67c2b443f775e52"
 
 [[package]]
+name = "crossbeam-epoch"
+version = "0.9.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "46bd5f3f85273295a9d14aedfb86f6aadbff6d8f5295c4a9edb08e819dcf5695"
+dependencies = [
+ "autocfg",
+ "cfg-if",
+ "crossbeam-utils",
+ "memoffset",
+ "scopeguard",
+]
+
+[[package]]
 name = "crossbeam-queue"
 version = "0.3.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -528,12 +541,14 @@ name = "ksync"
 version = "0.1.0"
 dependencies = [
  "arsc-rs",
+ "crossbeam-epoch",
  "crossbeam-queue",
  "event-listener 2.5.3 (git+https://github.com/js2xxx/event-listener)",
  "futures-lite",
  "ksync-core",
  "ktime",
  "smol",
+ "spin",
 ]
 
 [[package]]
