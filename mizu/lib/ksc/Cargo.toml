@@ -5,7 +5,11 @@ name = "ksc"
 version = "0.1.0"
 
 [features]
-test = ["dep:smol"]
+test = [
+  "dep:smol",
+  "ksc-core/test",
+  "rand-riscv/test",
+]
 
 [dependencies]
 # Local crates
@@ -16,4 +20,5 @@ rand-riscv = {path = "../rand-riscv"}
 bevy_utils_proc_macros = "0"
 futures-util = {version = "0", default-features = false, features = ["alloc"]}
 hashbrown = {version = "0", default-features = false, features = ["inline-more"]}
+num-traits = {version = "0", default-features = false}
 smol = {version = "1", optional = true}

@@ -49,14 +49,17 @@ impl<H: VirtioHal> VirtioBlock<H> {
     }
 
     async fn wait_for_token(&self, token: u16) {
-        loop {
-            self.intr.wait().await;
-            let used = self.i(|inner| {
-                inner.ack_interrupt();
-                inner.peek_used()
-            });
-            if used == Some(token) {
-                break;
+        let used = self.i(|inner| inner.peek_used());
+        if used != Some(token) {
+            loop {
+                self.intr.wait().await;
+                let used = self.i(|inner| {
+                    inner.ack_interrupt();
+                    inner.peek_used()
+                });
+                if used == Some(token) {
+                    break;
+                }
             }
         }
     }

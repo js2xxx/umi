@@ -524,6 +524,7 @@ dependencies = [
  "futures-util",
  "hashbrown",
  "ksc-core",
+ "num-traits",
  "rand-riscv",
  "smol",
 ]

@@ -4,6 +4,8 @@ use core::{marker::PhantomData, pin::Pin};
 use co_trap::{TrapFrame, UserCx};
 use futures_util::Future;
 use hashbrown::HashMap;
+use ksc_core::Scn;
+use num_traits::cast::FromPrimitive;
 use rand_riscv::RandomState;
 
 pub type Boxed<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -151,7 +153,7 @@ pub struct Async<F>(pub F);
 type AnyHandler<S, O> = Box<dyn for<'a> Handler<'a, State = S, Output = O>>;
 /// A collection of handlers.
 pub struct Handlers<S, O> {
-    map: HashMap<u8, AnyHandler<S, O>, RandomState>,
+    map: HashMap<Scn, AnyHandler<S, O>, RandomState>,
 }
 
 impl<S, O> Handlers<S, O> {
@@ -166,17 +168,20 @@ impl<S, O> Handlers<S, O> {
     ///
     /// # Example
     /// ```
-    /// use ksc::Handlers;
+    /// use ksc::{Handlers, __TEST0, __TEST1, __TEST2};
     /// use co_trap::UserCx;
     ///
     /// fn h0(_: &mut (), _: UserCx<fn()>) {}
     /// fn h1(_: &mut (), _: UserCx<fn(usize) -> usize>) {}
-    /// fn h2(_: &mut (), _: UserCx<fn(i32, *const u8) -> u64>) {}
+    /// fn h2(_: &mut (), _: UserCx<fn(i32, *const u16) -> u64>) {}
     ///
-    /// let handlers = Handlers::new().map(0, h0).map(1, h1).map(2, h2);
+    /// let handlers = Handlers::new()
+    ///     .map(__TEST0, h0)
+    ///     .map(__TEST1, h1)
+    ///     .map(__TEST2, h2);    
     /// handlers.handle(&mut (), &mut Default::default());
     /// ```
-    pub fn map<H, Marker: 'static>(mut self, scn: u8, handler: H) -> Self
+    pub fn map<H, Marker: 'static>(mut self, scn: Scn, handler: H) -> Self
     where
         H: for<'any> IntoHandler<Marker, State<'any> = S, Output<'any> = O> + 'static,
     {
@@ -189,20 +194,20 @@ impl<S, O> Handlers<S, O> {
     ///
     /// # Example
     /// ```
-    /// use ksc::Handlers;
+    /// use ksc::{Handlers, __TEST0, __TEST1, __TEST2};
     /// use co_trap::UserCx;
     ///
     /// fn h0(_: &mut (), _: UserCx<fn()>) {}
     /// fn h1(_: &mut (), _: UserCx<fn(usize) -> usize>) {}
-    /// fn h2(_: &mut (), _: UserCx<fn(i32, *const u8) -> u64>) {}
+    /// fn h2(_: &mut (), _: UserCx<fn(i32, *const u16) -> u64>) {}
     ///
     /// let mut handlers = Handlers::new();
-    /// handlers.insert(0, h0);
-    /// handlers.insert(1, h1);
-    /// handlers.insert(2, h2);
+    /// handlers.insert(__TEST0, h0);
+    /// handlers.insert(__TEST1, h1);
+    /// handlers.insert(__TEST2, h2);
     /// handlers.handle(&mut (), &mut Default::default());
     /// ```
-    pub fn insert<H, Marker: 'static>(&mut self, scn: u8, handler: H)
+    pub fn insert<H, Marker: 'static>(&mut self, scn: Scn, handler: H)
     where
         H: for<'any> IntoHandler<Marker, State<'any> = S, Output<'any> = O> + 'static,
     {
@@ -212,8 +217,8 @@ impl<S, O> Handlers<S, O> {
     /// Execute the handler in the slot indexed by `scn`, which is acquired from
     /// the given `TrapFrame`.
     pub fn handle(&self, state: &mut S, tf: &mut TrapFrame) -> Option<O> {
-        let scn = u8::try_from(tf.syscall_arg::<7>());
-        let handler = scn.ok().and_then(|scn| self.map.get(&scn));
+        let scn = Scn::from_usize(tf.syscall_arg::<7>());
+        let handler = scn.and_then(|scn| self.map.get(&scn));
         handler.map(|handler| handler.handle(state, tf))
     }
 }
@@ -227,7 +232,7 @@ impl<S, O> Default for Handlers<S, O> {
 type AnyAsyncHandler<S, O> = Box<dyn for<'a> Handler<'a, State = S, Output = Boxed<'a, O>>>;
 /// A collection of async handlers.
 pub struct AHandlers<S, O> {
-    map: HashMap<u8, AnyAsyncHandler<S, O>, RandomState>,
+    map: HashMap<Scn, AnyAsyncHandler<S, O>, RandomState>,
 }
 
 impl<S, O> AHandlers<S, O> {
@@ -242,17 +247,20 @@ impl<S, O> AHandlers<S, O> {
     ///
     /// # Example
     /// ```
-    /// use ksc::AHandlers;
+    /// use ksc::{AHandlers, __TEST0, __TEST1, __TEST2};
     /// use co_trap::UserCx;
     ///
     /// async fn h0(_: &mut (), _: UserCx<'_, fn()>) {}
     /// async fn h1(_: &mut (), _: UserCx<'_, fn(usize) -> usize>) {}
-    /// async fn h2(_: &mut (), _: UserCx<'_, fn(i32, u8) -> u64>) {}
+    /// async fn h2(_: &mut (), _: UserCx<'_, fn(i32, u16) -> u64>) {}
     ///
-    /// let handlers = AHandlers::new().map(0, h0).map(1, h1).map(2, h2);
+    /// let handlers = AHandlers::new()
+    ///     .map(__TEST0, h0)
+    ///     .map(__TEST1, h1)
+    ///     .map(__TEST2, h2);
     /// smol::block_on(handlers.handle(&mut (), &mut Default::default()));
     /// ```
-    pub fn map<H, Marker: 'static>(mut self, scn: u8, handler: H) -> Self
+    pub fn map<H, Marker: 'static>(mut self, scn: Scn, handler: H) -> Self
     where
         Async<H>:
             for<'any> IntoHandler<Marker, State<'any> = S, Output<'any> = Boxed<'any, O>> + 'static,
@@ -266,20 +274,20 @@ impl<S, O> AHandlers<S, O> {
     ///
     /// # Example
     /// ```
-    /// use ksc::AHandlers;
+    /// use ksc::{AHandlers, __TEST0, __TEST1, __TEST2};
     /// use co_trap::UserCx;
     ///
     /// async fn h0(_: &mut (), _: UserCx<'_, fn()>) {}
     /// async fn h1(_: &mut (), _: UserCx<'_, fn(usize) -> usize>) {}
-    /// async fn h2(_: &mut (), _: UserCx<'_, fn(i32, u8) -> u64>) {}
+    /// async fn h2(_: &mut (), _: UserCx<'_, fn(i32, u16) -> u64>) {}
     ///
     /// let mut handlers = AHandlers::new();
-    /// handlers.insert(0, h0);
-    /// handlers.insert(1, h1);
-    /// handlers.insert(2, h2);
+    /// handlers.insert(__TEST0, h0);
+    /// handlers.insert(__TEST1, h1);
+    /// handlers.insert(__TEST2, h2);
     /// smol::block_on(handlers.handle(&mut (), &mut Default::default()));
     /// ```
-    pub fn insert<H, Marker: 'static>(&mut self, scn: u8, handler: H)
+    pub fn insert<H, Marker: 'static>(&mut self, scn: Scn, handler: H)
     where
         Async<H>:
             for<'any> IntoHandler<Marker, State<'any> = S, Output<'any> = Boxed<'any, O>> + 'static,
@@ -290,8 +298,8 @@ impl<S, O> AHandlers<S, O> {
     /// Execute the async handler in the slot indexed by `scn`, which is
     /// acquired from the given `TrapFrame`.
     pub async fn handle(&self, state: &mut S, tf: &mut TrapFrame) -> Option<O> {
-        let scn = u8::try_from(tf.syscall_arg::<7>());
-        let handler = scn.ok().and_then(|scn| self.map.get(&scn));
+        let scn = Scn::from_usize(tf.syscall_arg::<7>());
+        let handler = scn.and_then(|scn| self.map.get(&scn));
         match handler {
             Some(handler) => Some(handler.handle(state, tf).await),
             None => None,
@@ -310,18 +318,19 @@ mod tests {
     use std::sync::LazyLock;
 
     use super::*;
+    use crate::__TEST0;
 
     #[test]
     fn test_handlers() {
-        fn handler0(s: &mut u8, user: UserCx<fn(u32, *const u8) -> u64>) -> usize {
+        fn handler0(s: &mut u16, user: UserCx<fn(u32, *const u16) -> u64>) -> usize {
             let (_a, _b) = user.args();
             *s -= 1;
             user.ret(*s as u64 + 10);
             *s as usize
         }
 
-        static H: LazyLock<Handlers<u8, usize>> =
-            LazyLock::new(|| Handlers::new().map(0, handler0));
+        static H: LazyLock<Handlers<u16, usize>> =
+            LazyLock::new(|| Handlers::new().map(__TEST0, handler0));
 
         {
             let mut state = 234;
@@ -341,7 +350,7 @@ mod tests {
 
     #[test]
     fn test_fut() {
-        async fn handler0(s: &mut u8, user: UserCx<'_, fn(u32, isize) -> u64>) -> usize {
+        async fn handler0(s: &mut u16, user: UserCx<'_, fn(u32, isize) -> u64>) -> usize {
             let (_a, _b) = user.args();
             *s -= 1;
             user.ret(*s as u64 + 10);
@@ -354,8 +363,8 @@ mod tests {
         };
         Handler::handle(&h, &mut 234, &mut TrapFrame::default());
 
-        static H: LazyLock<AHandlers<u8, usize>> =
-            LazyLock::new(|| AHandlers::new().map(0, handler0));
+        static H: LazyLock<AHandlers<u16, usize>> =
+            LazyLock::new(|| AHandlers::new().map(__TEST0, handler0));
 
         smol::block_on(async move {
             {
