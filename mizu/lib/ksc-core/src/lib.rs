@@ -4,6 +4,7 @@
 extern crate alloc;
 
 mod error;
+pub mod handler;
 mod raw_reg;
 mod scn;
 

@@ -13,4 +13,4 @@ mod semaphore;
 pub use event_listener as event;
 pub use ksync_core::*;
 
-pub use self::{mpmc::*, mutex::*, semaphore::*, rcu::*};
+pub use self::{mpmc::*, mutex::*, rcu::*, semaphore::*};
