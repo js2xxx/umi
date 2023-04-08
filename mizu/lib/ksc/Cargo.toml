@@ -15,6 +15,7 @@ test = [
 # Local crates
 co-trap = {path = "../co-trap"}
 ksc-core = {path = "../ksc-core"}
+ksc-macros = {path = "../ksc-macros"}
 rand-riscv = {path = "../rand-riscv"}
 # External crates
 bevy_utils_proc_macros = "0"

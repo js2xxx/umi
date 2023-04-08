@@ -6,7 +6,7 @@ pub use Error::*;
 
 use crate::RawReg;
 
-pub type Result<T> = core::result::Result<T, Error>;
+pub type Result<T = ()> = core::result::Result<T, Error>;
 
 #[allow(clippy::upper_case_acronyms)]
 #[repr(isize)]
