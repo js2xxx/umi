@@ -2,51 +2,56 @@ use crossbeam_queue::SegQueue;
 use hashbrown::{hash_map::Entry, HashMap};
 use ksync::{unbounded, Receiver, Sender};
 use rand_riscv::RandomState;
+use spin::RwLock;
 
 use crate::dev::Plic;
 
 pub struct IntrManager {
-    cx: usize,
     plic: Plic,
-    map: HashMap<u32, Sender<SegQueue<()>>, RandomState>,
+    map: RwLock<HashMap<u32, Sender<SegQueue<()>>, RandomState>>,
 }
 
 impl IntrManager {
-    pub fn new(cx: usize, plic: Plic) -> Self {
+    pub fn new(plic: Plic) -> Self {
         IntrManager {
-            cx,
             plic,
-            map: HashMap::with_hasher(RandomState::new()),
+            map: RwLock::new(HashMap::with_hasher(RandomState::new())),
         }
     }
 
-    pub fn insert(&mut self, pin: u32) -> Option<Interrupt> {
-        let rx = match self.map.entry(pin) {
+    pub fn insert(&self, cx: usize, pin: u32) -> Option<Interrupt> {
+        if pin == 0 {
+            return None;
+        }
+        let rx = ksync::critical(|| match self.map.write().entry(pin) {
             Entry::Occupied(entry) if entry.get().is_closed() => {
                 let (tx, rx) = unbounded();
                 entry.replace_entry(tx);
-                rx
+                Some(rx)
             }
             Entry::Vacant(entry) => {
                 let (tx, rx) = unbounded();
                 entry.insert(tx);
-                rx
+                Some(rx)
             }
-            _ => return None,
-        };
-        self.plic.enable(pin, self.cx, true);
+            _ => None,
+        })?;
+        self.plic.enable(pin, cx, true);
         Some(Interrupt(rx))
     }
 
-    pub fn notify(&mut self) {
-        let pin = self.plic.claim(self.cx);
-        if let Entry::Occupied(sender) = self.map.entry(pin) {
-            if sender.get().try_send(()).is_err() {
-                sender.remove();
-                self.plic.enable(pin, self.cx, false);
+    pub fn notify(&self, cx: usize) {
+        let pin = self.plic.claim(cx);
+        if pin > 0 {
+            let exist = ksync::critical(|| {
+                let map = self.map.read();
+                map.get(&pin).and_then(|sender| sender.try_send(()).ok())
+            });
+            if exist.is_none() {
+                self.plic.enable(pin, cx, false);
             }
+            self.plic.complete(cx, pin);
         }
-        self.plic.complete(self.cx, pin);
     }
 }
 
