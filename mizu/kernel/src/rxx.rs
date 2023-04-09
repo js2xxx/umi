@@ -9,14 +9,19 @@ const_assert_eq!(config::KERNEL_START_PHYS + ID_OFFSET, config::KERNEL_START);
 #[no_mangle]
 static BOOT_PAGES: Table = const {
     let low_start = config::KERNEL_START_PHYS.round_down(Level::max());
-    let high_start = config::KERNEL_START.round_down(Level::max());
     let delta = Level::max().page_size();
 
+    let addrs = [0, delta, delta * 2, delta * 3];
+
     table_1g![
+        // The temporary identity mappings.
         low_start => low_start, Attr::KERNEL_RWX;
-        low_start + delta => low_start + delta, Attr::KERNEL_RWX;
-        high_start => low_start, Attr::KERNEL_RWX;
-        high_start + delta => low_start + delta, Attr::KERNEL_RWX;
+
+        // The temporary higher half mappings.
+        ID_OFFSET + addrs[0] => addrs[0], Attr::KERNEL_RWX;
+        ID_OFFSET + addrs[1] => addrs[1], Attr::KERNEL_RWX;
+        ID_OFFSET + addrs[2] => addrs[2], Attr::KERNEL_RWX;
+        ID_OFFSET + addrs[3] => addrs[3], Attr::KERNEL_RWX;
     ]
 };
 

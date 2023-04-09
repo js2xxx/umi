@@ -10,8 +10,8 @@ core::arch::global_asm!(include_str!("trap.S"));
 extern "C" fn ktrap_handler(_tf: &mut KTrapFrame) {
     match scause::read().cause() {
         scause::Trap::Interrupt(_) => todo!(),
-        scause::Trap::Exception(_excep) => {
-            todo!()
+        scause::Trap::Exception(excep) => {
+            panic!("unhandled exception in kernel: {excep:?}")
         }
     }
 }

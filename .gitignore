@@ -2,3 +2,4 @@ target
 /debug
 kernel-qemu
 sbi-qemu
+/third-party/img
