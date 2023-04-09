@@ -71,19 +71,15 @@ impl<T: Pointable + Send> RcuSlot<T> {
     ///   new data.
     pub fn update<'a, F>(&self, guard: &'a Guard, mut update: F) -> Option<RcuDropGuard<'a, T>>
     where
-        F: FnMut(&'a T, Option<T>) -> Option<T>,
+        F: FnMut(Option<&T>, Option<T>) -> Option<T>,
     {
         // A temp slot of memory to avoid repeating allocation.
         let mut temp: Option<Box<MaybeUninit<T>>> = None;
         let mut current = self.inner.load_consume(guard);
         loop {
+            let cd = (!current.is_null()).then(|| unsafe { current.deref() });
             // Hand out the ownership of the data in `temp` if any.
-            let new = unsafe {
-                update(
-                    current.deref(),
-                    temp.as_ref().map(|ptr| ptr.assume_init_read()),
-                )
-            }?;
+            let new = unsafe { update(cd, temp.as_ref().map(|ptr| ptr.assume_init_read())) }?;
             // After that: `temp <- None | Some(Box::new(MaybeUninit::uninit()))`
 
             // Store the ownership of the new data in `temp`.
