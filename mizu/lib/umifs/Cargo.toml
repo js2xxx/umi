@@ -1,0 +1,16 @@
+[package]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+name = "umifs"
+version = "0.1.0"
+
+[features]
+test = []
+
+[dependencies]
+# Local crates
+ksc-core = {path = "../ksc-core"}
+ktime-core = {path = "../ktime-core"}
+# External crates
+async-trait = "0"
+bitflags = "2"
