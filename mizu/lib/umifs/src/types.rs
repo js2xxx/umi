@@ -1,4 +1,5 @@
 use alloc::string::String;
+
 use bitflags::bitflags;
 use ktime_core::Instant;
 
@@ -67,8 +68,32 @@ pub struct Metadata {
     pub last_modified: Instant,
 }
 
-#[derive(Debug, Clone,  PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct DirEntry {
     pub name: String,
     pub metadata: Metadata,
 }
+
+#[derive(Copy, PartialEq, Eq, Clone, Debug)]
+pub enum SeekFrom {
+    /// Sets the offset to the provided number of bytes.
+    Start(usize),
+
+    /// Sets the offset to the size of this object plus the specified number of
+    /// bytes.
+    ///
+    /// It is possible to seek beyond the end of an object, but it's an error to
+    /// seek before byte 0.
+    End(isize),
+
+    /// Sets the offset to the current position plus the specified number of
+    /// bytes.
+    ///
+    /// It is possible to seek beyond the end of an object, but it's an error to
+    /// seek before byte 0.
+    Current(isize),
+}
+
+pub type IoSlice<'a> = &'a [u8];
+
+pub type IoSliceMut<'a> = &'a mut [u8];
