@@ -4,7 +4,11 @@ use core::{
 };
 
 use bevy_utils_proc_macros::all_tuples;
-use ksc_core::RawReg;
+use ksc_core::{
+    handler::{FromParam, Param},
+    RawReg, Scn,
+};
+use num_traits::FromPrimitive;
 use static_assertions::const_assert_eq;
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -42,6 +46,10 @@ pub struct TrapFrame {
 impl TrapFrame {
     pub const fn syscall_arg<const N: usize>(&self) -> usize {
         self.gpr.tx.a[N]
+    }
+
+    pub fn scn(&self) -> Option<Scn> {
+        Scn::from_usize(self.syscall_arg::<7>())
     }
 
     pub fn set_syscall_ret(&mut self, ret: usize) {
@@ -124,3 +132,13 @@ macro_rules! impl_arg {
 }
 
 all_tuples!(impl_arg, 0, 7, P);
+
+impl<A: 'static> Param for UserCx<'_, A> {
+    type Item<'a> = UserCx<'a, A>;
+}
+
+impl<A: 'static> FromParam<&'_ mut TrapFrame> for UserCx<'_, A> {
+    fn from_param<'a>(item: <&'_ mut TrapFrame as Param>::Item<'a>) -> Self::Item<'a> {
+        UserCx::from(item)
+    }
+}

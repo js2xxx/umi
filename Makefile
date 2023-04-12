@@ -6,7 +6,8 @@ export ROOT			:= $(shell pwd)
 export TARGET_DIR 	:= $(ROOT)/target/$(TARGET)/$(MODE)
 export DEBUG_DIR   	:= $(ROOT)/debug
 
-export SBI := $(ROOT)/third-party/bin/rustsbi-$(BOARD).bin
+export ROOTFS  ?= $(ROOT)/third-party/img/riscv64-rootfs.img
+export SBI ?= $(ROOT)/third-party/bin/rustsbi-$(BOARD).bin
 
 .PHONY: all build run debug test clean
 
@@ -21,7 +22,9 @@ QEMU_ARGS := -monitor stdio \
 	-kernel kernel-qemu \
 	-nographic \
 	-serial file:debug/qemu.log \
-	-smp 4 -m 2G
+	-smp 4 -m 2G \
+	-drive file=$(ROOTFS),if=none,format=raw,id=x0 \
+	-device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0
 
 ifeq ($(BOARD), qemu-virt)
 	QEMU_ARGS += -machine virt \
