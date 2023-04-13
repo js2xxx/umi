@@ -45,7 +45,10 @@ pub fn is_bsp() -> bool {
 #[cfg(not(feature = "test"))]
 #[no_mangle]
 unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
-    use core::sync::atomic::{AtomicBool, Ordering::Release};
+    use core::{
+        mem,
+        sync::atomic::{AtomicBool, Ordering::Release},
+    };
 
     use config::VIRT_END;
 
@@ -75,11 +78,11 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
     // Initialize TLS
     // SAFETY: `tp` is initialized in the `_start` function
     unsafe {
-        let tp: usize;
+        let tp: *mut u32;
         asm!("mv {0}, tp", out(reg) tp);
 
-        let dst = tp as *mut u32;
-        dst.copy_from_nonoverlapping(&_stdata, (&_tdata_size) as *const u32 as usize);
+        let len = (&_tdata_size) as *const u32 as usize;
+        tp.copy_from_nonoverlapping(&_stdata, len / mem::size_of::<u32>());
         HART_ID = hartid;
     }
 

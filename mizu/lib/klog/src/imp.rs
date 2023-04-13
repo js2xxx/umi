@@ -2,7 +2,7 @@ use core::fmt;
 #[cfg(feature = "test")]
 use std::io::Write;
 
-use spin::Mutex;
+use spin::{Mutex, MutexGuard};
 
 struct Console;
 
@@ -18,16 +18,17 @@ impl Console {
 
 static CONSOLE: Mutex<Console> = Mutex::new(Console);
 
-pub struct Stdout;
+pub struct Stdout<'a>(MutexGuard<'a, Console>);
 
-impl fmt::Write for Stdout {
+impl fmt::Write for Stdout<'_> {
     fn write_str(&mut self, s: &str) -> fmt::Result {
-        ksync_core::critical(|| {
-            let mut serial = CONSOLE.lock();
-            s.bytes().for_each(|byte| serial.write_byte(byte));
-            Ok(())
-        })
+        s.bytes().for_each(|byte| self.0.write_byte(byte));
+        Ok(())
     }
+}
+
+pub fn stdout<'a>() -> Stdout<'a> {
+    Stdout(CONSOLE.lock())
 }
 
 #[macro_export]
@@ -35,7 +36,7 @@ macro_rules! print {
     ($($arg:tt)*) => {
         $crate::critical(|| {
             use core::fmt::Write;
-            write!($crate::Stdout, $($arg)*).unwrap()
+            write!($crate::stdout(), $($arg)*).unwrap()
         })
     };
 }
@@ -43,12 +44,13 @@ macro_rules! print {
 #[macro_export]
 macro_rules! println {
     () => {
-        $crate::critical(|| $crate::Stdout.write_byte(b'\n'))
+        use core::fmt::Write;
+        $crate::critical(|| $crate::stdout().write_char('\n')).unwrap()
     };
     ($($arg:tt)*) => {
         $crate::critical(|| {
             use core::fmt::Write;
-            writeln!($crate::Stdout, $($arg)*).unwrap()
+            writeln!($crate::stdout(), $($arg)*).unwrap()
         })
     };
 }
