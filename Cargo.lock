@@ -528,6 +528,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "kmem"
+version = "0.1.0"
+dependencies = [
+ "rv39-paging",
+ "static_assertions",
+]
+
+[[package]]
 name = "ksc"
 version = "0.1.0"
 dependencies = [
@@ -660,6 +668,7 @@ dependencies = [
  "config",
  "kalloc",
  "klog",
+ "kmem",
  "ksc",
  "ksync",
  "ktime",

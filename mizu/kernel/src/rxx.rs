@@ -47,6 +47,8 @@ pub fn is_bsp() -> bool {
 unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
     use core::sync::atomic::{AtomicBool, Ordering::Release};
 
+    use config::VIRT_END;
+
     static GLOBAL_INIT: AtomicBool = AtomicBool::new(false);
 
     extern "C" {
@@ -58,6 +60,8 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
 
         static mut _sheap: u32;
         static mut _eheap: u32;
+
+        static _end: u8;
     }
 
     if !GLOBAL_INIT.load(Relaxed) {
@@ -91,6 +95,12 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
 
         // Init the kernel heap.
         unsafe { kalloc::init(&mut _sheap, &mut _eheap) };
+
+        // Init the frame allocator.
+        unsafe {
+            let range = (&_end as *const u8).into()..VIRT_END.into();
+            kmem::init_frames(range)
+        }
     }
 
     crate::main(payload)
