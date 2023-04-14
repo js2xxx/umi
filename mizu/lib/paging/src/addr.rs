@@ -27,6 +27,11 @@ impl PAddr {
     pub fn in_page_offset(self) -> usize {
         self.0 & crate::PAGE_MASK
     }
+
+    #[inline]
+    pub fn val(self) -> usize {
+        self.0
+    }
 }
 
 impl Add<usize> for PAddr {
@@ -170,5 +175,13 @@ impl<T: ?Sized> const From<NonNull<T>> for LAddr {
     #[inline]
     fn from(ptr: NonNull<T>) -> Self {
         LAddr(ptr.as_ptr().cast())
+    }
+}
+
+impl Add<usize> for LAddr {
+    type Output = Self;
+
+    fn add(self, rhs: usize) -> Self::Output {
+        LAddr::from(self.val() + rhs)
     }
 }
