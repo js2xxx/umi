@@ -1,3 +1,5 @@
+extern crate alloc;
+use alloc::collections::BTreeSet;
 use core::{
     fmt,
     ops::{Deref, DerefMut},
@@ -37,7 +39,7 @@ impl Attr {
     }
 
     pub const fn has_table(&self) -> bool {
-        self.contains(Attr::READABLE.union(Attr::WRITABLE).union(Attr::EXECUTABLE))
+        !self.intersects(Attr::READABLE.union(Attr::WRITABLE).union(Attr::EXECUTABLE))
     }
 }
 
@@ -95,7 +97,7 @@ impl const Default for AttrBuilder {
 }
 
 /// pgtbl entries: 44 bit PPN | 12 bit offset
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Ord, Eq, PartialEq, PartialOrd)]
 pub struct Entry(usize);
 const_assert!(core::mem::size_of::<Entry>() == 1 << ENTRY_SIZE_SHIFT);
 
@@ -122,20 +124,20 @@ impl Entry {
         *self = Entry(0);
     }
 
-    pub fn table(&self, level: Level) -> Option<&Table> {
+    pub fn table(&self, level: Level, id_offset: usize) -> Option<&Table> {
         let (addr, attr) = self.get(Level::pt());
         if attr.contains(Attr::VALID) && attr.has_table() && level != Level::pt() {
-            let ptr = addr.to_laddr(ID_OFFSET);
+            let ptr = addr.to_laddr(id_offset);
             Some(unsafe { &*ptr.cast() })
         } else {
             None
         }
     }
 
-    pub fn table_mut(&mut self, level: Level) -> Option<&mut Table> {
+    pub fn table_mut(&mut self, level: Level, id_offset: usize) -> Option<&mut Table> {
         let (addr, attr) = self.get(Level::pt());
         if attr.contains(Attr::VALID) && attr.has_table() && level != Level::pt() {
-            let ptr = addr.to_laddr(ID_OFFSET);
+            let ptr = addr.to_laddr(id_offset);
             Some(unsafe { &mut *ptr.cast() })
         } else {
             None
@@ -155,17 +157,18 @@ impl Entry {
         &mut self,
         level: Level,
         alloc: &impl PageAlloc,
+        id_offset: usize,
     ) -> Result<&mut Table, Error> {
         let (addr, attr) = self.get(Level::pt());
         if !attr.has_table() || level == Level::pt() {
             return Err(Error::EntryExistent(true));
         }
         Ok(if attr.contains(Attr::VALID) {
-            let ptr = addr.to_laddr(ID_OFFSET);
+            let ptr = addr.to_laddr(id_offset);
             unsafe { &mut *ptr.cast() }
         } else {
             let mut ptr = alloc.alloc().ok_or(Error::OutOfMemory)?;
-            let addr = LAddr::from(ptr).to_paddr(ID_OFFSET);
+            let addr = LAddr::from(ptr).to_paddr(id_offset);
             *self = Self::new(addr, Attr::VALID, Level::pt());
             unsafe { ptr.as_mut() }
         })
@@ -222,10 +225,11 @@ impl Entry {
         level: Level,
         drop: impl FnOnce(&mut Table) -> bool,
         alloc: &impl PageAlloc,
+        id_offset: usize,
     ) {
         let (addr, attr) = self.get(Level::pt());
         if attr.contains(Attr::VALID) && attr.has_table() && level != Level::pt() {
-            let ptr = addr.to_laddr(ID_OFFSET);
+            let ptr = addr.to_laddr(id_offset);
             let table = unsafe { &mut *ptr.cast::<Table>() };
             if drop(table) {
                 self.reset();
@@ -260,38 +264,68 @@ impl Table {
         Table([Default::default(); NR_ENTRIES])
     }
 
-    /// Retrun corresponding pa with given la.
-    ///
-    /// # TODO:
-    ///
-    /// this function need to be complemented after the kernel address layout is
-    /// clear.
+    pub fn la2pte(
+        &mut self,
+        la: LAddr,
+        id_offset: usize,
+    ) -> (Result<&mut Entry, Error>, BTreeSet<(Entry, Level)>) {
+        let mut touch_mark: BTreeSet<(Entry, Level)> = BTreeSet::new();
+        let mut pte: &mut Entry;
+        let mut t: &mut Table = self;
+        for l in (1..=2u8).rev() {
+            let level = Level::new(l);
+            pte = &mut t[level.addr_idx(la.val(), false)];
+            touch_mark.insert((*pte, level));
+            t = match pte.table_mut(level, id_offset) {
+                None => return (Err(Error::EntryExistent(false)), touch_mark),
+                Some(tb) => tb,
+            };
+        }
+        (
+            Ok(&mut t[Level::pt().addr_idx(la.val(), false)]),
+            touch_mark,
+        )
+    }
+
+    pub fn la2pte_alloc(
+        &mut self,
+        la: LAddr,
+        alloc_func: &impl PageAlloc,
+        id_offset: usize,
+    ) -> Result<&mut Entry, Error> {
+        let mut pte: &mut Entry;
+        let mut t: &mut Table = self;
+        for l in (1..=2u8).rev() {
+            let level = Level::new(l);
+            pte = &mut t[level.addr_idx(la.val(), false)];
+            t = match pte.table_or_create(level, alloc_func, id_offset) {
+                Ok(tb) => tb,
+                Err(e) => return Err(e),
+            };
+        }
+        Ok(&mut t[Level::pt().addr_idx(la.val(), false)])
+    }
+
+    /// Look up in the pgtbl and retrun corresponding `pa` with given `la`.
     ///
     /// # Arguments
     ///
-    /// - `is_kernel`: the type of pgtbl, If `is_kernel = true`, `la` shoud be
-    ///   valid.
+    /// - `is_kernel`: the type of pgtbl, If `is_kernel = false`, `la` shoud be
+    ///   user accessable.
     ///
     /// # Error
     ///
     /// If not found, `Error::EntryExistent(false)`.
     ///
     /// If `la` is illegal, `Error::PerssionDenied`.
-    pub fn la2pa(&self, la: LAddr, is_kernel: bool) -> Result<PAddr, Error> {
+    pub fn la2pa(&mut self, la: LAddr, is_kernel: bool, id_offset: usize) -> Result<PAddr, Error> {
         if la.val() >= BLANK_BEGIN && la.val() <= BLANK_END {
             return Err(Error::PermissionDenied);
         }
-        let mut pte: Entry;
-        let mut t: &Table = self;
-        for l in (0..2u8).rev() {
-            let level = Level::new(l);
-            pte = t[level.addr_idx(la.val(), false)];
-            t = match pte.table(level) {
-                None => return Err(Error::EntryExistent(false)),
-                Some(tb) => tb,
-            };
-        }
-        pte = t[Level::pt().addr_idx(la.val(), false)];
+        let pte: Entry = match self.la2pte(la, id_offset).0 {
+            Ok(et) => *et,
+            Err(e) => return Err(e),
+        };
         let (pa, attr) = pte.get(Level::pt());
         if attr.contains(Attr::VALID) {
             if attr.contains(Attr::USER_ACCESS) || is_kernel {
@@ -302,6 +336,204 @@ impl Table {
         } else {
             Err(Error::EntryExistent(false))
         }
+    }
+
+    pub fn reprotect(
+        &mut self,
+        la: LAddr,
+        npages: usize,
+        flag: Attr,
+        id_offset: usize,
+    ) -> Result<Entry, Error> {
+        if la.in_page_offset() != 0 {
+            return Err(Error::AddrMisaligned {
+                vstart: (Some(la)),
+                vend: (Some(LAddr::from(la.val() + npages + PAGE_SIZE))),
+                phys: (None),
+            });
+        }
+        let mut latmp = la;
+        let mut pte = &mut Entry(0);
+        for _ in 0..npages {
+            pte = match self.la2pte(latmp, id_offset).0 {
+                Err(e) => return Err(e),
+                Ok(et) => et,
+            };
+            let (pa, _) = pte.get(Level::pt());
+            *pte = Entry::new(pa, flag | Attr::VALID, Level::pt());
+            latmp = latmp + PAGE_SIZE;
+        }
+        Ok(*pte)
+    }
+
+    /// Create `npages` sequential PTEs with `alloc_func` and set their Attr
+    /// as **`flag | VALID`** for LAddr starting at `la` that refer to
+    /// physical addresses starting at `pa`.
+    ///
+    /// `la` should be page-aligned.
+    ///
+    /// # Return
+    ///
+    /// Return the last allocated pte or `Error`
+    pub fn mappages(
+        &mut self,
+        la: LAddr,
+        pa: PAddr,
+        flags: Attr,
+        npages: usize,
+        alloc_func: &impl PageAlloc,
+        id_offset: usize,
+    ) -> Result<Entry, Error> {
+        if la.in_page_offset() != 0 || pa.in_page_offset() != 0 {
+            return Err(Error::AddrMisaligned {
+                vstart: (Some(la)),
+                vend: (Some(LAddr::from(la.val() + npages + PAGE_SIZE))),
+                phys: (Some(pa)),
+            });
+        }
+        if npages == 0 {
+            return Err(Error::RangeEmpty);
+        }
+        let mut latmp = la;
+        let mut patmp = pa;
+        let mut pte = &mut Entry(0);
+        for i in 1..=npages {
+            pte = match self.la2pte_alloc(latmp, alloc_func, id_offset) {
+                Ok(e) => e,
+                Err(e) => {
+                    // ignore the last one, which may be 2kB at most.
+                    if let Err(er) = self.user_unmap_npages(la, i, alloc_func, id_offset) {
+                        return Err(er);
+                    }
+                    return Err(e);
+                }
+            };
+            let (_, attr) = pte.get(Level::pt());
+            if attr.contains(Attr::VALID) {
+                return Err(Error::EntryExistent(true));
+            } else {
+                *pte = Entry::new(patmp, flags | Attr::VALID, Level::pt());
+            }
+            latmp = latmp + PAGE_SIZE;
+            patmp += PAGE_SIZE;
+        }
+        Ok(*pte)
+    }
+
+    /// Unmap `npages` from `begin_la` to `end_la` and free empty pgtbl
+    /// for LAddr starting at `la` and `free` corresponding pa if `need_free`
+    ///
+    /// `begin_la` and `end_la` should be page-aligned.
+    ///
+    /// # Return
+    ///
+    /// Return the last unmapped pte or `Error`
+    pub fn user_unmap(
+        &mut self,
+        begin_la: LAddr,
+        end_la: LAddr,
+        level: Level,
+        alloc: &impl PageAlloc,
+        id_offset: usize,
+    ) -> Result<Entry, Error> {
+        if begin_la.in_page_offset() != 0 || end_la.in_page_offset() != 0 {
+            return Err(Error::AddrMisaligned {
+                vstart: Some(begin_la),
+                vend: Some(end_la),
+                phys: None,
+            });
+        }
+
+        let begin_index = level.addr_idx(begin_la.val(), false);
+        let end_index = level.addr_idx(end_la.val(), false);
+
+        let mut pg_end: LAddr =
+            LAddr::from(begin_la.val() | (level.page_mask() & !Level::pt().page_mask()));
+        for index in begin_index..=end_index {
+            let et = &mut self[index];
+            if level == Level::pt() {
+                let unreset = *et;
+                et.reset();
+                if index == end_index {
+                    return Ok(unreset);
+                }
+            } else {
+                let t = et.table_mut(level, id_offset);
+                let tb = match t {
+                    Some(tb) => tb,
+                    None => return Err(Error::EntryExistent(false)),
+                };
+                if begin_index != end_index {
+                    let a;
+                    let b;
+                    if index == begin_index {
+                        a = begin_la;
+                        b = pg_end;
+                    } else if index == end_index {
+                        a = pg_end + Level::pt().page_size();
+                        b = end_la;
+                    } else {
+                        a = pg_end + Level::pt().page_size();
+                        b = pg_end + level.page_size();
+                        pg_end = b;
+                    }
+                    match tb.user_unmap(a, b, level.decrease().unwrap(), alloc, id_offset) {
+                        Ok(mut et) => {
+                            et.destroy_table(
+                                level,
+                                |table: &mut Table| {
+                                    table.iter().all(|&e| !e.get(level).1.contains(Attr::VALID))
+                                },
+                                alloc,
+                                id_offset,
+                            );
+                            if index == end_index {
+                                return Ok(et);
+                            }
+                        }
+                        Err(e) => return Err(e),
+                    }
+                } else {
+                    match tb.user_unmap(
+                        begin_la,
+                        end_la,
+                        level.decrease().unwrap(),
+                        alloc,
+                        id_offset,
+                    ) {
+                        Ok(mut et) => {
+                            et.destroy_table(
+                                level,
+                                |table: &mut Table| {
+                                    table.iter().all(|&e| !e.get(level).1.contains(Attr::VALID))
+                                },
+                                alloc,
+                                id_offset,
+                            );
+                            return Ok(et);
+                        }
+                        Err(e) => return Err(e),
+                    }
+                }
+            }
+        }
+        Err(Error::RangeEmpty)
+    }
+
+    pub fn user_unmap_npages(
+        &mut self,
+        begin_la: LAddr,
+        npages: usize,
+        alloc: &impl PageAlloc,
+        id_offset: usize,
+    ) -> Result<Entry, Error> {
+        self.user_unmap(
+            begin_la,
+            begin_la + (npages - 1) * PAGE_SIZE,
+            Level::max(),
+            alloc,
+            id_offset,
+        )
     }
 }
 
@@ -347,13 +579,63 @@ macro_rules! table_1g {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Error, LAddr, Table};
+
+    extern crate alloc;
+    use alloc::alloc::Global;
+    use core::{
+        alloc::{Allocator, Layout},
+        ptr::NonNull,
+    };
+
+    use crate::{Attr, Entry, Error, LAddr, Level, PAddr, PageAlloc, Table, ID_OFFSET, PAGE_SIZE};
 
     #[test]
     fn test_la2pa() {
         assert_eq!(
             Err(Error::PermissionDenied),
-            Table::new().la2pa(LAddr::from(0xffff_ff00_0000_0000u64), false)
+            Table::new().la2pa(LAddr::from(0xffff_ff00_0000_0000u64), false, ID_OFFSET)
         );
+    }
+
+    const PAGE_LAYOUT: Layout = unsafe { Layout::from_size_align_unchecked(PAGE_SIZE, PAGE_SIZE) };
+
+    struct Alloc();
+    unsafe impl PageAlloc for Alloc {
+        fn alloc(&self) -> Option<NonNull<Table>> {
+            Global.allocate(PAGE_LAYOUT).ok().map(NonNull::cast)
+        }
+
+        unsafe fn dealloc(&self, ptr: NonNull<Table>) {
+            Global.deallocate(ptr.cast(), PAGE_LAYOUT)
+        }
+    }
+
+    #[test]
+    fn test_mapfuncs() {
+        let a = Alloc();
+        let mut tb = Table::new();
+        let la_start = LAddr::from(0x0000_0000_9000_0000usize);
+        let pa_start = PAddr::new(0x0000_0001_8000_0000);
+
+        assert_eq!(
+            tb.mappages(la_start, pa_start, Attr::empty(), 2, &a, 0),
+            Ok(Entry::new(pa_start + 0x1000, Attr::VALID, Level::pt()))
+        );
+
+        assert_eq!(
+            tb.reprotect(la_start, 2, Attr::KERNEL_R, 0),
+            Ok(Entry::new(pa_start + 0x1000, Attr::KERNEL_R, Level::pt()))
+        );
+
+        assert_eq!(
+            // tb.user_unmap(la_start + 0x1000, 1, &a, 0),
+            tb.user_unmap(la_start, la_start + 0x1000, Level::max(), &a, 0),
+            Ok(Entry::new(pa_start + 0x1000, Attr::KERNEL_R, Level::pt()))
+        );
+
+        assert_eq!(
+            tb.la2pa(la_start, true, 0),
+            Err(Error::EntryExistent(false))
+        )
     }
 }

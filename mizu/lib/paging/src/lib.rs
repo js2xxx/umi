@@ -3,6 +3,9 @@
 #![feature(const_mut_refs)]
 #![feature(const_option_ext)]
 #![feature(const_trait_impl)]
+#![cfg_attr(test, feature(allocator_api))]
+#[cfg(test)]
+extern crate alloc;
 
 mod addr;
 mod consts;

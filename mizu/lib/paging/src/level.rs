@@ -18,6 +18,10 @@ impl Level {
         Self::new(2)
     }
 
+    pub fn val(&self) -> u8 {
+        self.0
+    }
+
     #[inline]
     pub const fn page_shift(&self) -> usize {
         PAGE_SHIFT + self.0 as usize * NR_ENTRIES_SHIFT
