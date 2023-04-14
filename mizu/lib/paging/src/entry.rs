@@ -397,14 +397,16 @@ impl Table {
         let mut latmp = la;
         let mut patmp = pa;
         let mut pte = &mut Entry(0);
-        for i in 0..npages {
+        for i in 1..=npages {
             pte = match self.la2pte_alloc(latmp, alloc_func, magic_num) {
                 Ok(e) => e,
-                Err(Error::OutOfMemory) => {
+                Err(e) => {
                     // ignore the last one, which may be 2kB at most.
-                    return self.user_unmap(la, i - 1, alloc_func, magic_num);
+                    if let Err(er) = self.user_unmap_npages(la, i, alloc_func, magic_num) {
+                        return Err(er);
+                    }
+                    return Err(e);
                 }
-                Err(e) => return Err(e),
             };
             let (_, attr) = pte.get(Level::pt());
             if attr.contains(Attr::VALID) {
@@ -418,63 +420,126 @@ impl Table {
         Ok(*pte)
     }
 
-    /// Unmap `npages` sequential PTEs as 0
+    /// Unmap `npages` from `begin_la` to `end_la` and free empty pgtbl
     /// for LAddr starting at `la` and `free` corresponding pa if `need_free`
     ///
-    /// `la` should be page-aligned.
+    /// `begin_la` and `end_la` should be page-aligned.
     ///
     /// # Return
     ///
     /// Return the last unmapped pte or `Error`
     pub fn user_unmap(
         &mut self,
-        la: LAddr,
-        npages: usize,
-        alloc_func: &impl PageAlloc,
+        begin_la: LAddr,
+        end_la: LAddr,
+        level: Level,
+        alloc: &impl PageAlloc,
         magic_num: usize,
     ) -> Result<Entry, Error> {
-        if la.in_page_offset() != 0 {
+        if begin_la.in_page_offset() != 0 || begin_la.in_page_offset() != 0 {
             return Err(Error::AddrMisaligned {
-                vstart: (Some(la)),
-                vend: (Some(LAddr::from(la.val() + npages + PAGE_SIZE))),
-                phys: (None),
+                vstart: Some(begin_la),
+                vend: Some(end_la),
+                phys: None,
             });
         }
-        let mut latmp = la;
-        let mut entry_set: BTreeSet<(Entry, Level)> = BTreeSet::new();
-        let mut res_pte = Entry(0);
-        for _i in 0..npages {
-            let (res, mut bs) = self.la2pte(latmp, magic_num);
-            let pte = match res {
-                Ok(et) => et,
-                Err(e) => return Err(e),
-            };
-            entry_set.append(&mut bs);
-            let (_, attr) = pte.get(Level::pt());
-            if attr.contains(Attr::VALID) {
-                if attr.has_table() {
-                    return Err(Error::PermissionDenied);
-                } else {
-                    res_pte = *pte;
-                    pte.reset();
+
+        let begin_index = level.addr_idx(begin_la.val(), false);
+        let end_index = level.addr_idx(end_la.val(), false);
+
+        let mut pg_end: LAddr =
+            LAddr::from(begin_la.val() | (level.page_mask() & !Level::pt().page_mask()));
+        for index in begin_index..=end_index {
+            let et = &mut self[index];
+            if level == Level::pt() {
+                let unreset = *et;
+                et.reset();
+                if index == end_index {
+                    return Ok(unreset);
                 }
             } else {
-                return Err(Error::PermissionDenied);
+                let t = et.table_mut(level, magic_num);
+                let tb = match t {
+                    Some(tb) => tb,
+                    None => return Err(Error::EntryExistent(false)),
+                };
+                if begin_index != end_index {
+                    let a;
+                    let b;
+                    if index == begin_index {
+                        a = begin_la;
+                        b = pg_end;
+                    } else if index == end_index {
+                        a = pg_end + Level::pt().page_size();
+                        b = end_la;
+                    } else {
+                        a = pg_end + Level::pt().page_size();
+                        b = pg_end + level.page_size();
+                        pg_end = b;
+                    }
+                    match tb.user_unmap(a, b, level.decrease().unwrap(), alloc, magic_num) {
+                        Ok(mut et) => {
+                            et.destroy_table(
+                                level,
+                                |table: &mut Table| {
+                                    table
+                                        .0
+                                        .iter()
+                                        .all(|&e| !e.get(level).1.contains(Attr::VALID))
+                                },
+                                alloc,
+                                magic_num,
+                            );
+                            if index == end_index {
+                                return Ok(et);
+                            }
+                        }
+                        Err(e) => return Err(e),
+                    }
+                } else {
+                    match tb.user_unmap(
+                        begin_la,
+                        end_la,
+                        level.decrease().unwrap(),
+                        alloc,
+                        magic_num,
+                    ) {
+                        Ok(mut et) => {
+                            et.destroy_table(
+                                level,
+                                |table: &mut Table| {
+                                    table
+                                        .0
+                                        .iter()
+                                        .all(|&e| !e.get(level).1.contains(Attr::VALID))
+                                },
+                                alloc,
+                                magic_num,
+                            );
+                            return Ok(et);
+                        }
+                        Err(e) => return Err(e),
+                    }
+                }
             }
-            latmp = latmp + PAGE_SIZE;
         }
-        // check unused table
-        for i in entry_set {
-            let mut et = i.0;
-            let l = i.1;
-            et.destroy_table(
-                l,
-                |table: &mut Table| table.0.iter().all(|&e| !e.get(l).1.contains(Attr::VALID)),
-                alloc_func,
-                magic_num,
-            )
-        }
-        Ok(res_pte)
+        Err(Error::RangeEmpty)
+    }
+
+    pub fn user_unmap_npages(
+        &mut self,
+        begin_la: LAddr,
+        npages: usize,
+        alloc: &impl PageAlloc,
+        magic_num: usize,
+    ) -> Result<Entry, Error> {
+        self.user_unmap(
+            begin_la,
+            begin_la + (npages - 1) * PAGE_SIZE,
+            Level::max(),
+            alloc,
+            magic_num,
+        )
     }
 }
 
@@ -560,19 +625,23 @@ mod tests {
 
         assert_eq!(
             tb.mappages(la_start, pa_start, Attr::empty(), 2, &a, 0),
-            Result::Ok(Entry::new(pa_start + 0x1000, Attr::VALID, Level::pt()))
+            Ok(Entry::new(pa_start + 0x1000, Attr::VALID, Level::pt()))
         );
 
         assert_eq!(
             tb.reprotect(la_start, 2, Attr::KERNEL_R, 0),
-            Result::Ok(Entry::new(pa_start + 0x1000, Attr::KERNEL_R, Level::pt()))
+            Ok(Entry::new(pa_start + 0x1000, Attr::KERNEL_R, Level::pt()))
         );
 
         assert_eq!(
-            tb.user_unmap(la_start + 0x1000, 1, &a, 0),
-            Result::Ok(Entry::new(pa_start + 0x1000, Attr::KERNEL_R, Level::pt()))
+            // tb.user_unmap(la_start + 0x1000, 1, &a, 0),
+            tb.user_unmap(la_start, la_start + 0x1000, Level::max(), &a, 0),
+            Ok(Entry::new(pa_start + 0x1000, Attr::KERNEL_R, Level::pt()))
         );
 
-        assert_eq!(tb.la2pa(la_start, true, 0), Result::Ok(pa_start))
+        assert_eq!(
+            tb.la2pa(la_start, true, 0),
+            Err(Error::EntryExistent(false))
+        )
     }
 }
