@@ -32,9 +32,15 @@ pub trait Entry: IntoAny {
 
 #[async_trait]
 pub trait File: Entry {
-    async fn read(&self, buffer: &mut [u8]) -> Result<usize, Error>;
+    async fn read(&self, buffer: &mut [u8]) -> Result<usize, Error> {
+        let offset = self.seek(SeekFrom::Current(0)).await?;
+        self.read_at(offset, buffer).await
+    }
 
-    async fn write(&self, buffer: &[u8]) -> Result<usize, Error>;
+    async fn write(&self, buffer: &[u8]) -> Result<usize, Error> {
+        let offset = self.seek(SeekFrom::Current(0)).await?;
+        self.write_at(offset, buffer).await
+    }
 
     async fn seek(&self, whence: SeekFrom) -> Result<usize, Error>;
 
@@ -42,7 +48,7 @@ pub trait File: Entry {
 
     async fn write_at(&self, offset: usize, buffer: &[u8]) -> Result<usize, Error>;
 
-    // fn backing_memory(&self) -> Option<Phys>;
+    async fn flush(&self) -> Result<(), Error>;
 }
 
 #[async_trait]

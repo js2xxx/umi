@@ -64,6 +64,7 @@ impl FileType {
 pub struct Metadata {
     pub ty: FileType,
     pub len: usize,
+    pub perm: Permissions,
     pub last_access: Instant,
     pub last_modified: Instant,
 }

@@ -9,8 +9,20 @@ pub struct Instant(u128);
 
 impl Instant {
     pub fn now() -> Self {
-        let raw = riscv::register::time::read64() as u128;
-        let micros = config::TIME_FREQ_M.numer() * raw / config::TIME_FREQ_M.denom();
+        // SAFETY: The raw value is valid.
+        unsafe { Self::from_raw(Self::now_raw()) }
+    }
+
+    /// Used for atomic storages.
+    pub fn now_raw() -> u64 {
+        riscv::register::time::read64()
+    }
+
+    /// # Safety
+    ///
+    /// The `raw` must be a valid value that can be transformed into an instant.
+    pub unsafe fn from_raw(raw: u64) -> Self {
+        let micros = config::TIME_FREQ_M.numer() * raw as u128 / config::TIME_FREQ_M.denom();
         Instant(micros)
     }
 

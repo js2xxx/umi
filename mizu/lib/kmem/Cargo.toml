@@ -6,6 +6,11 @@ version = "0.1.0"
 
 [dependencies]
 # Local crates
+ksc-core = {path = "../ksc-core"}
+ksync = {path = "../ksync"}
+ktime-core = {path = "../ktime-core"}
 rv39-paging = {path = "../paging"}
 # External crates
+async-trait = "0"
+spin = "0"
 static_assertions = "1"
