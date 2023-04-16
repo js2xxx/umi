@@ -532,9 +532,11 @@ name = "kmem"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "hashbrown",
  "ksc-core",
  "ksync",
  "ktime-core",
+ "rand-riscv",
  "rv39-paging",
  "spin",
  "static_assertions",

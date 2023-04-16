@@ -1,14 +1,12 @@
-use alloc::{
-    boxed::Box,
-    collections::{btree_map::Entry, BTreeMap},
-    sync::Arc,
-};
-use core::{borrow::Borrow, num::NonZeroUsize, ptr::NonNull};
+use alloc::{boxed::Box, collections::VecDeque, sync::Arc, vec::Vec};
+use core::{borrow::Borrow, mem, num::NonZeroUsize, ptr::NonNull};
 
 use async_trait::async_trait;
 use ksc_core::Error;
 use rv39_paging::{PAddr, ID_OFFSET, PAGE_SIZE};
-use spin::{Lazy, RwLock};
+use spin::{Lazy, Mutex};
+
+use crate::lru::LruCache;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Frame {
@@ -47,15 +45,20 @@ impl Borrow<PAddr> for Frame {
     }
 }
 
+pub struct FrameInfo {
+    frame: Arc<Frame>,
+    dirty: bool,
+}
+
 pub struct Frames<B> {
-    frames: RwLock<BTreeMap<usize, Arc<Frame>>>,
+    frames: Mutex<LruCache<usize, FrameInfo>>,
     backend: B,
 }
 
 impl<B> Frames<B> {
     pub fn new(backend: B) -> Self {
         Frames {
-            frames: RwLock::new(BTreeMap::new()),
+            frames: Mutex::new(LruCache::unbounded()),
             backend,
         }
     }
@@ -70,35 +73,100 @@ impl<B> Frames<B> {
 }
 
 impl<B: Backend> Frames<B> {
-    pub async fn get(&self, index: usize, writable: bool) -> Result<Arc<Frame>, Error> {
-        if let Some(frame) = ksync::critical(|| self.frames.read().get(&index).cloned()) {
+    pub async fn commit(&self, index: usize, writable: bool) -> Result<Arc<Frame>, Error> {
+        let frame = ksync::critical(|| {
+            self.frames.lock().get_mut(&index).map(|fi| {
+                if writable {
+                    fi.dirty = true;
+                }
+                fi.frame.clone()
+            })
+        });
+        if let Some(frame) = frame {
             return Ok(frame);
         }
         let frame = self.backend.commit(index, writable).await?;
-        ksync::critical(|| self.frames.write().insert(index, frame.clone()));
+        if let Some((index, fi)) = ksync::critical(|| {
+            let fi = FrameInfo {
+                frame: frame.clone(),
+                dirty: false,
+            };
+            self.frames.lock().push(index, fi)
+        }) {
+            if fi.dirty {
+                self.backend.flush(index, Some(&fi.frame)).await?;
+            }
+        }
         Ok(frame)
     }
 
-    pub async fn flush(&self, index: usize, spare: bool) -> Result<Option<Arc<Frame>>, Error> {
-        if spare {
-            if let Some(frame) = ksync::critical(|| self.frames.read().get(&index).cloned()) {
-                self.backend.flush(index, &frame).await?;
-            }
-            Ok(None)
-        } else {
-            ksync::critical(|| async {
-                let mut frames = self.frames.write();
-                if let Entry::Occupied(ent) = frames.entry(index) {
-                    match self.backend.flush(index, ent.get()).await {
-                        Ok(()) => Ok(Some(ent.remove())),
-                        Err(err) => Err(err),
-                    }
-                } else {
-                    Ok(None)
-                }
-            })
-            .await
+    pub async fn flush(&self, index: usize) -> Result<(), Error> {
+        let frame = ksync::critical(|| {
+            let mut frames = self.frames.lock();
+            let fi = frames.get_mut(&index);
+            fi.and_then(|fi| mem::replace(&mut fi.dirty, false).then(|| fi.frame.clone()))
+        });
+        if let Some(frame) = frame {
+            self.backend.flush(index, Some(&frame)).await?;
         }
+        Ok(())
+    }
+
+    pub async fn spare(&self, max_count: NonZeroUsize) -> Result<Vec<Frame>, Error> {
+        let mut ret = Vec::new();
+        let mut dirties = VecDeque::new();
+
+        ksync::critical(|| {
+            let mut frames = self.frames.lock();
+            let max_trial = frames.len();
+            let mut trial = 0;
+            while let Some((index, mut fi)) = frames.pop_lru() {
+                let frame = match Arc::try_unwrap(fi.frame) {
+                    Ok(frame) => frame,
+                    Err(frame) => {
+                        fi.frame = frame;
+                        frames.push(index, fi);
+                        continue;
+                    }
+                };
+
+                if fi.dirty {
+                    dirties.push_back((index, frame))
+                } else {
+                    ret.push(frame)
+                }
+                if ret.len() >= max_count.get() {
+                    break;
+                }
+                trial += 1;
+                if trial >= max_trial {
+                    break;
+                }
+            }
+        });
+
+        while ret.len() < max_count.get() {
+            match dirties.pop_front() {
+                Some((index, frame)) => {
+                    self.backend.flush(index, Some(&frame)).await?;
+                    ret.push(frame)
+                }
+                None => break,
+            }
+        }
+
+        ksync::critical(|| {
+            let mut frames = self.frames.lock();
+            dirties.into_iter().for_each(|(index, frame)| {
+                let fi = FrameInfo {
+                    frame: Arc::new(frame),
+                    dirty: true,
+                };
+                frames.push(index, fi);
+            })
+        });
+
+        Ok(ret)
     }
 }
 
@@ -109,16 +177,58 @@ impl Default for Frames<Zero> {
 }
 
 #[async_trait]
-pub trait Backend: 'static {
+#[allow(clippy::len_without_is_empty)]
+pub trait Backend: Send + Sync + 'static {
+    async fn len(&self) -> usize;
+
+    #[inline]
+    fn is_direct(&self) -> bool {
+        true
+    }
+
     async fn commit(&self, index: usize, writable: bool) -> Result<Arc<Frame>, Error>;
 
-    async fn flush(&self, index: usize, frame: &Frame) -> Result<(), Error>;
+    async fn flush(&self, index: usize, frame: Option<&Frame>) -> Result<(), Error>;
+
+    #[inline]
+    async fn spare(&self, max_count: NonZeroUsize) -> Result<Vec<Frame>, Error> {
+        let _ = max_count;
+        Ok(Vec::new())
+    }
+}
+
+#[async_trait]
+impl<B: Backend> Backend for Frames<B> {
+    async fn len(&self) -> usize {
+        self.backend().len().await
+    }
+
+    fn is_direct(&self) -> bool {
+        false
+    }
+
+    async fn commit(&self, index: usize, writable: bool) -> Result<Arc<Frame>, Error> {
+        self.commit(index, writable).await
+    }
+
+    async fn flush(&self, index: usize, frame: Option<&Frame>) -> Result<(), Error> {
+        assert!(frame.is_none(), "nesting LRU frames is not supported");
+        self.flush(index).await
+    }
+
+    async fn spare(&self, max_count: NonZeroUsize) -> Result<Vec<Frame>, Error> {
+        self.spare(max_count).await
+    }
 }
 
 pub struct Zero;
 
 #[async_trait]
 impl Backend for Zero {
+    async fn len(&self) -> usize {
+        0
+    }
+
     async fn commit(&self, _: usize, writable: bool) -> Result<Arc<Frame>, Error> {
         static ZERO: Lazy<Arc<Frame>> =
             Lazy::new(|| Arc::new(Frame::new().expect("zero frame init failed")));
@@ -130,7 +240,7 @@ impl Backend for Zero {
     }
 
     #[inline]
-    async fn flush(&self, _: usize, _: &Frame) -> Result<(), Error> {
+    async fn flush(&self, _: usize, _: Option<&Frame>) -> Result<(), Error> {
         Ok(())
     }
 }

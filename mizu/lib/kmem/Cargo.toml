@@ -9,8 +9,10 @@ version = "0.1.0"
 ksc-core = {path = "../ksc-core"}
 ksync = {path = "../ksync"}
 ktime-core = {path = "../ktime-core"}
+rand-riscv = {path = "../rand-riscv"}
 rv39-paging = {path = "../paging"}
 # External crates
 async-trait = "0"
+hashbrown = {version = "0", default-features = false, features = ["inline-more"]}
 spin = "0"
 static_assertions = "1"

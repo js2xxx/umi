@@ -5,6 +5,7 @@
 extern crate alloc;
 
 mod frame;
+mod lru;
 mod phys;
 mod virt;
 
