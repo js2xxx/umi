@@ -11,7 +11,9 @@ use rv39_paging::{PAGE_MASK, PAGE_SHIFT, PAGE_SIZE};
 
 use crate::{
     path::Path,
-    types::{DirEntry, Metadata, OpenOptions, Permissions, SeekFrom},
+    types::{
+        advance_slices, DirEntry, IoSlice, IoSliceMut, Metadata, OpenOptions, Permissions, SeekFrom,
+    },
 };
 
 pub trait IntoAny: Any {
@@ -37,21 +39,21 @@ pub trait Entry: IntoAny {
 
 #[async_trait]
 pub trait File {
-    async fn read(&self, buffer: &mut [u8]) -> Result<usize, Error> {
+    async fn read(&self, buffer: &mut [IoSliceMut]) -> Result<usize, Error> {
         let offset = self.seek(SeekFrom::Current(0)).await?;
         self.read_at(offset, buffer).await
     }
 
-    async fn write(&self, buffer: &[u8]) -> Result<usize, Error> {
+    async fn write(&self, buffer: &mut [IoSlice]) -> Result<usize, Error> {
         let offset = self.seek(SeekFrom::Current(0)).await?;
         self.write_at(offset, buffer).await
     }
 
     async fn seek(&self, whence: SeekFrom) -> Result<usize, Error>;
 
-    async fn read_at(&self, offset: usize, buffer: &mut [u8]) -> Result<usize, Error>;
+    async fn read_at(&self, offset: usize, buffer: &mut [IoSliceMut]) -> Result<usize, Error>;
 
-    async fn write_at(&self, offset: usize, buffer: &[u8]) -> Result<usize, Error>;
+    async fn write_at(&self, offset: usize, buffer: &mut [IoSlice]) -> Result<usize, Error>;
 
     async fn flush(&self) -> Result<(), Error>;
 }
@@ -113,7 +115,7 @@ impl<B: Backend> File for Seeked<B> {
         Ok(pos)
     }
 
-    async fn read_at(&self, offset: usize, buffer: &mut [u8]) -> Result<usize, Error> {
+    async fn read_at(&self, offset: usize, mut buffer: &mut [IoSliceMut]) -> Result<usize, Error> {
         let (start, end) = (offset, offset.checked_add(buffer.len()).ok_or(EINVAL)?);
         if start == end {
             return Ok(0);
@@ -124,30 +126,38 @@ impl<B: Backend> File for Seeked<B> {
         if start_page == end_page {
             let frame = self.backend.commit(start_page, false).await?;
 
-            Ok(copy_from_frame(buffer, &frame, start_offset, end_offset))
+            Ok(copy_from_frame(
+                &mut buffer,
+                &frame,
+                start_offset,
+                end_offset,
+            ))
         } else {
-            let (start, mid) = buffer.split_at_mut(PAGE_SIZE - start_offset);
-            let (mid, end) = mid.split_at_mut((end_page - start_page - 1) << PAGE_SHIFT);
-
             let mut read_len = 0;
             {
                 let frame = self.backend.commit(start_page, false).await?;
-                read_len += copy_from_frame(start, &frame, start_offset, PAGE_SIZE);
+                read_len += copy_from_frame(&mut buffer, &frame, start_offset, PAGE_SIZE);
+                if buffer.is_empty() {
+                    return Ok(read_len);
+                }
             }
-            for (index, buffer) in ((start_page + 1)..end_page).zip(mid.chunks_mut(PAGE_SIZE)) {
+            for index in (start_page + 1)..end_page {
                 let frame = self.backend.commit(index, false).await?;
-                read_len += copy_from_frame(buffer, &frame, 0, PAGE_SIZE);
+                read_len += copy_from_frame(&mut buffer, &frame, 0, PAGE_SIZE);
+                if buffer.is_empty() {
+                    return Ok(read_len);
+                }
             }
             {
                 let frame = self.backend.commit(end_page, false).await?;
-                read_len += copy_from_frame(end, &frame, 0, end_offset);
+                read_len += copy_from_frame(&mut buffer, &frame, 0, end_offset);
             }
 
             Ok(read_len)
         }
     }
 
-    async fn write_at(&self, offset: usize, buffer: &[u8]) -> Result<usize, Error> {
+    async fn write_at(&self, offset: usize, mut buffer: &mut [IoSlice]) -> Result<usize, Error> {
         let (start, end) = (offset, offset.checked_add(buffer.len()).ok_or(EINVAL)?);
         if start == end {
             return Ok(0);
@@ -158,31 +168,34 @@ impl<B: Backend> File for Seeked<B> {
         if start_page == end_page {
             let frame = self.backend.commit(start_page, true).await?;
 
-            Ok(copy_to_frame(buffer, &frame, start_offset, end_offset))
+            Ok(copy_to_frame(&mut buffer, &frame, start_offset, end_offset))
         } else {
-            let (start, mid) = buffer.split_at(PAGE_SIZE - start_offset);
-            let (mid, end) = mid.split_at((end_page - start_page - 1) << PAGE_SHIFT);
-
             let mut written_len = 0;
             {
                 let frame = self.backend.commit(start_page, true).await?;
-                let len = copy_to_frame(start, &frame, start_offset, PAGE_SIZE);
+                let len = copy_to_frame(&mut buffer, &frame, start_offset, PAGE_SIZE);
                 if self.backend.is_direct() {
                     self.backend.flush(start_page, Some(&frame)).await?;
                 }
                 written_len += len;
+                if buffer.is_empty() {
+                    return Ok(written_len);
+                }
             }
-            for (index, buffer) in ((start_page + 1)..end_page).zip(mid.chunks(PAGE_SIZE)) {
+            for index in (start_page + 1)..end_page {
                 let frame = self.backend.commit(index, true).await?;
-                let len = copy_to_frame(buffer, &frame, 0, PAGE_SIZE);
+                let len = copy_to_frame(&mut buffer, &frame, 0, PAGE_SIZE);
                 if self.backend.is_direct() {
                     self.backend.flush(start_page, Some(&frame)).await?;
                 }
                 written_len += len;
+                if buffer.is_empty() {
+                    return Ok(written_len);
+                }
             }
             {
                 let frame = self.backend.commit(end_page, true).await?;
-                let len = copy_to_frame(end, &frame, 0, end_offset);
+                let len = copy_to_frame(&mut buffer, &frame, 0, end_offset);
                 if self.backend.is_direct() {
                     self.backend.flush(start_page, Some(&frame)).await?;
                 }
@@ -223,18 +236,48 @@ fn offsets(start: usize, end: usize) -> ((usize, usize), (usize, usize)) {
     ((start_page, start_offset), (end_page, end_offset))
 }
 
-fn copy_from_frame(buffer: &mut [u8], frame: &Frame, start: usize, end: usize) -> usize {
-    unsafe {
-        let src = frame.as_ptr();
-        buffer.copy_from_slice(&src.as_ref()[start..end]);
+fn copy_from_frame(
+    buffer: &mut &mut [IoSliceMut],
+    frame: &Frame,
+    mut start: usize,
+    end: usize,
+) -> usize {
+    let mut read_len = 0;
+    loop {
+        let buf = &mut buffer[0];
+        let len = buf.len().min(end - start);
+        if len == 0 {
+            break read_len;
+        }
+        unsafe {
+            let src = frame.as_ptr();
+            buf[..len].copy_from_slice(&src.as_ref()[start..][..len]);
+        }
+        read_len += len;
+        start += len;
+        advance_slices(buffer, len);
     }
-    end - start
 }
 
-fn copy_to_frame(buffer: &[u8], frame: &Frame, start: usize, end: usize) -> usize {
-    unsafe {
-        let mut src = frame.as_ptr();
-        src.as_mut()[start..end].copy_from_slice(buffer);
+fn copy_to_frame(
+    buffer: &mut &mut [IoSlice],
+    frame: &Frame,
+    mut start: usize,
+    end: usize,
+) -> usize {
+    let mut written_len = 0;
+    loop {
+        let buf = buffer[0];
+        let len = buf.len().min(end - start);
+        if len == 0 {
+            break written_len;
+        }
+        unsafe {
+            let mut src = frame.as_ptr();
+            src.as_mut()[start..][..len].copy_from_slice(&buf[..len])
+        }
+        written_len += len;
+        start += len;
+        advance_slices(buffer, len);
     }
-    end - start
 }

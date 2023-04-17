@@ -1,4 +1,5 @@
 use alloc::string::String;
+use core::{mem, slice};
 
 use bitflags::bitflags;
 use ktime_core::Instant;
@@ -98,3 +99,63 @@ pub enum SeekFrom {
 pub type IoSlice<'a> = &'a [u8];
 
 pub type IoSliceMut<'a> = &'a mut [u8];
+
+#[allow(clippy::len_without_is_empty)]
+pub trait IoSliceExt {
+    fn len(&self) -> usize;
+
+    fn advance(&mut self, n: usize);
+}
+
+impl IoSliceExt for IoSlice<'_> {
+    fn len(&self) -> usize {
+        (**self).len()
+    }
+
+    fn advance(&mut self, n: usize) {
+        if self.len() < n {
+            panic!("advancing IoSlice beyond its length");
+        }
+
+        *self = &self[n..];
+    }
+}
+
+impl IoSliceExt for IoSliceMut<'_> {
+    fn len(&self) -> usize {
+        (**self).len()
+    }
+
+    fn advance(&mut self, n: usize) {
+        if self.len() < n {
+            panic!("advancing IoSlice beyond its length");
+        }
+
+        *self = unsafe { slice::from_raw_parts_mut(self.as_mut_ptr().add(n), self.len() - n) };
+    }
+}
+
+pub fn advance_slices(bufs: &mut &mut [impl IoSliceExt], n: usize) {
+    // Number of buffers to remove.
+    let mut remove = 0;
+    // Total length of all the to be removed buffers.
+    let mut accumulated_len = 0;
+    for buf in bufs.iter() {
+        if accumulated_len + buf.len() > n {
+            break;
+        } else {
+            accumulated_len += buf.len();
+            remove += 1;
+        }
+    }
+
+    *bufs = &mut mem::take(bufs)[remove..];
+    if bufs.is_empty() {
+        assert!(
+            n == accumulated_len,
+            "advancing io slices beyond their length"
+        );
+    } else {
+        bufs[0].advance(n - accumulated_len)
+    }
+}
