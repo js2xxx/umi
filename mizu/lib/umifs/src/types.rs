@@ -61,13 +61,29 @@ impl FileType {
     }
 }
 
+impl Permissions {
+    pub fn all_same(readable: bool, writable: bool, executable: bool) -> Self {
+        let mut ret = Permissions::empty();
+        if readable {
+            ret |= Permissions::SELF_R | Permissions::GROUP_R | Permissions::OTHERS_R;
+        }
+        if writable {
+            ret |= Permissions::SELF_W | Permissions::GROUP_W | Permissions::OTHERS_W;
+        }
+        if executable {
+            ret |= Permissions::SELF_X | Permissions::GROUP_X | Permissions::OTHERS_X;
+        }
+        ret
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Metadata {
     pub ty: FileType,
     pub len: usize,
     pub perm: Permissions,
-    pub last_access: Instant,
-    pub last_modified: Instant,
+    pub last_access: Option<Instant>,
+    pub last_modified: Option<Instant>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]

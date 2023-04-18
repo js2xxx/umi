@@ -9,7 +9,6 @@ test = []
 
 [dependencies]
 # Local crates
-kmem = {path = "../kmem"}
 ksc-core = {path = "../ksc-core"}
 ktime-core = {path = "../ktime-core"}
 rv39-paging = {path = "../paging"}

@@ -11,8 +11,10 @@ ksync = {path = "../ksync"}
 ktime-core = {path = "../ktime-core"}
 rand-riscv = {path = "../rand-riscv"}
 rv39-paging = {path = "../paging"}
+umifs = {path = "../umifs"}
 # External crates
 async-trait = "0"
+futures-util = {version = "0", default-features = false, features = ["alloc"]}
 hashbrown = {version = "0", default-features = false, features = ["inline-more"]}
 spin = "0"
 static_assertions = "1"

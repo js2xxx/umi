@@ -532,6 +532,7 @@ name = "kmem"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "futures-util",
  "hashbrown",
  "ksc-core",
  "ksync",
@@ -540,6 +541,7 @@ dependencies = [
  "rv39-paging",
  "spin",
  "static_assertions",
+ "umifs",
 ]
 
 [[package]]
@@ -1061,7 +1063,6 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "bitflags 2.1.0",
- "kmem",
  "ksc-core",
  "ktime-core",
  "rv39-paging",

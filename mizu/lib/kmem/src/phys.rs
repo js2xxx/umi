@@ -1,10 +1,21 @@
 use alloc::{boxed::Box, collections::VecDeque, sync::Arc, vec::Vec};
-use core::{borrow::Borrow, mem, num::NonZeroUsize, ptr::NonNull};
+use core::{
+    borrow::Borrow,
+    mem,
+    num::NonZeroUsize,
+    ptr::NonNull,
+    sync::atomic::{AtomicUsize, Ordering::SeqCst},
+};
 
 use async_trait::async_trait;
-use ksc_core::Error;
-use rv39_paging::{PAddr, ID_OFFSET, PAGE_SIZE};
+use futures_util::future::try_join_all;
+use ksc_core::Error::{self, EINVAL};
+use rv39_paging::{PAddr, ID_OFFSET, PAGE_MASK, PAGE_SHIFT, PAGE_SIZE};
 use spin::{Lazy, Mutex};
+use umifs::{
+    traits::File,
+    types::{advance_slices, IoSlice, IoSliceMut, SeekFrom}, misc::Zero,
+};
 
 use crate::lru::LruCache;
 
@@ -52,19 +63,21 @@ pub struct FrameInfo {
 
 pub struct Frames<B> {
     frames: Mutex<LruCache<usize, FrameInfo>>,
+    position: AtomicUsize,
     backend: B,
 }
 
 impl<B> Frames<B> {
-    pub fn new(backend: B) -> Self {
+    pub fn new(backend: B, initial_pos: usize) -> Self {
         Frames {
             frames: Mutex::new(LruCache::unbounded()),
+            position: initial_pos.into(),
             backend,
         }
     }
 
     pub fn new_anon() -> Frames<Zero> {
-        Frames::new(Zero)
+        Frames::new(Zero, 0)
     }
 
     pub fn backend(&self) -> &B {
@@ -94,7 +107,7 @@ impl<B: Backend> Frames<B> {
             self.frames.lock().push(index, fi)
         }) {
             if fi.dirty {
-                self.backend.flush(index, Some(&fi.frame)).await?;
+                self.backend.flush(index, &fi.frame).await?;
             }
         }
         Ok(frame)
@@ -107,7 +120,7 @@ impl<B: Backend> Frames<B> {
             fi.and_then(|fi| mem::replace(&mut fi.dirty, false).then(|| fi.frame.clone()))
         });
         if let Some(frame) = frame {
-            self.backend.flush(index, Some(&frame)).await?;
+            self.backend.flush(index, &frame).await?;
         }
         Ok(())
     }
@@ -148,7 +161,7 @@ impl<B: Backend> Frames<B> {
         while ret.len() < max_count.get() {
             match dirties.pop_front() {
                 Some((index, frame)) => {
-                    self.backend.flush(index, Some(&frame)).await?;
+                    self.backend.flush(index, &frame).await?;
                     ret.push(frame)
                 }
                 None => break,
@@ -181,47 +194,10 @@ impl Default for Frames<Zero> {
 pub trait Backend: Send + Sync + 'static {
     async fn len(&self) -> usize;
 
-    #[inline]
-    fn is_direct(&self) -> bool {
-        true
-    }
-
     async fn commit(&self, index: usize, writable: bool) -> Result<Arc<Frame>, Error>;
 
-    async fn flush(&self, index: usize, frame: Option<&Frame>) -> Result<(), Error>;
-
-    #[inline]
-    async fn spare(&self, max_count: NonZeroUsize) -> Result<Vec<Frame>, Error> {
-        let _ = max_count;
-        Ok(Vec::new())
-    }
+    async fn flush(&self, index: usize, frame: &Frame) -> Result<(), Error>;
 }
-
-#[async_trait]
-impl<B: Backend> Backend for Frames<B> {
-    async fn len(&self) -> usize {
-        self.backend().len().await
-    }
-
-    fn is_direct(&self) -> bool {
-        false
-    }
-
-    async fn commit(&self, index: usize, writable: bool) -> Result<Arc<Frame>, Error> {
-        self.commit(index, writable).await
-    }
-
-    async fn flush(&self, index: usize, frame: Option<&Frame>) -> Result<(), Error> {
-        assert!(frame.is_none(), "nesting LRU frames is not supported");
-        self.flush(index).await
-    }
-
-    async fn spare(&self, max_count: NonZeroUsize) -> Result<Vec<Frame>, Error> {
-        self.spare(max_count).await
-    }
-}
-
-pub struct Zero;
 
 #[async_trait]
 impl Backend for Zero {
@@ -240,7 +216,178 @@ impl Backend for Zero {
     }
 
     #[inline]
-    async fn flush(&self, _: usize, _: Option<&Frame>) -> Result<(), Error> {
+    async fn flush(&self, _: usize, _: &Frame) -> Result<(), Error> {
         Ok(())
+    }
+}
+
+#[async_trait]
+impl<B: Backend> File for Frames<B> {
+    async fn seek(&self, whence: SeekFrom) -> Result<usize, Error> {
+        let pos = match whence {
+            SeekFrom::Start(pos) => pos,
+            SeekFrom::End(pos) => {
+                let pos = pos.checked_add(self.backend.len().await.try_into()?);
+                pos.ok_or(EINVAL)?.try_into()?
+            }
+            SeekFrom::Current(pos) => {
+                let pos = pos.checked_add(self.position.load(SeqCst).try_into()?);
+                pos.ok_or(EINVAL)?.try_into()?
+            }
+        };
+        self.position.store(pos, SeqCst);
+        Ok(pos)
+    }
+
+    async fn read_at(&self, offset: usize, mut buffer: &mut [IoSliceMut]) -> Result<usize, Error> {
+        let (start, end) = (offset, offset.checked_add(buffer.len()).ok_or(EINVAL)?);
+        if start == end {
+            return Ok(0);
+        }
+
+        let ((start_page, start_offset), (end_page, end_offset)) = offsets(start, end);
+
+        if start_page == end_page {
+            let frame = self.commit(start_page, false).await?;
+
+            Ok(copy_from_frame(
+                &mut buffer,
+                &frame,
+                start_offset,
+                end_offset,
+            ))
+        } else {
+            let mut read_len = 0;
+            {
+                let frame = self.commit(start_page, false).await?;
+                read_len += copy_from_frame(&mut buffer, &frame, start_offset, PAGE_SIZE);
+                if buffer.is_empty() {
+                    return Ok(read_len);
+                }
+            }
+            for index in (start_page + 1)..end_page {
+                let frame = self.commit(index, false).await?;
+                read_len += copy_from_frame(&mut buffer, &frame, 0, PAGE_SIZE);
+                if buffer.is_empty() {
+                    return Ok(read_len);
+                }
+            }
+            {
+                let frame = self.commit(end_page, false).await?;
+                read_len += copy_from_frame(&mut buffer, &frame, 0, end_offset);
+            }
+
+            Ok(read_len)
+        }
+    }
+
+    async fn write_at(&self, offset: usize, mut buffer: &mut [IoSlice]) -> Result<usize, Error> {
+        let (start, end) = (offset, offset.checked_add(buffer.len()).ok_or(EINVAL)?);
+        if start == end {
+            return Ok(0);
+        }
+
+        let ((start_page, start_offset), (end_page, end_offset)) = offsets(start, end);
+
+        if start_page == end_page {
+            let frame = self.commit(start_page, true).await?;
+
+            Ok(copy_to_frame(&mut buffer, &frame, start_offset, end_offset))
+        } else {
+            let mut written_len = 0;
+            {
+                let frame = self.commit(start_page, true).await?;
+                let len = copy_to_frame(&mut buffer, &frame, start_offset, PAGE_SIZE);
+                written_len += len;
+                if buffer.is_empty() {
+                    return Ok(written_len);
+                }
+            }
+            for index in (start_page + 1)..end_page {
+                let frame = self.commit(index, true).await?;
+                let len = copy_to_frame(&mut buffer, &frame, 0, PAGE_SIZE);
+                written_len += len;
+                if buffer.is_empty() {
+                    return Ok(written_len);
+                }
+            }
+            {
+                let frame = self.commit(end_page, true).await?;
+                let len = copy_to_frame(&mut buffer, &frame, 0, end_offset);
+                written_len += len;
+            }
+
+            Ok(written_len)
+        }
+    }
+
+    async fn flush(&self) -> Result<(), Error> {
+        let len = self.backend.len().await;
+        let count = (len + PAGE_MASK) >> PAGE_SHIFT;
+        try_join_all((0..count).map(|index| self.flush(index))).await?;
+        Ok(())
+    }
+}
+
+fn offsets(start: usize, end: usize) -> ((usize, usize), (usize, usize)) {
+    let start_page = start >> PAGE_SHIFT;
+    let start_offset = start - (start_page << PAGE_SHIFT);
+
+    let (end_page, end_offset) = {
+        let end_page = end >> PAGE_SHIFT;
+        let end_offset = end - (end_page << PAGE_SHIFT);
+        if end_offset == 0 {
+            (end_page - 1, PAGE_SIZE)
+        } else {
+            (end_page, end_offset)
+        }
+    };
+
+    ((start_page, start_offset), (end_page, end_offset))
+}
+
+fn copy_from_frame(
+    buffer: &mut &mut [IoSliceMut],
+    frame: &Frame,
+    mut start: usize,
+    end: usize,
+) -> usize {
+    let mut read_len = 0;
+    loop {
+        let buf = &mut buffer[0];
+        let len = buf.len().min(end - start);
+        if len == 0 {
+            break read_len;
+        }
+        unsafe {
+            let src = frame.as_ptr();
+            buf[..len].copy_from_slice(&src.as_ref()[start..][..len]);
+        }
+        read_len += len;
+        start += len;
+        advance_slices(buffer, len);
+    }
+}
+
+fn copy_to_frame(
+    buffer: &mut &mut [IoSlice],
+    frame: &Frame,
+    mut start: usize,
+    end: usize,
+) -> usize {
+    let mut written_len = 0;
+    loop {
+        let buf = buffer[0];
+        let len = buf.len().min(end - start);
+        if len == 0 {
+            break written_len;
+        }
+        unsafe {
+            let mut src = frame.as_ptr();
+            src.as_mut()[start..][..len].copy_from_slice(&buf[..len])
+        }
+        written_len += len;
+        start += len;
+        advance_slices(buffer, len);
     }
 }
