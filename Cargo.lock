@@ -537,8 +537,10 @@ dependencies = [
  "ksc-core",
  "ksync",
  "ktime-core",
+ "log",
  "rand-riscv",
  "rv39-paging",
+ "scoped_threadpool",
  "spin",
  "static_assertions",
  "umifs",
@@ -934,6 +936,12 @@ dependencies = [
 name = "scoped-tls"
 version = "1.0.1"
 source = "git+https://github.com/js2xxx/scoped-tls?branch=no_std#0f3a84e21cbb6591a6a41efa307e44f7693145dd"
+
+[[package]]
+name = "scoped_threadpool"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d51f5df5af43ab3f1360b429fa5e0152ac5ce8c0bd6485cae490332e96846a8"
 
 [[package]]
 name = "scopeguard"

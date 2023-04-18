@@ -184,6 +184,18 @@ impl<B: Backend> Phys<B> {
     }
 }
 
+impl<B> Drop for Phys<B> {
+    fn drop(&mut self) {
+        let cache = self.frames.get_mut();
+        if cache.iter().any(|(_, fi)| fi.dirty) {
+            log::warn!(
+                r"Physical memory may have not been flushed into its backend. 
+Use `spare(NonZeroUsize::MAX)` to explicit flush all the data."
+            );
+        }
+    }
+}
+
 impl Default for Phys<Zero> {
     fn default() -> Self {
         Self::new_anon()

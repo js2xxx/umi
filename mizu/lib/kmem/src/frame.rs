@@ -180,3 +180,20 @@ pub fn frames() -> &'static Arena {
 pub unsafe fn init_frames(range: Range<LAddr>) {
     FRAMES = Some(Arena::new(range))
 }
+
+#[cfg(test)]
+#[allow(dead_code)]
+pub fn init_frames_for_test() {
+    use std::sync::Once;
+
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        #[repr(align(4096))]
+        struct Memory([u8; PAGE_SIZE * 20]);
+
+        let memory = Box::leak(Box::new(Memory([0; PAGE_SIZE * 20])));
+        let range = memory.0.as_mut_ptr_range();
+        // SAFETY: THe function is wrapped in `Once`.
+        unsafe { init_frames(range.start.into()..range.end.into()) }
+    })
+}

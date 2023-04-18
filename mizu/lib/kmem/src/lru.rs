@@ -1237,7 +1237,7 @@ impl<K: Hash + Eq, V> IntoIterator for LruCache<K, V> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "test"))]
 mod tests {
     use core::{fmt::Debug, num::NonZeroUsize};
     use std::sync::atomic::{AtomicUsize, Ordering};

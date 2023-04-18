@@ -4,6 +4,9 @@ license = "MIT OR Apache-2.0"
 name = "kmem"
 version = "0.1.0"
 
+[features]
+test = ["dep:scoped_threadpool"]
+
 [dependencies]
 # Local crates
 ksc-core = {path = "../ksc-core"}
@@ -16,5 +19,7 @@ umifs = {path = "../umifs"}
 async-trait = "0"
 futures-util = {version = "0", default-features = false, features = ["alloc"]}
 hashbrown = {version = "0", default-features = false, features = ["inline-more"]}
+log = "0"
+scoped_threadpool = {version = "0", optional = true}
 spin = "0"
 static_assertions = "1"
