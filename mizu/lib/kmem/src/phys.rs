@@ -13,8 +13,9 @@ use ksc_core::Error::{self, EINVAL};
 use rv39_paging::{PAddr, ID_OFFSET, PAGE_MASK, PAGE_SHIFT, PAGE_SIZE};
 use spin::{Lazy, Mutex};
 use umifs::{
+    misc::Zero,
     traits::File,
-    types::{advance_slices, IoSlice, IoSliceMut, SeekFrom}, misc::Zero,
+    types::{advance_slices, IoSlice, IoSliceMut, SeekFrom},
 };
 
 use crate::lru::LruCache;
@@ -61,23 +62,23 @@ pub struct FrameInfo {
     dirty: bool,
 }
 
-pub struct Frames<B> {
+pub struct Phys<B> {
     frames: Mutex<LruCache<usize, FrameInfo>>,
     position: AtomicUsize,
     backend: B,
 }
 
-impl<B> Frames<B> {
+impl<B> Phys<B> {
     pub fn new(backend: B, initial_pos: usize) -> Self {
-        Frames {
+        Phys {
             frames: Mutex::new(LruCache::unbounded()),
             position: initial_pos.into(),
             backend,
         }
     }
 
-    pub fn new_anon() -> Frames<Zero> {
-        Frames::new(Zero, 0)
+    pub fn new_anon() -> Phys<Zero> {
+        Phys::new(Zero, 0)
     }
 
     pub fn backend(&self) -> &B {
@@ -85,7 +86,7 @@ impl<B> Frames<B> {
     }
 }
 
-impl<B: Backend> Frames<B> {
+impl<B: Backend> Phys<B> {
     pub async fn commit(&self, index: usize, writable: bool) -> Result<Arc<Frame>, Error> {
         let frame = ksync::critical(|| {
             self.frames.lock().get_mut(&index).map(|fi| {
@@ -183,7 +184,7 @@ impl<B: Backend> Frames<B> {
     }
 }
 
-impl Default for Frames<Zero> {
+impl Default for Phys<Zero> {
     fn default() -> Self {
         Self::new_anon()
     }
@@ -222,7 +223,7 @@ impl Backend for Zero {
 }
 
 #[async_trait]
-impl<B: Backend> File for Frames<B> {
+impl<B: Backend> File for Phys<B> {
     async fn seek(&self, whence: SeekFrom) -> Result<usize, Error> {
         let pos = match whence {
             SeekFrom::Start(pos) => pos,
