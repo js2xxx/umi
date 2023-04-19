@@ -61,6 +61,17 @@ impl<H: VirtioHal + Send + Sync + 'static> VirtioBlock<H> {
         })
     }
 
+    pub fn ack_interrupt(&self) {
+        let used = ksync::critical(|| {
+            let mut blk = self.inner.device.lock();
+            blk.ack_interrupt();
+            blk.peek_used()
+        });
+        if let Some(used) = used {
+            self.inner.event[used as usize].notify_additional(1);
+        }
+    }
+
     pub fn capacity_blocks(&self) -> u64 {
         unsafe { (*self.inner.device.data_ptr()).capacity() }
     }

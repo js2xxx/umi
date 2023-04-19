@@ -45,7 +45,12 @@ pub fn is_bsp() -> bool {
 #[cfg(not(feature = "test"))]
 #[no_mangle]
 unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
-    use core::sync::atomic::{AtomicBool, Ordering::Release};
+    use core::{
+        mem,
+        sync::atomic::{AtomicBool, Ordering::Release},
+    };
+
+    use config::VIRT_END;
 
     static GLOBAL_INIT: AtomicBool = AtomicBool::new(false);
 
@@ -58,6 +63,8 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
 
         static mut _sheap: u32;
         static mut _eheap: u32;
+
+        static _end: u8;
     }
 
     if !GLOBAL_INIT.load(Relaxed) {
@@ -71,11 +78,11 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
     // Initialize TLS
     // SAFETY: `tp` is initialized in the `_start` function
     unsafe {
-        let tp: usize;
+        let tp: *mut u32;
         asm!("mv {0}, tp", out(reg) tp);
 
-        let dst = tp as *mut u32;
-        dst.copy_from_nonoverlapping(&_stdata, (&_tdata_size) as *const u32 as usize);
+        let len = (&_tdata_size) as *const u32 as usize;
+        tp.copy_from_nonoverlapping(&_stdata, len / mem::size_of::<u32>());
         HART_ID = hartid;
     }
 
@@ -91,6 +98,12 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
 
         // Init the kernel heap.
         unsafe { kalloc::init(&mut _sheap, &mut _eheap) };
+
+        // Init the frame allocator.
+        unsafe {
+            let range = (&_end as *const u8).into()..VIRT_END.into();
+            kmem::init_frames(range)
+        }
     }
 
     crate::main(payload)

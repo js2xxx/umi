@@ -21,6 +21,7 @@ co-trap = {path = "../lib/co-trap"}
 config = {path = "../lib/config", default-features = false}
 kalloc = {path = "../lib/kalloc"}
 klog = {path = "../lib/klog"}
+kmem = {path = "../lib/kmem"}
 ksc = {path = "../lib/ksc"}
 ksync = {path = "../lib/ksync"}
 ktime = {path = "../lib/ktime"}

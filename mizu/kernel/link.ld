@@ -26,8 +26,9 @@ SECTIONS
         _sdata = .;
         PROVIDE(__global_pointer$ = . + 2K);
         *(.sdata*);
-        *(.data*)
-        _edata = ALIGN(0x10);
+        *(.data*);
+        . = ALIGN(0x10);
+        _edata = .;
     } >VIRT AT>RAM :data
 
     .tdata : ALIGN(0x10)
@@ -35,7 +36,8 @@ SECTIONS
         _stdata = .;
         *(.tdata*)
         *(.tbss*);
-        _etdata = ALIGN(0x10);
+        . = ALIGN(0x10);
+        _etdata = .;
         _tdata_size = _etdata - _stdata;
     } >VIRT AT>RAM :data :tls
 
@@ -44,13 +46,15 @@ SECTIONS
         _sbss = .;
         *(.sbss*);
         *(.bss*);
-        _ebss = ALIGN(0x10);
+        . = ALIGN(0x10);
+        _ebss = .;
 
-        _sstack = ALIGN(4K);
+        . = ALIGN(4K);
+        _sstack = .;
         . += _stack_size * %MAX_HARTS%;
         _estack = .;
 
-        _sheap = ALIGN(4K);
+        _sheap = .;
         . += _heap_size;
         _eheap = .;
     } >VIRT AT>RAM
@@ -61,6 +65,9 @@ SECTIONS
         . += _tdata_size * %MAX_HARTS%;
         _etp = .;
     } >VIRT AT>RAM
+
+    . = ALIGN(4K);
+    _end = .;
 
     .eh_frame (INFO) : { KEEP(*(.eh_frame)) }
     .eh_frame_hdr (INFO) : { *(.eh_frame_hdr) }
@@ -78,8 +85,8 @@ PHDRS
 
 MEMORY
 {
-    VIRT : ORIGIN = %KERNEL_START%, LENGTH = 128M
-    RAM : ORIGIN = %KERNEL_START_PHYS%, LENGTH = 128M
+    VIRT : ORIGIN = %VIRT_START%, LENGTH = %RAM_SIZE%
+    RAM : ORIGIN = %RAM_START%, LENGTH = %RAM_SIZE%
 }
 
 PROVIDE(_heap_size = 24M);

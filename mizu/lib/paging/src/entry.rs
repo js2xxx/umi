@@ -402,9 +402,7 @@ impl Table {
                 Ok(e) => e,
                 Err(e) => {
                     // ignore the last one, which may be 2kB at most.
-                    if let Err(er) = self.user_unmap_npages(la, i, alloc_func, id_offset) {
-                        return Err(er);
-                    }
+                    let _ = self.user_unmap_npages(la, i, alloc_func, id_offset);
                     return Err(e);
                 }
             };

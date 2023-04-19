@@ -5,4 +5,7 @@ mod logger;
 
 pub use ksync_core::critical;
 
-pub use self::{imp::Stdout, logger::init as init_logger};
+pub use self::{
+    imp::{stdout, Stdout},
+    logger::init as init_logger,
+};
