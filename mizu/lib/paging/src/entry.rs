@@ -1,6 +1,5 @@
-extern crate alloc;
-use alloc::collections::BTreeSet;
 use core::{
+    alloc::Layout,
     fmt,
     ops::{Deref, DerefMut},
 };
@@ -102,6 +101,8 @@ pub struct Entry(usize);
 const_assert!(core::mem::size_of::<Entry>() == 1 << ENTRY_SIZE_SHIFT);
 
 impl Entry {
+    pub const UNSET: Entry = Entry(0);
+
     // get entry's pa (no offset) and its attribute
     #[inline]
     pub const fn get(self, level: Level) -> (PAddr, Attr) {
@@ -119,9 +120,13 @@ impl Entry {
         Self(((*addr & level.paddr_mask()) >> 2) | attr.bits())
     }
 
+    pub fn is_set(&self) -> bool {
+        self.get(Level::pt()).1.contains(Attr::VALID)
+    }
+
     #[inline]
     pub fn reset(&mut self) {
-        *self = Entry(0);
+        *self = Entry::UNSET;
     }
 
     pub fn table(&self, level: Level, id_offset: usize) -> Option<&Table> {
@@ -259,32 +264,25 @@ impl const Default for Entry {
 pub struct Table([Entry; NR_ENTRIES]);
 const_assert!(core::mem::size_of::<Table>() == crate::PAGE_SIZE);
 
+pub const PAGE_LAYOUT: Layout = Layout::new::<Table>();
+
 impl Table {
     pub const fn new() -> Self {
         Table([Default::default(); NR_ENTRIES])
     }
 
-    pub fn la2pte(
-        &mut self,
-        la: LAddr,
-        id_offset: usize,
-    ) -> (Result<&mut Entry, Error>, BTreeSet<(Entry, Level)>) {
-        let mut touch_mark: BTreeSet<(Entry, Level)> = BTreeSet::new();
+    pub fn la2pte(&mut self, la: LAddr, id_offset: usize) -> Result<&mut Entry, Error> {
         let mut pte: &mut Entry;
         let mut t: &mut Table = self;
         for l in (1..=2u8).rev() {
             let level = Level::new(l);
             pte = &mut t[level.addr_idx(la.val(), false)];
-            touch_mark.insert((*pte, level));
             t = match pte.table_mut(level, id_offset) {
-                None => return (Err(Error::EntryExistent(false)), touch_mark),
+                None => return Err(Error::EntryExistent(false)),
                 Some(tb) => tb,
             };
         }
-        (
-            Ok(&mut t[Level::pt().addr_idx(la.val(), false)]),
-            touch_mark,
-        )
+        Ok(&mut t[Level::pt().addr_idx(la.val(), false)])
     }
 
     pub fn la2pte_alloc(
@@ -322,7 +320,7 @@ impl Table {
         if la.val() >= BLANK_BEGIN && la.val() <= BLANK_END {
             return Err(Error::PermissionDenied);
         }
-        let pte: Entry = match self.la2pte(la, id_offset).0 {
+        let pte: Entry = match self.la2pte(la, id_offset) {
             Ok(et) => *et,
             Err(e) => return Err(e),
         };
@@ -355,7 +353,7 @@ impl Table {
         let mut latmp = la;
         let mut pte = &mut Entry(0);
         for _ in 0..npages {
-            pte = match self.la2pte(latmp, id_offset).0 {
+            pte = match self.la2pte(latmp, id_offset) {
                 Err(e) => return Err(e),
                 Ok(et) => et,
             };

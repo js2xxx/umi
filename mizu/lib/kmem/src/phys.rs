@@ -10,6 +10,7 @@ use core::{
 use async_trait::async_trait;
 use futures_util::future::try_join_all;
 use ksc_core::Error::{self, EINVAL};
+use rand_riscv::RandomState;
 use rv39_paging::{PAddr, ID_OFFSET, PAGE_MASK, PAGE_SHIFT, PAGE_SIZE};
 use spin::{Lazy, Mutex};
 use umifs::{
@@ -39,6 +40,10 @@ impl Frame {
         })
     }
 
+    pub fn base(&self) -> PAddr {
+        self.base
+    }
+
     pub fn as_ptr(&self) -> NonNull<[u8]> {
         NonNull::slice_from_raw_parts(self.ptr, PAGE_SIZE)
     }
@@ -62,31 +67,33 @@ pub struct FrameInfo {
     dirty: bool,
 }
 
-pub struct Phys<B> {
+pub struct Phys {
     frames: Mutex<LruCache<usize, FrameInfo>>,
     position: AtomicUsize,
-    backend: B,
+    backend: Arc<dyn Backend>,
 }
 
-impl<B> Phys<B> {
-    pub fn new(backend: B, initial_pos: usize) -> Self {
+impl Phys {
+    pub fn new(backend: Arc<dyn Backend>, initial_pos: usize) -> Self {
         Phys {
-            frames: Mutex::new(LruCache::unbounded()),
+            frames: Mutex::new(LruCache::unbounded_with_hasher(RandomState::new())),
             position: initial_pos.into(),
             backend,
         }
     }
 
-    pub fn new_anon() -> Phys<Zero> {
-        Phys::new(Zero, 0)
-    }
-
-    pub fn backend(&self) -> &B {
-        &self.backend
+    pub fn backend(&self) -> &dyn Backend {
+        &*self.backend
     }
 }
 
-impl<B: Backend> Phys<B> {
+impl Phys {
+    pub fn new_anon() -> Phys {
+        Phys::new(Arc::new(Zero), 0)
+    }
+}
+
+impl Phys {
     pub async fn commit(&self, index: usize, writable: bool) -> Result<Arc<Frame>, Error> {
         let frame = ksync::critical(|| {
             self.frames.lock().get_mut(&index).map(|fi| {
@@ -117,8 +124,20 @@ impl<B: Backend> Phys<B> {
     pub async fn flush(&self, index: usize) -> Result<(), Error> {
         let frame = ksync::critical(|| {
             let mut frames = self.frames.lock();
+
             let fi = frames.get_mut(&index);
             fi.and_then(|fi| mem::replace(&mut fi.dirty, false).then(|| fi.frame.clone()))
+        });
+        if let Some(frame) = frame {
+            self.backend.flush(index, &frame).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn release(&self, index: usize, dirty: bool) -> Result<(), Error> {
+        let frame = ksync::critical(|| {
+            let mut frames = self.frames.lock();
+            frames.pop(&index).and_then(|fi| dirty.then_some(fi.frame))
         });
         if let Some(frame) = frame {
             self.backend.flush(index, &frame).await?;
@@ -184,7 +203,7 @@ impl<B: Backend> Phys<B> {
     }
 }
 
-impl<B> Drop for Phys<B> {
+impl Drop for Phys {
     fn drop(&mut self) {
         let cache = self.frames.get_mut();
         if cache.iter().any(|(_, fi)| fi.dirty) {
@@ -196,7 +215,7 @@ Use `spare(NonZeroUsize::MAX)` to explicit flush all the data."
     }
 }
 
-impl Default for Phys<Zero> {
+impl Default for Phys {
     fn default() -> Self {
         Self::new_anon()
     }
@@ -235,7 +254,7 @@ impl Backend for Zero {
 }
 
 #[async_trait]
-impl<B: Backend> File for Phys<B> {
+impl File for Phys {
     async fn seek(&self, whence: SeekFrom) -> Result<usize, Error> {
         let pos = match whence {
             SeekFrom::Start(pos) => pos,
