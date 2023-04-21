@@ -27,6 +27,10 @@ impl<K, V> RangeMap<K, V> {
         }
     }
 
+    pub fn root_range(&self) -> Range<&K> {
+        &self.range.start..&self.range.end
+    }
+
     pub fn len(&self) -> usize {
         self.map.len()
     }
@@ -331,6 +335,94 @@ impl<K: Ord, V> RangeMap<K, V> {
         self.map.append(&mut suffix);
         ret.into_iter()
             .map(|(start, (end, value))| (start..end, value))
+    }
+}
+
+pub struct SplitEntry<'a, K: Ord + Clone, V> {
+    range_map: &'a mut RangeMap<K, V>,
+    split_key: K,
+    key: Range<K>,
+    new_values: (Option<V>, Option<V>),
+}
+
+impl<'a, K: Ord + Clone, V> SplitEntry<'a, K, V> {
+    pub fn old_key(&self) -> Range<K> {
+        self.key.clone()
+    }
+
+    pub fn set_former(&mut self, value: V) {
+        self.new_values.0 = Some(value)
+    }
+
+    pub fn set_latter(&mut self, value: V) {
+        self.new_values.1 = Some(value)
+    }
+}
+
+impl<'a, K: Ord + Clone, V> Drop for SplitEntry<'a, K, V> {
+    fn drop(&mut self) {
+        if let Some(v0) = self.new_values.0.take() {
+            self.range_map
+                .map
+                .insert(self.key.start.clone(), (self.split_key.clone(), v0));
+        }
+        if let Some(v1) = self.new_values.1.take() {
+            self.range_map
+                .map
+                .insert(self.split_key.clone(), (self.key.end.clone(), v1));
+        }
+    }
+}
+
+impl<K: Ord, V> RangeMap<K, V> {
+    /// Split the entry that overlaps the given key, if any.
+    ///
+    /// Returns if the overlapping entry was found. Note that it won't be taken
+    /// into account if the start of the entry's range equals to the given key.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use range_map::RangeMap;
+    ///
+    /// let mut map = RangeMap::new(0..100);
+    /// map.try_insert(2..50, "a").unwrap();
+    ///
+    /// assert!(map.split_entry(1).is_none());
+    /// assert!(map.split_entry(2).is_none());
+    /// assert!(map.split_entry(50).is_none());
+    /// assert!(map.split_entry(52).is_none());
+    ///
+    /// let (_old_value, mut entry) = map.split_entry(10).unwrap();
+    /// entry.set_former("b");
+    /// entry.set_latter("c");
+    /// drop(entry);
+    ///
+    /// let rem = map.into_iter().collect::<Vec<_>>();
+    /// assert_eq!(rem, [(2..10, "b"), (10..50, "c")]);
+    /// ```
+    pub fn split_entry(&mut self, key: K) -> Option<(V, SplitEntry<K, V>)>
+    where
+        K: Ord + Clone,
+    {
+        let mut suffix = self.map.split_off(&key);
+        if let Some(entry) = self.map.last_entry() {
+            if entry.key() < &key && key < entry.get().0 {
+                let (start, (end, value)) = entry.remove_entry();
+                self.map.append(&mut suffix);
+                return Some((
+                    value,
+                    SplitEntry {
+                        range_map: self,
+                        split_key: key,
+                        key: start..end,
+                        new_values: Default::default(),
+                    },
+                ));
+            }
+        }
+        self.map.append(&mut suffix);
+        None
     }
 }
 

@@ -539,6 +539,7 @@ dependencies = [
  "ktime-core",
  "log",
  "rand-riscv",
+ "range-map",
  "rv39-paging",
  "scoped_threadpool",
  "spin",
@@ -568,6 +569,7 @@ dependencies = [
  "bevy_utils_proc_macros",
  "enum-primitive-derive",
  "num-traits",
+ "rv39-paging",
 ]
 
 [[package]]

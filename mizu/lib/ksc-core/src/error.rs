@@ -299,6 +299,19 @@ impl From<core::str::Utf8Error> for Error {
     }
 }
 
+impl From<rv39_paging::Error> for Error {
+    fn from(error: rv39_paging::Error) -> Self {
+        match error {
+            rv39_paging::Error::OutOfMemory => ENOMEM,
+            rv39_paging::Error::AddrMisaligned { .. } => EINVAL,
+            rv39_paging::Error::RangeEmpty => EINVAL,
+            rv39_paging::Error::EntryExistent(true) => EEXIST,
+            rv39_paging::Error::EntryExistent(false) => ENOENT,
+            rv39_paging::Error::PermissionDenied => EPERM,
+        }
+    }
+}
+
 impl Error {
     fn try_from_raw(raw: usize) -> Option<Self> {
         FromPrimitive::from_isize(-(raw as isize))

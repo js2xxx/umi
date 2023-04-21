@@ -95,7 +95,7 @@ impl LAddr {
     }
 
     #[inline]
-    pub fn val(self) -> usize {
+    pub fn val(&self) -> usize {
         self.0 as usize
     }
 

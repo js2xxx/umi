@@ -15,6 +15,7 @@ ktime-core = {path = "../ktime-core"}
 rand-riscv = {path = "../rand-riscv"}
 rv39-paging = {path = "../paging"}
 umifs = {path = "../umifs"}
+range-map = {path = "../range-map"}
 # External crates
 async-trait = "0"
 futures-util = {version = "0", default-features = false, features = ["alloc"]}

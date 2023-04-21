@@ -8,6 +8,9 @@ version = "0.1.0"
 test = []
 
 [dependencies]
+# Local crates
+rv39-paging = {path = "../paging"}
+# External crates
 bevy_utils_proc_macros = "0"
 enum-primitive-derive = "0"
 num-traits = {version = "0", default-features = false}
