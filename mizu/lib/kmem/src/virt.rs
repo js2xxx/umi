@@ -1,10 +1,11 @@
-use alloc::sync::Arc;
-use core::ops::Range;
+use alloc::{boxed::Box, sync::Arc};
+use core::{ops::Range, ptr};
 
-use ksc_core::Error::{self, EEXIST, ENOSPC};
+use ksc_core::Error::{self, EEXIST, EINVAL, ENOSPC};
 use range_map::{AslrKey, RangeMap};
-use rv39_paging::{Attr, LAddr, Table, ID_OFFSET, PAGE_LAYOUT, PAGE_SHIFT};
-use spin::Mutex;
+use riscv::register::satp::{self, Mode::Sv39};
+use rv39_paging::{Attr, LAddr, Table, ID_OFFSET, PAGE_LAYOUT, PAGE_MASK, PAGE_SHIFT};
+use spin::lock_api::Mutex;
 
 use crate::{frame::frames, Phys};
 
@@ -15,7 +16,7 @@ struct Mapping {
 }
 
 pub struct Virt {
-    root: Mutex<Table>,
+    root: Mutex<Box<Table>>,
     map: Mutex<RangeMap<LAddr, Mapping>>,
 }
 
@@ -65,11 +66,21 @@ impl Mapping {
 }
 
 impl Virt {
-    pub fn new(range: Range<LAddr>) -> Self {
+    pub fn new(range: Range<LAddr>, init_root: Box<Table>) -> Self {
         Virt {
-            root: Mutex::new(Default::default()),
+            root: Mutex::new(init_root),
             map: Mutex::new(RangeMap::new(range)),
         }
+    }
+
+    /// # Safety
+    ///
+    /// The caller must ensure that the current executing address is mapped
+    /// correctly, and the virt object outlives its existence in `satp`.
+    pub unsafe fn load(&self, asid: usize) {
+        let addr = unsafe { ptr::addr_of_mut!(**self.root.data_ptr()) };
+        let paddr = *LAddr::from(addr).to_paddr(ID_OFFSET);
+        satp::set(Sv39, asid, paddr >> PAGE_SHIFT);
     }
 
     pub fn map(
@@ -77,26 +88,32 @@ impl Virt {
         addr: Option<LAddr>,
         phys: Arc<Phys>,
         start_index: usize,
-        len: usize,
+        count: usize,
         attr: Attr,
     ) -> Result<LAddr, Error> {
         const ASLR_BIT: u32 = 30;
-        let aslr_key = AslrKey::new(ASLR_BIT, rand_riscv::rng(), PAGE_LAYOUT);
 
         ksync::critical(|| {
             let mut map = self.map.lock();
             match addr {
-                Some(addr) => {
-                    let range = addr..(addr + len);
+                Some(start) => {
+                    if start.val() & PAGE_MASK != 0 {
+                        return Err(EINVAL);
+                    }
+                    let len = count.checked_shl(PAGE_SHIFT.try_into()?).ok_or(EINVAL)?;
+                    let end = LAddr::from(start.val().checked_add(len).ok_or(EINVAL)?);
                     let mapping = Mapping {
                         phys,
                         start_index,
                         attr,
                     };
-                    map.try_insert(range, mapping).map_err(|_| EEXIST)?;
-                    Ok(addr)
+                    map.try_insert(start..end, mapping).map_err(|_| EEXIST)?;
+                    Ok(start)
                 }
                 None => {
+                    let layout = PAGE_LAYOUT.repeat(count)?.0;
+                    let aslr_key = AslrKey::new(ASLR_BIT, rand_riscv::rng(), layout);
+
                     let ent = map.allocate_with_aslr(aslr_key, LAddr::val).ok_or(ENOSPC)?;
                     let addr = *ent.key().start;
                     ent.insert(Mapping {
@@ -111,6 +128,9 @@ impl Virt {
     }
 
     pub async fn commit(&self, range: Range<LAddr>) -> Result<(), Error> {
+        if range.start.val() & PAGE_MASK != 0 || range.end.val() & PAGE_MASK != 0 {
+            return Err(EINVAL);
+        }
         ksync::critical(|| async {
             let mut map = self.map.lock();
             let mut table = self.root.lock();
@@ -129,6 +149,9 @@ impl Virt {
     }
 
     pub async fn decommit(&self, range: Range<LAddr>) -> Result<(), Error> {
+        if range.start.val() & PAGE_MASK != 0 || range.end.val() & PAGE_MASK != 0 {
+            return Err(EINVAL);
+        }
         ksync::critical(|| async {
             let mut map = self.map.lock();
             let mut table = self.root.lock();
@@ -147,6 +170,9 @@ impl Virt {
     }
 
     pub async fn reprotect(&self, range: Range<LAddr>, attr: Attr) -> Result<(), Error> {
+        if range.start.val() & PAGE_MASK != 0 || range.end.val() & PAGE_MASK != 0 {
+            return Err(EINVAL);
+        }
         let attr = attr | Attr::VALID;
         ksync::critical(|| async {
             let mut map = self.map.lock();
@@ -199,6 +225,9 @@ impl Virt {
     }
 
     pub async fn unmap(&self, range: Range<LAddr>) -> Result<(), Error> {
+        if range.start.val() & PAGE_MASK != 0 || range.end.val() & PAGE_MASK != 0 {
+            return Err(EINVAL);
+        }
         ksync::critical(|| async {
             let mut map = self.map.lock();
             let mut table = self.root.lock();

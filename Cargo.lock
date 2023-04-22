@@ -540,6 +540,7 @@ dependencies = [
  "log",
  "rand-riscv",
  "range-map",
+ "riscv",
  "rv39-paging",
  "scoped_threadpool",
  "spin",
