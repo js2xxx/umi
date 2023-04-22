@@ -3,17 +3,12 @@ mod tlb;
 use alloc::{boxed::Box, sync::Arc};
 use core::{
     ops::Range,
-    ptr,
     sync::atomic::{AtomicUsize, Ordering::Relaxed},
 };
 
 use arsc_rs::Arsc;
 use ksc_core::Error::{self, EEXIST, EINVAL, ENOSPC};
 use range_map::{AslrKey, RangeMap};
-use riscv::{
-    asm::sfence_vma_all,
-    register::satp::{self, Mode::Sv39},
-};
 use rv39_paging::{Attr, LAddr, Table, ID_OFFSET, PAGE_LAYOUT, PAGE_MASK, PAGE_SHIFT};
 use spin::lock_api::Mutex;
 
@@ -92,15 +87,10 @@ impl Virt {
     /// # Safety
     ///
     /// The caller must ensure that the current executing address is mapped
-    /// correctly, and the virt object outlives its existence in `satp`.
+    /// correctly.
+    #[inline]
     pub unsafe fn load(self: Arsc<Self>) {
-        let addr = unsafe { ptr::addr_of_mut!(**self.root.data_ptr()) };
-        let paddr = *LAddr::from(addr).to_paddr(ID_OFFSET);
-
-        if tlb::set_virt(self) {
-            satp::set(Sv39, 0, paddr >> PAGE_SHIFT);
-            sfence_vma_all()
-        }
+        tlb::set_virt(self)
     }
 
     pub fn map(
