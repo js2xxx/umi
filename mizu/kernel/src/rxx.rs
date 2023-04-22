@@ -1,13 +1,12 @@
 #[cfg(not(feature = "test"))]
 use core::arch::asm;
-use core::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 
 use rv39_paging::{table_1g, AddrExt, Attr, Entry, Level, PAddr, Table, ID_OFFSET};
 use static_assertions::const_assert_eq;
 
 const_assert_eq!(config::KERNEL_START_PHYS + ID_OFFSET, config::KERNEL_START);
 #[no_mangle]
-static BOOT_PAGES: Table = const {
+pub static BOOT_PAGES: Table = const {
     let low_start = config::KERNEL_START_PHYS.round_down(Level::max());
     let delta = Level::max().page_size();
 
@@ -25,29 +24,15 @@ static BOOT_PAGES: Table = const {
     ]
 };
 
-static BSP_ID: AtomicUsize = AtomicUsize::new(0);
-
-#[thread_local]
-static mut HART_ID: usize = 0;
-
-pub fn bsp_id() -> usize {
-    BSP_ID.load(Relaxed)
-}
-
-pub fn hart_id() -> usize {
-    unsafe { HART_ID }
-}
-
-pub fn is_bsp() -> bool {
-    hart_id() == bsp_id()
-}
-
 #[cfg(not(feature = "test"))]
 #[no_mangle]
 unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
     use core::{
         mem,
-        sync::atomic::{AtomicBool, Ordering::Release},
+        sync::atomic::{
+            AtomicBool,
+            Ordering::{Relaxed, Release},
+        },
     };
 
     use config::VIRT_END;
@@ -72,7 +57,7 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
 
         // Can't use cmpxchg here, because `zero_bss` will reinitialize it to zero.
         GLOBAL_INIT.store(true, Release);
-        BSP_ID.store(hartid, Release);
+        hart_id::init_bsp_id(hartid);
     }
 
     // Initialize TLS
@@ -83,7 +68,7 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
 
         let len = (&_tdata_size) as *const u32 as usize;
         tp.copy_from_nonoverlapping(&_stdata, len / mem::size_of::<u32>());
-        HART_ID = hartid;
+        hart_id::init_hart_id(hartid);
     }
 
     // Disable interrupt in `ksync`.
@@ -92,7 +77,7 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
     // Init default kernel trap handler.
     unsafe { crate::trap::init() };
 
-    if is_bsp() {
+    if hart_id::is_bsp() {
         // Init logger.
         unsafe { klog::init_logger(log::Level::Debug) };
 
@@ -168,7 +153,7 @@ unsafe extern "C" fn _start() -> ! {
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
     use sbi_rt::{Shutdown, SystemFailure};
-    log::error!("#{} kernel {info}", hart_id());
+    log::error!("#{} kernel {info}", hart_id::hart_id());
     sbi_rt::system_reset(Shutdown, SystemFailure);
     loop {
         unsafe { core::arch::asm!("wfi") }

@@ -454,6 +454,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "hart-id"
+version = "0.1.0"
+
+[[package]]
 name = "hash32"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -531,8 +535,10 @@ dependencies = [
 name = "kmem"
 version = "0.1.0"
 dependencies = [
+ "arsc-rs",
  "async-trait",
  "futures-util",
+ "hart-id",
  "hashbrown",
  "ksc-core",
  "ksync",
@@ -542,6 +548,7 @@ dependencies = [
  "range-map",
  "riscv",
  "rv39-paging",
+ "sbi-rt",
  "scoped_threadpool",
  "spin",
  "static_assertions",
@@ -680,6 +687,7 @@ dependencies = [
  "art",
  "co-trap",
  "config",
+ "hart-id",
  "kalloc",
  "klog",
  "kmem",
@@ -687,11 +695,14 @@ dependencies = [
  "ksync",
  "ktime",
  "log",
+ "pin-project",
  "r0",
  "riscv",
  "rv39-paging",
  "sbi-rt",
+ "spin",
  "static_assertions",
+ "sygnal",
 ]
 
 [[package]]

@@ -1,6 +1,7 @@
 #![cfg_attr(not(test), no_std)]
 #![feature(alloc_layout_extra)]
 #![feature(result_option_inspect)]
+#![feature(thread_local)]
 
 extern crate alloc;
 

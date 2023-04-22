@@ -25,7 +25,7 @@ use sbi_rt::{NoReason, Shutdown};
 fn main(payload: usize) -> ! {
     run_art(payload);
 
-    if rxx::is_bsp() {
+    if hart_id::is_bsp() {
         sbi_rt::system_reset(Shutdown, NoReason);
     }
     loop {
@@ -35,12 +35,12 @@ fn main(payload: usize) -> ! {
 
 fn run_art(payload: usize) {
     type Payload = *mut Box<dyn FnOnce() + Send>;
-    if rxx::is_bsp() {
+    if hart_id::is_bsp() {
         log::debug!("Starting ART");
         let mut runners = Executor::start(config::MAX_HARTS, init);
         let me = runners.next().unwrap();
         for (id, runner) in config::HART_RANGE
-            .filter(|&id| id != rxx::bsp_id())
+            .filter(|&id| id != hart_id::bsp_id())
             .zip(runners)
         {
             log::debug!("Starting #{id}");
@@ -55,7 +55,7 @@ fn run_art(payload: usize) {
         }
         me();
     } else {
-        log::debug!("Running ART from #{}", rxx::hart_id());
+        log::debug!("Running ART from #{}", hart_id::hart_id());
 
         let runner = payload as Payload;
         // SAFETY: The payload must come from the BSP.

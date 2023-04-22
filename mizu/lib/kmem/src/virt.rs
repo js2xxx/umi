@@ -1,9 +1,19 @@
-use alloc::{boxed::Box, sync::Arc};
-use core::{ops::Range, ptr};
+mod tlb;
 
+use alloc::{boxed::Box, sync::Arc};
+use core::{
+    ops::Range,
+    ptr,
+    sync::atomic::{AtomicUsize, Ordering::Relaxed},
+};
+
+use arsc_rs::Arsc;
 use ksc_core::Error::{self, EEXIST, EINVAL, ENOSPC};
 use range_map::{AslrKey, RangeMap};
-use riscv::register::satp::{self, Mode::Sv39};
+use riscv::{
+    asm::sfence_vma_all,
+    register::satp::{self, Mode::Sv39},
+};
 use rv39_paging::{Attr, LAddr, Table, ID_OFFSET, PAGE_LAYOUT, PAGE_MASK, PAGE_SHIFT};
 use spin::lock_api::Mutex;
 
@@ -18,6 +28,7 @@ struct Mapping {
 pub struct Virt {
     root: Mutex<Box<Table>>,
     map: Mutex<RangeMap<LAddr, Mapping>>,
+    cpu_mask: AtomicUsize,
 }
 
 impl Mapping {
@@ -27,6 +38,7 @@ impl Mapping {
         offset: usize,
         count: usize,
         table: &mut Table,
+        cpu_mask: usize,
     ) -> Result<(), Error> {
         let writable = self.attr.contains(Attr::WRITABLE);
         for (index, addr) in
@@ -40,6 +52,7 @@ impl Mapping {
                     self.attr | Attr::VALID,
                     rv39_paging::Level::pt(),
                 );
+                tlb::flush(cpu_mask, addr, 1)
             }
         }
         Ok(())
@@ -51,6 +64,7 @@ impl Mapping {
         offset: usize,
         count: usize,
         table: &mut Table,
+        cpu_mask: usize,
     ) -> Result<(), Error> {
         for (index, addr) in
             (0..count).map(|c| (c + self.start_index + offset, addr + (c << PAGE_SHIFT)))
@@ -59,6 +73,7 @@ impl Mapping {
                 let dirty = entry.get(rv39_paging::Level::pt()).1.contains(Attr::DIRTY);
                 self.phys.release(index, dirty).await?;
                 entry.reset();
+                tlb::flush(cpu_mask, addr, 1)
             }
         }
         Ok(())
@@ -70,6 +85,7 @@ impl Virt {
         Virt {
             root: Mutex::new(init_root),
             map: Mutex::new(RangeMap::new(range)),
+            cpu_mask: AtomicUsize::new(0),
         }
     }
 
@@ -77,10 +93,14 @@ impl Virt {
     ///
     /// The caller must ensure that the current executing address is mapped
     /// correctly, and the virt object outlives its existence in `satp`.
-    pub unsafe fn load(&self, asid: usize) {
+    pub unsafe fn load(self: Arsc<Self>) {
         let addr = unsafe { ptr::addr_of_mut!(**self.root.data_ptr()) };
         let paddr = *LAddr::from(addr).to_paddr(ID_OFFSET);
-        satp::set(Sv39, asid, paddr >> PAGE_SHIFT);
+
+        if tlb::set_virt(self) {
+            satp::set(Sv39, 0, paddr >> PAGE_SHIFT);
+            sfence_vma_all()
+        }
     }
 
     pub fn map(
@@ -141,7 +161,10 @@ impl Virt {
                 let offset = (start.val() - addr.start.val()) >> PAGE_SHIFT;
                 let count = (end.val() - start.val()) >> PAGE_SHIFT;
 
-                mapping.commit(start, offset, count, &mut table).await?;
+                let cpu_mask = self.cpu_mask.load(Relaxed);
+                mapping
+                    .commit(start, offset, count, &mut table, cpu_mask)
+                    .await?;
             }
             Ok(())
         })
@@ -162,7 +185,10 @@ impl Virt {
                 let offset = (start.val() - addr.start.val()) >> PAGE_SHIFT;
                 let count = (end.val() - start.val()) >> PAGE_SHIFT;
 
-                mapping.decommit(start, offset, count, &mut table).await?;
+                let cpu_mask = self.cpu_mask.load(Relaxed);
+                mapping
+                    .decommit(start, offset, count, &mut table, cpu_mask)
+                    .await?;
             }
             Ok(())
         })
@@ -181,7 +207,10 @@ impl Virt {
             for (addr, mapping) in map.range_mut(range.clone()) {
                 let count = (addr.end.val() - addr.start.val()) >> PAGE_SHIFT;
 
-                mapping.decommit(*addr.start, 0, count, &mut table).await?;
+                let cpu_mask = self.cpu_mask.load(Relaxed);
+                mapping
+                    .decommit(*addr.start, 0, count, &mut table, cpu_mask)
+                    .await?;
                 mapping.attr = attr;
             }
 
@@ -191,7 +220,13 @@ impl Virt {
                 let count = (addr.end.val() - range.start.val()) >> PAGE_SHIFT;
 
                 mapping
-                    .decommit(range.start, offset, count, &mut table)
+                    .decommit(
+                        range.start,
+                        offset,
+                        count,
+                        &mut table,
+                        self.cpu_mask.load(Relaxed),
+                    )
                     .await?;
 
                 let latter = Mapping {
@@ -207,7 +242,10 @@ impl Virt {
                 let addr = entry.old_key();
                 let count = (range.end.val() - addr.start.val()) >> PAGE_SHIFT;
 
-                mapping.decommit(range.end, 0, count, &mut table).await?;
+                let cpu_mask = self.cpu_mask.load(Relaxed);
+                mapping
+                    .decommit(range.end, 0, count, &mut table, cpu_mask)
+                    .await?;
 
                 let former = Mapping {
                     phys: mapping.phys.clone(),
@@ -235,22 +273,36 @@ impl Virt {
             for (addr, mut mapping) in map.drain(range.clone()) {
                 let count = (addr.end.val() - addr.start.val()) >> PAGE_SHIFT;
 
-                mapping.decommit(addr.start, 0, count, &mut table).await?;
+                mapping
+                    .decommit(
+                        addr.start,
+                        0,
+                        count,
+                        &mut table,
+                        self.cpu_mask.load(Relaxed),
+                    )
+                    .await?;
             }
 
             if let Some((mut mapping, mut entry)) = map.split_entry(range.start) {
                 let addr = entry.old_key();
                 let offset = (range.start.val() - addr.start.val()) >> PAGE_SHIFT;
                 let count = (addr.end.val() - range.start.val()) >> PAGE_SHIFT;
+
+                let cpu_mask = self.cpu_mask.load(Relaxed);
                 mapping
-                    .decommit(range.start, offset, count, &mut table)
+                    .decommit(range.start, offset, count, &mut table, cpu_mask)
                     .await?;
                 entry.set_former(mapping);
             }
             if let Some((mut mapping, mut entry)) = map.split_entry(range.end) {
                 let addr = entry.old_key();
                 let count = (range.end.val() - addr.start.val()) >> PAGE_SHIFT;
-                mapping.decommit(range.end, 0, count, &mut table).await?;
+
+                let cpu_mask = self.cpu_mask.load(Relaxed);
+                mapping
+                    .decommit(range.end, 0, count, &mut table, cpu_mask)
+                    .await?;
                 mapping.start_index += count;
                 entry.set_latter(mapping);
             }
