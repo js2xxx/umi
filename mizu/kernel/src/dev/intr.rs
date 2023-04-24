@@ -21,7 +21,7 @@ pub fn init_plic(fdt: &FdtNode) -> bool {
 
 pub static INTR: Lazy<&IntrManager> = Lazy::new(|| intr_man().expect("PLIC uninitialized"));
 
-pub(in crate::dev) fn intr_man() -> Option<&'static IntrManager> {
+pub fn intr_man() -> Option<&'static IntrManager> {
     static ONCE: Once<IntrManager> = Once::new();
     ONCE.try_call_once(|| {
         let plic = PLIC.get().cloned();

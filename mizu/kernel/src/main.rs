@@ -9,10 +9,7 @@
 #![feature(thread_local)]
 
 mod dev;
-mod mem;
 mod rxx;
-mod syscall;
-mod task;
 mod trap;
 
 #[macro_use]
