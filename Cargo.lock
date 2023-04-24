@@ -316,6 +316,7 @@ dependencies = [
  "fdt",
  "futures-util",
  "hashbrown",
+ "kmem",
  "ksc",
  "ksync",
  "log",

@@ -9,6 +9,7 @@ test = []
 
 [dependencies]
 # Local crates
+kmem = {path = "../kmem"}
 ksc = {path = "../ksc"}
 ksync = {path = "../ksync"}
 rand-riscv = {path = "../rand-riscv"}

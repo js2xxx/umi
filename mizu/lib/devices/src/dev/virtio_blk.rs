@@ -1,8 +1,7 @@
 use alloc::boxed::Box;
 use core::iter;
 
-use arsc_rs::Arsc;
-use futures_util::{future::try_join_all, Future};
+use futures_util::future::try_join_all;
 use ksync::{event::Event, Semaphore};
 use spin::lock_api::Mutex;
 use virtio_drivers::{
@@ -10,86 +9,62 @@ use virtio_drivers::{
     transport::mmio::MmioTransport,
 };
 
-use crate::{dev::VirtioHal, Interrupt};
+use super::HalImpl;
 
-pub struct VirtioBlock<H: VirtioHal> {
-    inner: Arsc<Inner<H>>,
+pub struct VirtioBlock {
     virt_queue: Semaphore,
-}
-
-struct Inner<H: VirtioHal> {
-    device: Mutex<VirtIOBlk<H, MmioTransport>>,
+    device: Mutex<VirtIOBlk<HalImpl, MmioTransport>>,
     event: Box<[Event]>,
 }
 
-unsafe impl<H: VirtioHal + Send + Sync> Send for Inner<H> {}
-unsafe impl<H: VirtioHal + Send + Sync> Sync for Inner<H> {}
+unsafe impl Send for VirtioBlock {}
+unsafe impl Sync for VirtioBlock {}
 
-impl<H: VirtioHal + Send + Sync + 'static> VirtioBlock<H> {
+impl VirtioBlock {
     pub const SECTOR_SIZE: usize = virtio_drivers::device::blk::SECTOR_SIZE;
 
-    pub fn new(
-        mmio: MmioTransport,
-        intr: Interrupt,
-    ) -> Option<(Self, impl Future<Output = ()> + Send + 'static)> {
-        VirtIOBlk::new(mmio).ok().map(|device| {
+    pub fn new(mmio: MmioTransport) -> Result<Self, virtio_drivers::Error> {
+        VirtIOBlk::new(mmio).map(|device| {
             let size = device.virt_queue_size() as usize;
 
-            let inner = Arsc::new(Inner {
+            VirtioBlock {
                 device: Mutex::new(device),
                 event: iter::repeat_with(Event::new).take(size).collect(),
-            });
-            let i2 = inner.clone();
-            let ack = async move {
-                loop {
-                    if !intr.wait().await {
-                        break;
-                    }
-                    let used = ksync::critical(|| i2.device.lock().peek_used());
-                    if let Some(used) = used {
-                        i2.event[used as usize].notify_additional(1);
-                    }
-                }
-            };
-            (
-                VirtioBlock {
-                    inner,
-                    virt_queue: Semaphore::new(size),
-                },
-                ack,
-            )
+
+                virt_queue: Semaphore::new(size),
+            }
         })
     }
 
     pub fn ack_interrupt(&self) {
         let used = ksync::critical(|| {
-            let mut blk = self.inner.device.lock();
+            let mut blk = self.device.lock();
             blk.ack_interrupt();
             blk.peek_used()
         });
         if let Some(used) = used {
-            self.inner.event[used as usize].notify_additional(1);
+            self.event[used as usize].notify_additional(1);
         }
     }
 
     pub fn capacity_blocks(&self) -> u64 {
-        unsafe { (*self.inner.device.data_ptr()).capacity() }
+        unsafe { (*self.device.data_ptr()).capacity() }
     }
 
     pub fn readonly(&self) -> bool {
-        unsafe { (*self.inner.device.data_ptr()).readonly() }
+        unsafe { (*self.device.data_ptr()).readonly() }
     }
 
     pub fn virt_queue_size(&self) -> u16 {
-        unsafe { (*self.inner.device.data_ptr()).virt_queue_size() }
+        unsafe { (*self.device.data_ptr()).virt_queue_size() }
     }
 
     #[inline]
     fn i<F, T>(&self, func: F) -> T
     where
-        F: FnOnce(&mut VirtIOBlk<H, MmioTransport>) -> T,
+        F: FnOnce(&mut VirtIOBlk<HalImpl, MmioTransport>) -> T,
     {
-        ksync::critical(|| func(&mut self.inner.device.lock()))
+        ksync::critical(|| func(&mut self.device.lock()))
     }
 
     async fn wait_for_token(&self, token: u16) {
@@ -101,7 +76,7 @@ impl<H: VirtioHal + Send + Sync + 'static> VirtioBlock<H> {
             }
             match listener.take() {
                 Some(listener) => listener.await,
-                None => listener = Some(self.inner.event[token as usize].listen()),
+                None => listener = Some(self.event[token as usize].listen()),
             }
         }
     }

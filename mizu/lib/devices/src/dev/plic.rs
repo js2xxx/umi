@@ -142,12 +142,16 @@ impl Plic {
 pub static PLIC: Once<Plic> = Once::new();
 
 pub fn init_plic(fdt: &FdtNode) {
-    PLIC.call_once(|| {
-        let mut iter = fdt.reg().expect("PLIC must have memory registers");
-        let reg = iter.next().expect("PLIC must have memory registers");
+    let res: Result<&Plic, &str> = PLIC.try_call_once(|| {
+        let reg = fdt.reg().and_then(|mut reg| reg.next());
+        let reg = reg.ok_or("should have memory registers")?;
+
         let base = PAddr::new(reg.starting_address as usize);
 
         // SAFETY: The memory is statically mapped.
-        unsafe { Plic::new(base.to_laddr(ID_OFFSET).as_non_null_unchecked().cast()) }
+        Ok(unsafe { Plic::new(base.to_laddr(ID_OFFSET).as_non_null_unchecked().cast()) })
     });
+    if let Err(err) = res {
+        log::warn!("Skip invalid PLIC: {err}")
+    }
 }

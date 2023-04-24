@@ -1,5 +1,6 @@
-use core::{mem, ptr::NonNull};
+use core::{mem, num::NonZeroUsize, ptr::NonNull};
 
+use rv39_paging::{LAddr, PAddr, ID_OFFSET};
 use volatile::Volatile;
 
 pub trait MmioReg {
@@ -24,3 +25,38 @@ pub fn bitmap_index_u32(index: usize) -> (usize, u32) {
 }
 
 pub use virtio_drivers::{BufferDirection, Hal as VirtioHal};
+
+pub struct HalImpl;
+
+impl VirtioHal for HalImpl {
+    fn dma_alloc(pages: usize, _: BufferDirection) -> (virtio_drivers::PhysAddr, NonNull<u8>) {
+        match NonZeroUsize::new(pages) {
+            Some(count) => {
+                let addr = kmem::frames().allocate(count).expect("memory exhausted");
+                (*addr.to_paddr(ID_OFFSET), unsafe {
+                    addr.as_non_null_unchecked()
+                })
+            }
+            None => (0, NonNull::dangling()),
+        }
+    }
+
+    fn dma_dealloc(_: virtio_drivers::PhysAddr, ptr: NonNull<u8>, pages: usize) -> i32 {
+        if let Some(count) = NonZeroUsize::new(pages) {
+            let addr = LAddr::from(ptr);
+            unsafe { kmem::frames().deallocate(addr, count) }
+        }
+        0
+    }
+
+    fn mmio_phys_to_virt(paddr: virtio_drivers::PhysAddr, _: usize) -> NonNull<u8> {
+        let laddr = PAddr::new(paddr).to_laddr(ID_OFFSET);
+        laddr.as_non_null().expect("invalid address")
+    }
+
+    fn share(buffer: NonNull<[u8]>, _: BufferDirection) -> virtio_drivers::PhysAddr {
+        *LAddr::from(buffer).to_paddr(ID_OFFSET)
+    }
+
+    fn unshare(_: virtio_drivers::PhysAddr, _: NonNull<[u8]>, _: BufferDirection) {}
+}
