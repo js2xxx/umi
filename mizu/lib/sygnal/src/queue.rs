@@ -8,6 +8,7 @@ use core::{
 
 use crossbeam_queue::ArrayQueue;
 use futures_util::{future, FutureExt};
+use ksc_core::handler::Param;
 use ksync::event::{Event, EventListener};
 use rv39_paging::LAddr;
 
@@ -25,11 +26,19 @@ pub struct Signals {
     pending: [SigPending; NR_SIGNALS],
 }
 
+// TODO: Remove if necessary.
+unsafe impl Send for SigInfo {}
+unsafe impl Sync for SigInfo {}
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SigInfo {
     pub sig: Sig,
     pub code: i32,
     pub fields: SigFields,
+}
+
+impl Param for SigInfo {
+    type Item<'a> = SigInfo;
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]

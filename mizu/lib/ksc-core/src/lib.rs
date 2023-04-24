@@ -8,4 +8,8 @@ pub mod handler;
 mod raw_reg;
 mod scn;
 
-pub use self::{error::*, raw_reg::*, scn::*};
+pub use self::{
+    error::Error::{self, *},
+    raw_reg::*,
+    scn::*,
+};

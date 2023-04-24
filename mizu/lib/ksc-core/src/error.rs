@@ -317,7 +317,7 @@ impl Error {
         FromPrimitive::from_isize(-(raw as isize))
     }
 
-    fn into_raw(self) -> usize {
+    pub fn into_raw(self) -> usize {
         -(self as isize) as _
     }
 }

@@ -27,11 +27,13 @@ kmem = {path = "../lib/kmem"}
 ksc = {path = "../lib/ksc"}
 ksync = {path = "../lib/ksync"}
 ktime = {path = "../lib/ktime"}
+rand-riscv = {path = "../lib/rand-riscv"}
 rv39-paging = {path = "../lib/paging"}
 sygnal = {path = "../lib/sygnal"}
 # External crates
 arsc-rs = {git = "https://github.com/js2xxx/arsc"}
 fdt = "0"
+hashbrown = {version = "0", default-features = false, features = ["inline-more"]}
 log = "0"
 pin-project = "1"
 r0 = "1"

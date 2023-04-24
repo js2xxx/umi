@@ -64,6 +64,6 @@ impl Param for bool {
     type Item<'a> = bool;
 }
 
-impl<T: Param> Param for crate::Result<T> {
-    type Item<'a> = crate::Result<<T as Param>::Item<'a>>;
+impl<T: Param, E: Param> Param for Result<T, E> {
+    type Item<'a> = Result<<T as Param>::Item<'a>, <E as Param>::Item<'a>>;
 }

@@ -7,9 +7,9 @@ use spin::Mutex;
 pub static BLOCKS: Mutex<Vec<Arsc<dyn Block>>> = Mutex::new(Vec::new());
 
 pub fn block(index: usize) -> Option<Arsc<dyn Block>> {
-    BLOCKS.lock().get(index).cloned()
+    ksync::critical(|| BLOCKS.lock().get(index).cloned())
 }
 
 pub fn blocks() -> Vec<Arsc<dyn Block>> {
-    BLOCKS.lock().clone()
+    ksync::critical(|| BLOCKS.lock().clone())
 }

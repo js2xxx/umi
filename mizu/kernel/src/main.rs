@@ -8,8 +8,11 @@
 #![feature(result_option_inspect)]
 #![feature(thread_local)]
 
-mod dev;
+pub mod dev;
+pub mod mem;
 mod rxx;
+pub mod syscall;
+pub mod task;
 mod trap;
 
 #[macro_use]

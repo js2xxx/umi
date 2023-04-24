@@ -26,6 +26,9 @@ pub struct Virt {
     cpu_mask: AtomicUsize,
 }
 
+unsafe impl Send for Virt {}
+unsafe impl Sync for Virt {}
+
 impl Mapping {
     async fn commit(
         &mut self,
