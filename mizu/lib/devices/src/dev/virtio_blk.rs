@@ -1,7 +1,9 @@
 use alloc::boxed::Box;
 use core::iter;
 
+use async_trait::async_trait;
 use futures_util::future::try_join_all;
+use ksc::Error::{self, EINVAL, EIO, ENOBUFS, ENOMEM, EPERM};
 use ksync::{event::Event, Semaphore};
 use spin::lock_api::Mutex;
 use virtio_drivers::{
@@ -9,7 +11,7 @@ use virtio_drivers::{
     transport::mmio::MmioTransport,
 };
 
-use super::HalImpl;
+use super::{block::Block, HalImpl};
 
 pub struct VirtioBlock {
     virt_queue: Semaphore,
@@ -28,10 +30,9 @@ impl VirtioBlock {
             let size = device.virt_queue_size() as usize;
 
             VirtioBlock {
+                virt_queue: Semaphore::new(size),
                 device: Mutex::new(device),
                 event: iter::repeat_with(Event::new).take(size).collect(),
-
-                virt_queue: Semaphore::new(size),
             }
         })
     }
@@ -81,7 +82,7 @@ impl VirtioBlock {
         }
     }
 
-    async fn read_chunk(&self, block: usize, buf: &mut [u8]) -> virtio_drivers::Result {
+    pub async fn read_chunk(&self, block: usize, buf: &mut [u8]) -> virtio_drivers::Result {
         assert!(buf.len() <= Self::SECTOR_SIZE);
 
         let mut req = BlkReq::default();
@@ -98,7 +99,7 @@ impl VirtioBlock {
         resp.status().into()
     }
 
-    async fn write_chunk(&self, block: usize, buf: &[u8]) -> virtio_drivers::Result {
+    pub async fn write_chunk(&self, block: usize, buf: &[u8]) -> virtio_drivers::Result {
         assert!(buf.len() <= Self::SECTOR_SIZE);
 
         let mut req = BlkReq::default();
@@ -136,5 +137,39 @@ impl VirtioBlock {
         let tasks = iter.map(|(block, chunk)| self.write_chunk(block, chunk));
         try_join_all(tasks).await?;
         Ok(())
+    }
+}
+
+fn virtio_rw_err(err: virtio_drivers::Error) -> Error {
+    match err {
+        virtio_drivers::Error::QueueFull => ENOBUFS,
+        virtio_drivers::Error::InvalidParam => EINVAL,
+        virtio_drivers::Error::DmaError => ENOMEM,
+        virtio_drivers::Error::IoError => EIO,
+        virtio_drivers::Error::Unsupported => EPERM,
+        _ => unreachable!("{err}"),
+    }
+}
+
+#[async_trait]
+impl Block for VirtioBlock {
+    fn ack_interrupt(&self) {
+        self.ack_interrupt()
+    }
+
+    async fn read(&self, block: usize, buf: &mut [u8]) -> Result<usize, Error> {
+        let len = buf.len().min(Self::SECTOR_SIZE);
+        let buf = &mut buf[..len];
+
+        let res = self.read_chunk(block, buf).await;
+        res.map(|_| len).map_err(virtio_rw_err)
+    }
+
+    async fn write(&self, block: usize, buf: &[u8]) -> Result<usize, Error> {
+        let len = buf.len().min(Self::SECTOR_SIZE);
+        let buf = &buf[..len];
+
+        let res = self.write_chunk(block, buf).await;
+        res.map(|_| len).map_err(virtio_rw_err)
     }
 }

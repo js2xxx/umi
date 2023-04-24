@@ -60,6 +60,10 @@ impl Param for usize {
     type Item<'a> = usize;
 }
 
+impl Param for bool {
+    type Item<'a> = bool;
+}
+
 impl<T: Param> Param for crate::Result<T> {
     type Item<'a> = crate::Result<<T as Param>::Item<'a>>;
 }

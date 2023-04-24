@@ -312,6 +312,7 @@ name = "devices"
 version = "0.1.0"
 dependencies = [
  "arsc-rs",
+ "async-trait",
  "crossbeam-queue",
  "fdt",
  "futures-util",

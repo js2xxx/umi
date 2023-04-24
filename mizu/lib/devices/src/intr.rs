@@ -1,8 +1,10 @@
+use core::num::NonZeroU32;
+
 use crossbeam_queue::SegQueue;
 use hashbrown::{hash_map::Entry, HashMap};
 use ksync::{unbounded, Receiver, Sender};
 use rand_riscv::RandomState;
-use spin::{Lazy, RwLock};
+use spin::{Lazy, Once, RwLock};
 
 use crate::dev::Plic;
 
@@ -19,10 +21,8 @@ impl IntrManager {
         }
     }
 
-    pub fn insert(&self, cx: usize, pin: u32) -> Option<Interrupt> {
-        if pin == 0 {
-            return None;
-        }
+    pub fn insert(&self, cx: usize, pin: NonZeroU32) -> Option<Interrupt> {
+        let pin = pin.get();
         let rx = ksync::critical(|| match self.map.write().entry(pin) {
             Entry::Occupied(entry) if entry.get().is_closed() => {
                 let (tx, rx) = unbounded();
@@ -64,7 +64,13 @@ impl Interrupt {
     }
 }
 
-pub static INTR: Lazy<IntrManager> = Lazy::new(|| {
-    let plic = crate::dev::PLIC.get().cloned();
-    IntrManager::new(plic.expect("PLIC not initialized"))
-});
+pub static INTR: Lazy<&IntrManager> = Lazy::new(|| intr().expect("PLIC uninitialized"));
+
+fn intr() -> Option<&'static IntrManager> {
+    static ONCE: Once<IntrManager> = Once::new();
+    ONCE.try_call_once(|| {
+        let plic = crate::dev::PLIC.get().cloned();
+        plic.map(IntrManager::new).ok_or(())
+    })
+    .ok()
+}

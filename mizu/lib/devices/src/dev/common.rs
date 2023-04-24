@@ -30,13 +30,10 @@ pub struct HalImpl;
 
 impl VirtioHal for HalImpl {
     fn dma_alloc(pages: usize, _: BufferDirection) -> (virtio_drivers::PhysAddr, NonNull<u8>) {
-        match NonZeroUsize::new(pages) {
-            Some(count) => {
-                let addr = kmem::frames().allocate(count).expect("memory exhausted");
-                (*addr.to_paddr(ID_OFFSET), unsafe {
-                    addr.as_non_null_unchecked()
-                })
-            }
+        match NonZeroUsize::new(pages).and_then(|count| kmem::frames().allocate(count)) {
+            Some(addr) => (*addr.to_paddr(ID_OFFSET), unsafe {
+                addr.as_non_null_unchecked()
+            }),
             None => (0, NonNull::dangling()),
         }
     }
