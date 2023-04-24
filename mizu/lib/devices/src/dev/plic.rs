@@ -6,6 +6,9 @@ use core::{
     ptr::NonNull,
 };
 
+use fdt::node::FdtNode;
+use rv39_paging::{PAddr, ID_OFFSET};
+use spin::Once;
 use static_assertions::const_assert_eq;
 use volatile::access::{ReadOnly, ReadWrite};
 
@@ -57,6 +60,9 @@ const_assert_eq!(mem::size_of::<<Cx as MmioReg>::Repr>(), 0x3e00000);
 
 #[derive(Debug, Clone)]
 pub struct Plic(NonNull<()>);
+
+unsafe impl Send for Plic {}
+unsafe impl Sync for Plic {}
 
 impl Plic {
     /// Creates a new [`Plic`] at a specified base.
@@ -131,4 +137,17 @@ impl Plic {
         let mut cell = cx_cell.map_mut(|s| s.index_mut(cx));
         cell.map_mut(|c| &mut c.claim_complete).write(pin)
     }
+}
+
+pub static PLIC: Once<Plic> = Once::new();
+
+pub fn init_plic(fdt: &FdtNode) {
+    PLIC.call_once(|| {
+        let mut iter = fdt.reg().expect("PLIC must have memory registers");
+        let reg = iter.next().expect("PLIC must have memory registers");
+        let base = PAddr::new(reg.starting_address as usize);
+
+        // SAFETY: The memory is statically mapped.
+        unsafe { Plic::new(base.to_laddr(ID_OFFSET).as_non_null_unchecked().cast()) }
+    });
 }

@@ -38,11 +38,13 @@ pub fn flush(cpu_mask: usize, addr: LAddr, count: usize) {
     if others != 0 {
         let _ = sbi_rt::remote_sfence_vma(others, 0, addr.val(), count << PAGE_SHIFT);
     }
-    unsafe {
-        if count == 1 {
-            sfence_vma(0, addr.val())
-        } else {
-            sfence_vma_all()
+    if cpu_mask != others {
+        unsafe {
+            if count == 1 {
+                sfence_vma(0, addr.val())
+            } else {
+                sfence_vma_all()
+            }
         }
     }
 }

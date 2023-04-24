@@ -16,7 +16,6 @@ extern crate klog;
 extern crate alloc;
 
 use alloc::boxed::Box;
-use core::hint;
 
 use arsc_rs::Arsc;
 use art::Executor;
@@ -37,7 +36,7 @@ fn run_art(payload: usize) {
     type Payload = *mut Box<dyn FnOnce() + Send>;
     if hart_id::is_bsp() {
         log::debug!("Starting ART");
-        let mut runners = Executor::start(config::MAX_HARTS, init);
+        let mut runners = Executor::start(config::MAX_HARTS, move |e| init(e, payload));
         let me = runners.next().unwrap();
         for (id, runner) in config::HART_RANGE
             .filter(|&id| id != hart_id::bsp_id())
@@ -63,11 +62,10 @@ fn run_art(payload: usize) {
     }
 }
 
-async fn init(executor: Arsc<Executor>) {
+async fn init(executor: Arsc<Executor>, fdt: usize) {
     println!("Hello from executor");
-    let i = ktime::Instant::now();
-    while i.elapsed().as_secs() < 1 {
-        hint::spin_loop()
-    }
+
+    unsafe { devices::dev::init(fdt as _).expect("failed to initialize devices") };
+
     executor.shutdown()
 }

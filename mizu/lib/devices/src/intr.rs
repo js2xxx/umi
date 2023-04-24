@@ -2,7 +2,7 @@ use crossbeam_queue::SegQueue;
 use hashbrown::{hash_map::Entry, HashMap};
 use ksync::{unbounded, Receiver, Sender};
 use rand_riscv::RandomState;
-use spin::RwLock;
+use spin::{Lazy, RwLock};
 
 use crate::dev::Plic;
 
@@ -63,3 +63,8 @@ impl Interrupt {
         self.0.recv().await.is_ok()
     }
 }
+
+pub static INTR: Lazy<IntrManager> = Lazy::new(|| {
+    let plic = crate::dev::PLIC.get().cloned();
+    IntrManager::new(plic.expect("PLIC not initialized"))
+});
