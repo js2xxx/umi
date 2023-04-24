@@ -1,5 +1,4 @@
 #![no_std]
-#![feature(result_option_inspect)]
 
 extern crate alloc;
 

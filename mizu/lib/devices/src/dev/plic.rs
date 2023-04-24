@@ -6,9 +6,6 @@ use core::{
     ptr::NonNull,
 };
 
-use fdt::node::FdtNode;
-use rv39_paging::{PAddr, ID_OFFSET};
-use spin::Once;
 use static_assertions::const_assert_eq;
 use volatile::access::{ReadOnly, ReadWrite};
 
@@ -137,19 +134,4 @@ impl Plic {
         let mut cell = cx_cell.map_mut(|s| s.index_mut(cx));
         cell.map_mut(|c| &mut c.claim_complete).write(pin)
     }
-}
-
-pub static PLIC: Once<Plic> = Once::new();
-
-pub fn init_plic(fdt: &FdtNode) -> bool {
-    let res: Result<&Plic, &str> = PLIC.try_call_once(|| {
-        let reg = fdt.reg().and_then(|mut reg| reg.next());
-        let reg = reg.ok_or("should have memory registers")?;
-
-        let base = PAddr::new(reg.starting_address as usize);
-
-        // SAFETY: The memory is statically mapped.
-        Ok(unsafe { Plic::new(base.to_laddr(ID_OFFSET).as_non_null_unchecked().cast()) })
-    });
-    res.inspect_err(|err| log::warn!("Skip invalid PLIC: {err}")).is_ok()
 }

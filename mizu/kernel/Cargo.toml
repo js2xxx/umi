@@ -31,6 +31,7 @@ rv39-paging = {path = "../lib/paging"}
 sygnal = {path = "../lib/sygnal"}
 # External crates
 arsc-rs = {git = "https://github.com/js2xxx/arsc"}
+fdt = "0"
 log = "0"
 pin-project = "1"
 r0 = "1"
@@ -38,6 +39,7 @@ riscv = "0"
 sbi-rt = {git = "https://github.com/js2xxx/sbi-rt", branch = "multitarget"}
 spin = "0"
 static_assertions = "1"
+virtio-drivers = "0"
 
 [build-dependencies]
 config = {path = "../lib/config", default-features = false}

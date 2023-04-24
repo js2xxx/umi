@@ -1,7 +1,11 @@
+use alloc::boxed::Box;
 #[cfg(not(feature = "test"))]
 use core::arch::asm;
 
+use arsc_rs::Arsc;
+use art::Executor;
 use rv39_paging::{table_1g, AddrExt, Attr, Entry, Level, PAddr, Table, ID_OFFSET};
+use spin::Once;
 use static_assertions::const_assert_eq;
 
 const_assert_eq!(config::KERNEL_START_PHYS + ID_OFFSET, config::KERNEL_START);
@@ -24,6 +28,47 @@ pub static BOOT_PAGES: Table = const {
     ]
 };
 
+static EXECUTOR: Once<Arsc<Executor>> = Once::new();
+
+pub fn executor() -> &'static Arsc<Executor> {
+    EXECUTOR.get().unwrap()
+}
+
+fn run_art(payload: usize) {
+    type Payload = *mut Box<dyn FnOnce() + Send>;
+    if hart_id::is_bsp() {
+        log::debug!("Starting ART");
+        let mut runners = Executor::start(config::MAX_HARTS, move |e| async move {
+            EXECUTOR.call_once(|| e);
+            crate::main(payload).await;
+            EXECUTOR.get().unwrap().shutdown()
+        });
+
+        let me = runners.next().unwrap();
+        for (id, runner) in config::HART_RANGE
+            .filter(|&id| id != hart_id::bsp_id())
+            .zip(runners)
+        {
+            log::debug!("Starting #{id}");
+
+            let payload: Payload = Box::into_raw(Box::new(Box::new(runner)));
+
+            let ret = sbi_rt::hart_start(id, config::KERNEL_START_PHYS, payload as usize);
+
+            if let Some(err) = ret.err() {
+                log::error!("failed to start hart {id} due to error {err:?}");
+            }
+        }
+        me();
+    } else {
+        log::debug!("Running ART from #{}", hart_id::hart_id());
+
+        let runner = payload as Payload;
+        // SAFETY: The payload must come from the BSP.
+        unsafe { Box::from_raw(runner)() };
+    }
+}
+
 #[cfg(not(feature = "test"))]
 #[no_mangle]
 unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
@@ -36,6 +81,7 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
     };
 
     use config::VIRT_END;
+    use sbi_rt::{NoReason, Shutdown};
 
     static GLOBAL_INIT: AtomicBool = AtomicBool::new(false);
 
@@ -91,7 +137,14 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
         }
     }
 
-    crate::main(payload)
+    run_art(payload);
+
+    if hart_id::is_bsp() {
+        sbi_rt::system_reset(Shutdown, NoReason);
+    }
+    loop {
+        core::hint::spin_loop()
+    }
 }
 
 #[cfg(not(feature = "test"))]
@@ -158,4 +211,24 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     loop {
         unsafe { core::arch::asm!("wfi") }
     }
+}
+
+#[macro_export]
+macro_rules! tryb {
+    ($expr:expr) => {
+        match $expr {
+            Ok(value) => value,
+            Err(_) => return false,
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! someb {
+    ($expr:expr) => {
+        match $expr {
+            Some(value) => value,
+            None => return false,
+        }
+    };
 }

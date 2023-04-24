@@ -314,7 +314,6 @@ dependencies = [
  "arsc-rs",
  "async-trait",
  "crossbeam-queue",
- "fdt",
  "futures-util",
  "hashbrown",
  "kmem",
@@ -692,6 +691,7 @@ dependencies = [
  "co-trap",
  "config",
  "devices",
+ "fdt",
  "hart-id",
  "kalloc",
  "klog",
@@ -708,6 +708,7 @@ dependencies = [
  "spin",
  "static_assertions",
  "sygnal",
+ "virtio-drivers",
 ]
 
 [[package]]

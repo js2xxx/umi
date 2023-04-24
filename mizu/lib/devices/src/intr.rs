@@ -4,7 +4,7 @@ use crossbeam_queue::SegQueue;
 use hashbrown::{hash_map::Entry, HashMap};
 use ksync::{unbounded, Receiver, Sender};
 use rand_riscv::RandomState;
-use spin::{Lazy, Once, RwLock};
+use spin::RwLock;
 
 use crate::dev::Plic;
 
@@ -62,15 +62,4 @@ impl Interrupt {
     pub async fn wait(&self) -> bool {
         self.0.recv().await.is_ok()
     }
-}
-
-pub static INTR: Lazy<&IntrManager> = Lazy::new(|| intr().expect("PLIC uninitialized"));
-
-fn intr() -> Option<&'static IntrManager> {
-    static ONCE: Once<IntrManager> = Once::new();
-    ONCE.try_call_once(|| {
-        let plic = crate::dev::PLIC.get().cloned();
-        plic.map(IntrManager::new).ok_or(())
-    })
-    .ok()
 }
