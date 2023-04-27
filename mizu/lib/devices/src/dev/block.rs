@@ -11,7 +11,7 @@ use rv39_paging::PAGE_SHIFT;
 use crate::Interrupt;
 
 #[async_trait]
-pub trait Block: Send + Sync {
+pub trait Block: Send + Sync + 'static {
     fn block_shift(&self) -> u32;
 
     #[inline]
@@ -44,6 +44,22 @@ pub struct BlockBackend {
 impl BlockBackend {
     pub fn new(device: Arsc<dyn Block>) -> Self {
         BlockBackend { device }
+    }
+
+    pub fn device(&self) -> &Arsc<dyn Block> {
+        &self.device
+    }
+}
+
+impl<B: Block> From<Arsc<B>> for BlockBackend {
+    fn from(value: Arsc<B>) -> Self {
+        BlockBackend::new(value)
+    }
+}
+
+impl From<Arsc<dyn Block>> for BlockBackend {
+    fn from(value: Arsc<dyn Block>) -> Self {
+        BlockBackend::new(value)
     }
 }
 
