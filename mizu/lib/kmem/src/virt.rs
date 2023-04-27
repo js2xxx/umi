@@ -113,7 +113,7 @@ impl Virt {
                     if start.val() & PAGE_MASK != 0 {
                         return Err(EINVAL);
                     }
-                    let len = count.checked_shl(PAGE_SHIFT.try_into()?).ok_or(EINVAL)?;
+                    let len = count.checked_shl(PAGE_SHIFT).ok_or(EINVAL)?;
                     let end = LAddr::from(start.val().checked_add(len).ok_or(EINVAL)?);
                     let mapping = Mapping {
                         phys,

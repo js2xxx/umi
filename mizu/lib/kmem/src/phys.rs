@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use futures_util::future::try_join_all;
 use ksc_core::Error::{self, EINVAL};
 use rand_riscv::RandomState;
-use rv39_paging::{PAddr, ID_OFFSET, PAGE_MASK, PAGE_SHIFT, PAGE_SIZE};
+use rv39_paging::{PAddr, ID_OFFSET, PAGE_SHIFT, PAGE_SIZE};
 use spin::{Lazy, Mutex};
 use umifs::{
     misc::Zero,
@@ -131,6 +131,24 @@ impl Phys {
         if let Some(frame) = frame {
             self.backend.flush(index, &frame).await?;
         }
+        Ok(())
+    }
+
+    pub async fn flush_all(&self) -> Result<(), Error> {
+        let frames = ksync::critical(|| {
+            let mut frames = self.frames.lock();
+
+            let iter = frames.iter_mut();
+            iter.filter_map(|(&index, fi)| {
+                mem::replace(&mut fi.dirty, false).then(|| (index, fi.frame.clone()))
+            })
+            .collect::<Vec<_>>()
+        });
+
+        let flush_fn = |(index, frame): (usize, Arc<Frame>)| async move {
+            self.backend.flush(index, &frame).await
+        };
+        try_join_all(frames.into_iter().map(flush_fn)).await?;
         Ok(())
     }
 
@@ -354,10 +372,7 @@ impl File for Phys {
     }
 
     async fn flush(&self) -> Result<(), Error> {
-        let len = self.backend.len().await;
-        let count = (len + PAGE_MASK) >> PAGE_SHIFT;
-        try_join_all((0..count).map(|index| self.flush(index))).await?;
-        Ok(())
+        self.flush_all().await
     }
 }
 

@@ -6,6 +6,7 @@ use futures_util::future::try_join_all;
 use ksc::Error::{self, EINVAL, EIO, ENOBUFS, ENOMEM, EPERM};
 use ksync::{event::Event, Semaphore};
 use spin::lock_api::Mutex;
+use static_assertions::const_assert;
 use virtio_drivers::{
     device::blk::{BlkReq, BlkResp, VirtIOBlk},
     transport::mmio::MmioTransport,
@@ -151,25 +152,34 @@ fn virtio_rw_err(err: virtio_drivers::Error) -> Error {
     }
 }
 
+const_assert!(VirtioBlock::SECTOR_SIZE.is_power_of_two());
 #[async_trait]
 impl Block for VirtioBlock {
+    fn block_shift(&self) -> u32 {
+        Self::SECTOR_SIZE.trailing_zeros()
+    }
+
+    fn capacity_blocks(&self) -> usize {
+        self.capacity_blocks() as usize
+    }
+
     fn ack_interrupt(&self) {
         self.ack_interrupt()
     }
 
-    async fn read(&self, block: usize, buf: &mut [u8]) -> Result<usize, Error> {
+    async fn read(&self, block: usize, buf: &mut [u8]) -> Result<(), Error> {
         let len = buf.len().min(Self::SECTOR_SIZE);
         let buf = &mut buf[..len];
 
         let res = self.read_chunk(block, buf).await;
-        res.map(|_| len).map_err(virtio_rw_err)
+        res.map_err(virtio_rw_err)
     }
 
-    async fn write(&self, block: usize, buf: &[u8]) -> Result<usize, Error> {
+    async fn write(&self, block: usize, buf: &[u8]) -> Result<(), Error> {
         let len = buf.len().min(Self::SECTOR_SIZE);
         let buf = &buf[..len];
 
         let res = self.write_chunk(block, buf).await;
-        res.map(|_| len).map_err(virtio_rw_err)
+        res.map_err(virtio_rw_err)
     }
 }
