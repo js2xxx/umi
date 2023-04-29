@@ -121,12 +121,16 @@ impl Phys {
         Ok(frame)
     }
 
-    pub async fn flush(&self, index: usize) -> Result<(), Error> {
+    pub async fn flush(&self, index: usize, force_dirty: Option<bool>) -> Result<(), Error> {
         let frame = ksync::critical(|| {
             let mut frames = self.frames.lock();
 
             let fi = frames.get_mut(&index);
-            fi.and_then(|fi| mem::replace(&mut fi.dirty, false).then(|| fi.frame.clone()))
+            fi.and_then(|fi| {
+                force_dirty
+                    .unwrap_or_else(|| mem::replace(&mut fi.dirty, false))
+                    .then(|| fi.frame.clone())
+            })
         });
         if let Some(frame) = frame {
             self.backend.flush(index, &frame).await?;
@@ -149,17 +153,6 @@ impl Phys {
             self.backend.flush(index, &frame).await
         };
         try_join_all(frames.into_iter().map(flush_fn)).await?;
-        Ok(())
-    }
-
-    pub async fn release(&self, index: usize, dirty: bool) -> Result<(), Error> {
-        let frame = ksync::critical(|| {
-            let mut frames = self.frames.lock();
-            frames.pop(&index).and_then(|fi| dirty.then_some(fi.frame))
-        });
-        if let Some(frame) = frame {
-            self.backend.flush(index, &frame).await?;
-        }
         Ok(())
     }
 

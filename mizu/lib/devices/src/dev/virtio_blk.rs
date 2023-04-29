@@ -2,7 +2,6 @@ use alloc::boxed::Box;
 use core::iter;
 
 use async_trait::async_trait;
-use futures_util::future::try_join_all;
 use ksc::Error::{self, EINVAL, EIO, ENOBUFS, ENOMEM, EPERM};
 use ksync::{event::Event, Semaphore};
 use spin::lock_api::Mutex;
@@ -115,29 +114,6 @@ impl VirtioBlock {
         drop(res);
 
         resp.status().into()
-    }
-
-    pub async fn read(&self, start_block: usize, buf: &mut [u8]) -> virtio_drivers::Result {
-        if buf.len() <= Self::SECTOR_SIZE {
-            return self.read_chunk(start_block, buf).await;
-        }
-        let iter = (start_block..).zip(buf.chunks_mut(Self::SECTOR_SIZE));
-        let tasks = iter.map(|(block, chunk)| self.read_chunk(block, chunk));
-        try_join_all(tasks).await?;
-        Ok(())
-    }
-
-    pub async fn write(&self, start_block: usize, buf: &[u8]) -> virtio_drivers::Result {
-        if self.readonly() {
-            return Err(virtio_drivers::Error::Unsupported);
-        }
-        if buf.len() <= Self::SECTOR_SIZE {
-            return self.write_chunk(start_block, buf).await;
-        }
-        let iter = (start_block..).zip(buf.chunks(Self::SECTOR_SIZE));
-        let tasks = iter.map(|(block, chunk)| self.write_chunk(block, chunk));
-        try_join_all(tasks).await?;
-        Ok(())
     }
 }
 

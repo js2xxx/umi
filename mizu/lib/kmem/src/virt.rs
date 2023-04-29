@@ -2,6 +2,7 @@ mod tlb;
 
 use alloc::{boxed::Box, sync::Arc};
 use core::{
+    mem,
     ops::Range,
     sync::atomic::{AtomicUsize, Ordering::Relaxed},
 };
@@ -69,7 +70,7 @@ impl Mapping {
         {
             if let Ok(entry) = table.la2pte(addr, ID_OFFSET) {
                 let dirty = entry.get(rv39_paging::Level::pt()).1.contains(Attr::DIRTY);
-                self.phys.release(index, dirty).await?;
+                self.phys.flush(index, Some(dirty)).await?;
                 entry.reset();
                 tlb::flush(cpu_mask, addr, 1)
             }
@@ -300,6 +301,29 @@ impl Virt {
                 entry.set_latter(mapping);
             }
             Ok(())
+        })
+        .await
+    }
+
+    pub async fn clear(&self) {
+        ksync::critical(|| async {
+            let mut map = self.map.lock();
+            let mut table = self.root.lock();
+
+            let range = map.root_range();
+            let range = *range.start..*range.end;
+            let old = mem::replace(&mut *map, RangeMap::new(range.clone()));
+
+            let count = (range.end.val() - range.start.val()) >> PAGE_SHIFT;
+            let _ = table.user_unmap_npages(range.start, count, frames(), ID_OFFSET);
+
+            for (addr, mapping) in old {
+                let count: usize = (addr.end.val() - addr.start.val()) >> PAGE_SHIFT;
+                for index in 0..count {
+                    let dirty = mapping.attr.contains(Attr::WRITABLE);
+                    let _ = mapping.phys.flush(index, Some(dirty)).await;
+                }
+            }
         })
         .await
     }
