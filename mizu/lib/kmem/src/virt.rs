@@ -45,7 +45,7 @@ impl Mapping {
         {
             let entry = table.la2pte_alloc(addr, frames(), ID_OFFSET)?;
             if !entry.is_set() {
-                let frame = self.phys.commit(index, writable).await?;
+                let frame = self.phys.commit(index, writable, true).await?;
                 *entry = rv39_paging::Entry::new(
                     frame.base(),
                     self.attr | Attr::VALID,
@@ -70,7 +70,7 @@ impl Mapping {
         {
             if let Ok(entry) = table.la2pte(addr, ID_OFFSET) {
                 let dirty = entry.get(rv39_paging::Level::pt()).1.contains(Attr::DIRTY);
-                self.phys.flush(index, Some(dirty)).await?;
+                self.phys.flush(index, Some(dirty), true).await?;
                 entry.reset();
                 tlb::flush(cpu_mask, addr, 1)
             }
@@ -321,7 +321,7 @@ impl Virt {
                 let count: usize = (addr.end.val() - addr.start.val()) >> PAGE_SHIFT;
                 for index in 0..count {
                     let dirty = mapping.attr.contains(Attr::WRITABLE);
-                    let _ = mapping.phys.flush(index, Some(dirty)).await;
+                    let _ = mapping.phys.flush(index, Some(dirty), true).await;
                 }
             }
         })
