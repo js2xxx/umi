@@ -1,3 +1,5 @@
+use core::num::NonZeroU32;
+
 use crossbeam_queue::SegQueue;
 use hashbrown::{hash_map::Entry, HashMap};
 use ksync::{unbounded, Receiver, Sender};
@@ -19,10 +21,8 @@ impl IntrManager {
         }
     }
 
-    pub fn insert(&self, cx: usize, pin: u32) -> Option<Interrupt> {
-        if pin == 0 {
-            return None;
-        }
+    pub fn insert(&self, cx: usize, pin: NonZeroU32) -> Option<Interrupt> {
+        let pin = pin.get();
         let rx = ksync::critical(|| match self.map.write().entry(pin) {
             Entry::Occupied(entry) if entry.get().is_closed() => {
                 let (tx, rx) = unbounded();

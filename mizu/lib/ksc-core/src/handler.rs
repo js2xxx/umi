@@ -13,8 +13,18 @@ impl<T: 'static> Param for &'_ mut T {
     type Item<'a> = &'a mut T;
 }
 
+impl<T: 'static> Param for &T {
+    type Item<'a> = &'a T;
+}
+
 impl<T: 'static> FromParam<&'_ mut T> for &'_ mut T {
     fn from_param<'a>(item: <&'_ mut T as Param>::Item<'a>) -> Self::Item<'a> {
+        item
+    }
+}
+
+impl<T: 'static> FromParam<&'_ T> for &'_ T {
+    fn from_param<'a>(item: <&'_ T as Param>::Item<'a>) -> Self::Item<'a> {
         item
     }
 }
@@ -50,6 +60,10 @@ impl Param for usize {
     type Item<'a> = usize;
 }
 
-impl<T: Param> Param for crate::Result<T> {
-    type Item<'a> = crate::Result<<T as Param>::Item<'a>>;
+impl Param for bool {
+    type Item<'a> = bool;
+}
+
+impl<T: Param, E: Param> Param for Result<T, E> {
+    type Item<'a> = Result<<T as Param>::Item<'a>, <E as Param>::Item<'a>>;
 }

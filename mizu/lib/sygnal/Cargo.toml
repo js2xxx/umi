@@ -9,6 +9,7 @@ test = []
 
 [dependencies]
 # Local crates
+ksc-core = {path = "../ksc-core"}
 ksync = {path = "../ksync"}
 rv39-paging = {path = "../paging"}
 # External crates

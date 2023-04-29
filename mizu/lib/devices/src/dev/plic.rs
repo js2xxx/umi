@@ -58,6 +58,9 @@ const_assert_eq!(mem::size_of::<<Cx as MmioReg>::Repr>(), 0x3e00000);
 #[derive(Debug, Clone)]
 pub struct Plic(NonNull<()>);
 
+unsafe impl Send for Plic {}
+unsafe impl Sync for Plic {}
+
 impl Plic {
     /// Creates a new [`Plic`] at a specified base.
     ///

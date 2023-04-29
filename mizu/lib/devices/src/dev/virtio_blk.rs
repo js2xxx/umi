@@ -1,95 +1,71 @@
 use alloc::boxed::Box;
 use core::iter;
 
-use arsc_rs::Arsc;
-use futures_util::{future::try_join_all, Future};
+use async_trait::async_trait;
+use ksc::Error::{self, EINVAL, EIO, ENOBUFS, ENOMEM, EPERM};
 use ksync::{event::Event, Semaphore};
 use spin::lock_api::Mutex;
+use static_assertions::const_assert;
 use virtio_drivers::{
     device::blk::{BlkReq, BlkResp, VirtIOBlk},
     transport::mmio::MmioTransport,
 };
 
-use crate::{dev::VirtioHal, Interrupt};
+use super::{block::Block, HalImpl};
 
-pub struct VirtioBlock<H: VirtioHal> {
-    inner: Arsc<Inner<H>>,
+pub struct VirtioBlock {
     virt_queue: Semaphore,
-}
-
-struct Inner<H: VirtioHal> {
-    device: Mutex<VirtIOBlk<H, MmioTransport>>,
+    device: Mutex<VirtIOBlk<HalImpl, MmioTransport>>,
     event: Box<[Event]>,
 }
 
-unsafe impl<H: VirtioHal + Send + Sync> Send for Inner<H> {}
-unsafe impl<H: VirtioHal + Send + Sync> Sync for Inner<H> {}
+unsafe impl Send for VirtioBlock {}
+unsafe impl Sync for VirtioBlock {}
 
-impl<H: VirtioHal + Send + Sync + 'static> VirtioBlock<H> {
+impl VirtioBlock {
     pub const SECTOR_SIZE: usize = virtio_drivers::device::blk::SECTOR_SIZE;
 
-    pub fn new(
-        mmio: MmioTransport,
-        intr: Interrupt,
-    ) -> Option<(Self, impl Future<Output = ()> + Send + 'static)> {
-        VirtIOBlk::new(mmio).ok().map(|device| {
+    pub fn new(mmio: MmioTransport) -> Result<Self, virtio_drivers::Error> {
+        VirtIOBlk::new(mmio).map(|device| {
             let size = device.virt_queue_size() as usize;
 
-            let inner = Arsc::new(Inner {
+            VirtioBlock {
+                virt_queue: Semaphore::new(size),
                 device: Mutex::new(device),
                 event: iter::repeat_with(Event::new).take(size).collect(),
-            });
-            let i2 = inner.clone();
-            let ack = async move {
-                loop {
-                    if !intr.wait().await {
-                        break;
-                    }
-                    let used = ksync::critical(|| i2.device.lock().peek_used());
-                    if let Some(used) = used {
-                        i2.event[used as usize].notify_additional(1);
-                    }
-                }
-            };
-            (
-                VirtioBlock {
-                    inner,
-                    virt_queue: Semaphore::new(size),
-                },
-                ack,
-            )
+            }
         })
     }
 
     pub fn ack_interrupt(&self) {
         let used = ksync::critical(|| {
-            let mut blk = self.inner.device.lock();
+            let mut blk = self.device.lock();
             blk.ack_interrupt();
             blk.peek_used()
         });
         if let Some(used) = used {
-            self.inner.event[used as usize].notify_additional(1);
+            self.event[used as usize].notify_additional(1);
         }
     }
 
     pub fn capacity_blocks(&self) -> u64 {
-        unsafe { (*self.inner.device.data_ptr()).capacity() }
+        unsafe { (*self.device.data_ptr()).capacity() }
     }
 
     pub fn readonly(&self) -> bool {
-        unsafe { (*self.inner.device.data_ptr()).readonly() }
+        unsafe { (*self.device.data_ptr()).readonly() }
     }
 
     pub fn virt_queue_size(&self) -> u16 {
-        unsafe { (*self.inner.device.data_ptr()).virt_queue_size() }
+        unsafe { (*self.device.data_ptr()).virt_queue_size() }
     }
 
     #[inline]
     fn i<F, T>(&self, func: F) -> T
     where
-        F: FnOnce(&mut VirtIOBlk<H, MmioTransport>) -> T,
+        F: FnOnce(&mut VirtIOBlk<HalImpl, MmioTransport>) -> T,
     {
-        ksync::critical(|| func(&mut self.inner.device.lock()))
+        ksync::critical(|| func(&mut self.device.lock()))
     }
 
     async fn wait_for_token(&self, token: u16) {
@@ -101,12 +77,12 @@ impl<H: VirtioHal + Send + Sync + 'static> VirtioBlock<H> {
             }
             match listener.take() {
                 Some(listener) => listener.await,
-                None => listener = Some(self.inner.event[token as usize].listen()),
+                None => listener = Some(self.event[token as usize].listen()),
             }
         }
     }
 
-    async fn read_chunk(&self, block: usize, buf: &mut [u8]) -> virtio_drivers::Result {
+    pub async fn read_chunk(&self, block: usize, buf: &mut [u8]) -> virtio_drivers::Result {
         assert!(buf.len() <= Self::SECTOR_SIZE);
 
         let mut req = BlkReq::default();
@@ -123,7 +99,7 @@ impl<H: VirtioHal + Send + Sync + 'static> VirtioBlock<H> {
         resp.status().into()
     }
 
-    async fn write_chunk(&self, block: usize, buf: &[u8]) -> virtio_drivers::Result {
+    pub async fn write_chunk(&self, block: usize, buf: &[u8]) -> virtio_drivers::Result {
         assert!(buf.len() <= Self::SECTOR_SIZE);
 
         let mut req = BlkReq::default();
@@ -139,27 +115,47 @@ impl<H: VirtioHal + Send + Sync + 'static> VirtioBlock<H> {
 
         resp.status().into()
     }
+}
 
-    pub async fn read(&self, start_block: usize, buf: &mut [u8]) -> virtio_drivers::Result {
-        if buf.len() <= Self::SECTOR_SIZE {
-            return self.read_chunk(start_block, buf).await;
-        }
-        let iter = (start_block..).zip(buf.chunks_mut(Self::SECTOR_SIZE));
-        let tasks = iter.map(|(block, chunk)| self.read_chunk(block, chunk));
-        try_join_all(tasks).await?;
-        Ok(())
+fn virtio_rw_err(err: virtio_drivers::Error) -> Error {
+    match err {
+        virtio_drivers::Error::QueueFull => ENOBUFS,
+        virtio_drivers::Error::InvalidParam => EINVAL,
+        virtio_drivers::Error::DmaError => ENOMEM,
+        virtio_drivers::Error::IoError => EIO,
+        virtio_drivers::Error::Unsupported => EPERM,
+        _ => unreachable!("{err}"),
+    }
+}
+
+const_assert!(VirtioBlock::SECTOR_SIZE.is_power_of_two());
+#[async_trait]
+impl Block for VirtioBlock {
+    fn block_shift(&self) -> u32 {
+        Self::SECTOR_SIZE.trailing_zeros()
     }
 
-    pub async fn write(&self, start_block: usize, buf: &[u8]) -> virtio_drivers::Result {
-        if self.readonly() {
-            return Err(virtio_drivers::Error::Unsupported);
-        }
-        if buf.len() <= Self::SECTOR_SIZE {
-            return self.write_chunk(start_block, buf).await;
-        }
-        let iter = (start_block..).zip(buf.chunks(Self::SECTOR_SIZE));
-        let tasks = iter.map(|(block, chunk)| self.write_chunk(block, chunk));
-        try_join_all(tasks).await?;
-        Ok(())
+    fn capacity_blocks(&self) -> usize {
+        self.capacity_blocks() as usize
+    }
+
+    fn ack_interrupt(&self) {
+        self.ack_interrupt()
+    }
+
+    async fn read(&self, block: usize, buf: &mut [u8]) -> Result<(), Error> {
+        let len = buf.len().min(Self::SECTOR_SIZE);
+        let buf = &mut buf[..len];
+
+        let res = self.read_chunk(block, buf).await;
+        res.map_err(virtio_rw_err)
+    }
+
+    async fn write(&self, block: usize, buf: &[u8]) -> Result<(), Error> {
+        let len = buf.len().min(Self::SECTOR_SIZE);
+        let buf = &buf[..len];
+
+        let res = self.write_chunk(block, buf).await;
+        res.map_err(virtio_rw_err)
     }
 }

@@ -8,7 +8,7 @@ use core::{
 use rv39_paging::{LAddr, PageAlloc, PAGE_MASK, PAGE_SHIFT, PAGE_SIZE};
 use static_assertions::const_assert_eq;
 
-const COUNT_SHIFT: usize = 5;
+const COUNT_SHIFT: u32 = 5;
 const MAX_COUNT: usize = 1 << (PAGE_SHIFT - COUNT_SHIFT);
 const COUNT_MASK: usize = (MAX_COUNT - 1) << COUNT_SHIFT;
 

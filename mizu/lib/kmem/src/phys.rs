@@ -9,9 +9,9 @@ use core::{
 
 use async_trait::async_trait;
 use futures_util::future::try_join_all;
-use ksc_core::Error::{self, EINVAL};
+use ksc_core::Error::{self, EINVAL, ENOMEM};
 use rand_riscv::RandomState;
-use rv39_paging::{PAddr, ID_OFFSET, PAGE_MASK, PAGE_SHIFT, PAGE_SIZE};
+use rv39_paging::{PAddr, ID_OFFSET, PAGE_SHIFT, PAGE_SIZE};
 use spin::{Lazy, Mutex};
 use umifs::{
     misc::Zero,
@@ -65,6 +65,7 @@ impl Borrow<PAddr> for Frame {
 pub struct FrameInfo {
     frame: Arc<Frame>,
     dirty: bool,
+    pin_count: usize,
 }
 
 pub struct Phys {
@@ -94,11 +95,17 @@ impl Phys {
 }
 
 impl Phys {
-    pub async fn commit(&self, index: usize, writable: bool) -> Result<Arc<Frame>, Error> {
+    pub async fn commit(
+        &self,
+        index: usize,
+        writable: bool,
+        pin: bool,
+    ) -> Result<Arc<Frame>, Error> {
         let frame = ksync::critical(|| {
             self.frames.lock().get_mut(&index).map(|fi| {
                 if writable {
                     fi.dirty = true;
+                    fi.pin_count += pin as usize;
                 }
                 fi.frame.clone()
             })
@@ -106,14 +113,35 @@ impl Phys {
         if let Some(frame) = frame {
             return Ok(frame);
         }
+
         let frame = self.backend.commit(index, writable).await?;
         if let Some((index, fi)) = ksync::critical(|| {
             let fi = FrameInfo {
                 frame: frame.clone(),
                 dirty: false,
+                pin_count: pin as usize,
             };
-            self.frames.lock().push(index, fi)
-        }) {
+            let mut frames = self.frames.lock();
+            let mut data = frames.push(index, fi);
+
+            let index = match data.as_ref() {
+                None => return Ok(None),
+                Some(&(index, _)) => index,
+            };
+            let mut looped = false;
+
+            Ok(loop {
+                data = match data {
+                    Some((i, _)) if i == index && looped => return Err(ENOMEM),
+                    // Find a frame that is not pinned.
+                    Some((index, fi)) if fi.pin_count > 0 => frames.push(index, fi),
+                    Some(data) => break Some(data),
+                    None => break None,
+                };
+                looped = true;
+            })
+        })? {
+            debug_assert!(fi.pin_count == 0);
             if fi.dirty {
                 self.backend.flush(index, &fi.frame).await?;
             }
@@ -121,12 +149,22 @@ impl Phys {
         Ok(frame)
     }
 
-    pub async fn flush(&self, index: usize) -> Result<(), Error> {
+    pub async fn flush(
+        &self,
+        index: usize,
+        force_dirty: Option<bool>,
+        unpin: bool,
+    ) -> Result<(), Error> {
         let frame = ksync::critical(|| {
             let mut frames = self.frames.lock();
 
             let fi = frames.get_mut(&index);
-            fi.and_then(|fi| mem::replace(&mut fi.dirty, false).then(|| fi.frame.clone()))
+            fi.and_then(|fi| {
+                fi.pin_count -= unpin as usize;
+                force_dirty
+                    .unwrap_or_else(|| mem::replace(&mut fi.dirty, false))
+                    .then(|| fi.frame.clone())
+            })
         });
         if let Some(frame) = frame {
             self.backend.flush(index, &frame).await?;
@@ -134,14 +172,21 @@ impl Phys {
         Ok(())
     }
 
-    pub async fn release(&self, index: usize, dirty: bool) -> Result<(), Error> {
-        let frame = ksync::critical(|| {
+    pub async fn flush_all(&self) -> Result<(), Error> {
+        let frames = ksync::critical(|| {
             let mut frames = self.frames.lock();
-            frames.pop(&index).and_then(|fi| dirty.then_some(fi.frame))
+
+            let iter = frames.iter_mut();
+            iter.filter_map(|(&index, fi)| {
+                mem::replace(&mut fi.dirty, false).then(|| (index, fi.frame.clone()))
+            })
+            .collect::<Vec<_>>()
         });
-        if let Some(frame) = frame {
-            self.backend.flush(index, &frame).await?;
-        }
+
+        let flush_fn = |(index, frame): (usize, Arc<Frame>)| async move {
+            self.backend.flush(index, &frame).await
+        };
+        try_join_all(frames.into_iter().map(flush_fn)).await?;
         Ok(())
     }
 
@@ -154,8 +199,8 @@ impl Phys {
             let max_trial = frames.len();
             let mut trial = 0;
             while let Some((index, mut fi)) = frames.pop_lru() {
-                let frame = match Arc::try_unwrap(fi.frame) {
-                    Ok(frame) => frame,
+                let (frame, dirty, pinc) = match Arc::try_unwrap(fi.frame) {
+                    Ok(frame) => (frame, fi.dirty, fi.pin_count),
                     Err(frame) => {
                         fi.frame = frame;
                         frames.push(index, fi);
@@ -164,7 +209,7 @@ impl Phys {
                 };
 
                 if fi.dirty {
-                    dirties.push_back((index, frame))
+                    dirties.push_back((index, frame, dirty, pinc))
                 } else {
                     ret.push(frame)
                 }
@@ -180,7 +225,7 @@ impl Phys {
 
         while ret.len() < max_count.get() {
             match dirties.pop_front() {
-                Some((index, frame)) => {
+                Some((index, frame, ..)) => {
                     self.backend.flush(index, &frame).await?;
                     ret.push(frame)
                 }
@@ -190,10 +235,11 @@ impl Phys {
 
         ksync::critical(|| {
             let mut frames = self.frames.lock();
-            dirties.into_iter().for_each(|(index, frame)| {
+            dirties.into_iter().for_each(|(index, frame, dirty, pinc)| {
                 let fi = FrameInfo {
                     frame: Arc::new(frame),
-                    dirty: true,
+                    dirty,
+                    pin_count: pinc,
                 };
                 frames.push(index, fi);
             })
@@ -280,7 +326,7 @@ impl File for Phys {
         let ((start_page, start_offset), (end_page, end_offset)) = offsets(start, end);
 
         if start_page == end_page {
-            let frame = self.commit(start_page, false).await?;
+            let frame = self.commit(start_page, false, false).await?;
 
             Ok(copy_from_frame(
                 &mut buffer,
@@ -291,21 +337,21 @@ impl File for Phys {
         } else {
             let mut read_len = 0;
             {
-                let frame = self.commit(start_page, false).await?;
+                let frame = self.commit(start_page, false, false).await?;
                 read_len += copy_from_frame(&mut buffer, &frame, start_offset, PAGE_SIZE);
                 if buffer.is_empty() {
                     return Ok(read_len);
                 }
             }
             for index in (start_page + 1)..end_page {
-                let frame = self.commit(index, false).await?;
+                let frame = self.commit(index, false, false).await?;
                 read_len += copy_from_frame(&mut buffer, &frame, 0, PAGE_SIZE);
                 if buffer.is_empty() {
                     return Ok(read_len);
                 }
             }
             {
-                let frame = self.commit(end_page, false).await?;
+                let frame = self.commit(end_page, false, false).await?;
                 read_len += copy_from_frame(&mut buffer, &frame, 0, end_offset);
             }
 
@@ -322,13 +368,13 @@ impl File for Phys {
         let ((start_page, start_offset), (end_page, end_offset)) = offsets(start, end);
 
         if start_page == end_page {
-            let frame = self.commit(start_page, true).await?;
+            let frame = self.commit(start_page, true, false).await?;
 
             Ok(copy_to_frame(&mut buffer, &frame, start_offset, end_offset))
         } else {
             let mut written_len = 0;
             {
-                let frame = self.commit(start_page, true).await?;
+                let frame = self.commit(start_page, true, false).await?;
                 let len = copy_to_frame(&mut buffer, &frame, start_offset, PAGE_SIZE);
                 written_len += len;
                 if buffer.is_empty() {
@@ -336,7 +382,7 @@ impl File for Phys {
                 }
             }
             for index in (start_page + 1)..end_page {
-                let frame = self.commit(index, true).await?;
+                let frame = self.commit(index, true, false).await?;
                 let len = copy_to_frame(&mut buffer, &frame, 0, PAGE_SIZE);
                 written_len += len;
                 if buffer.is_empty() {
@@ -344,7 +390,7 @@ impl File for Phys {
                 }
             }
             {
-                let frame = self.commit(end_page, true).await?;
+                let frame = self.commit(end_page, true, false).await?;
                 let len = copy_to_frame(&mut buffer, &frame, 0, end_offset);
                 written_len += len;
             }
@@ -354,10 +400,7 @@ impl File for Phys {
     }
 
     async fn flush(&self) -> Result<(), Error> {
-        let len = self.backend.len().await;
-        let count = (len + PAGE_MASK) >> PAGE_SHIFT;
-        try_join_all((0..count).map(|index| self.flush(index))).await?;
-        Ok(())
+        self.flush_all().await
     }
 }
 

@@ -9,15 +9,18 @@ test = []
 
 [dependencies]
 # Local crates
+kmem = {path = "../kmem"}
+ksc = {path = "../ksc"}
 ksync = {path = "../ksync"}
 rand-riscv = {path = "../rand-riscv"}
 rv39-paging = {path = "../paging"}
 # External crates
 arsc-rs = {git = "https://github.com/js2xxx/arsc"}
+async-trait = "0"
 crossbeam-queue = {version = "0", default-features = false, features = ["alloc", "nightly"]}
-fdt = "0"
 futures-util = {version = "0", default-features = false, features = ["alloc"]}
 hashbrown = {version = "0", default-features = false, features = ["inline-more"]}
+log = "0"
 spin = "0"
 static_assertions = "1"
 virtio-drivers = "0"

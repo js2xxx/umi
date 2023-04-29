@@ -23,8 +23,8 @@ impl Level {
     }
 
     #[inline]
-    pub const fn page_shift(&self) -> usize {
-        PAGE_SHIFT + self.0 as usize * NR_ENTRIES_SHIFT
+    pub const fn page_shift(&self) -> u32 {
+        PAGE_SHIFT + self.0 as u32 * NR_ENTRIES_SHIFT
     }
 
     #[inline]

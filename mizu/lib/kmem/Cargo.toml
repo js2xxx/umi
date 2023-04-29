@@ -9,18 +9,22 @@ test = ["dep:scoped_threadpool"]
 
 [dependencies]
 # Local crates
+hart-id = {path = "../hart-id"}
 ksc-core = {path = "../ksc-core"}
 ksync = {path = "../ksync"}
 ktime-core = {path = "../ktime-core"}
 rand-riscv = {path = "../rand-riscv"}
+range-map = {path = "../range-map"}
 rv39-paging = {path = "../paging"}
 umifs = {path = "../umifs"}
-range-map = {path = "../range-map"}
 # External crates
+arsc-rs = {git = "https://github.com/js2xxx/arsc"}
 async-trait = "0"
 futures-util = {version = "0", default-features = false, features = ["alloc"]}
 hashbrown = {version = "0", default-features = false, features = ["inline-more"]}
 log = "0"
+riscv = "0"
+sbi-rt = {git = "https://github.com/js2xxx/sbi-rt", branch = "multitarget"}
 scoped_threadpool = {version = "0", optional = true}
 spin = "0"
 static_assertions = "1"

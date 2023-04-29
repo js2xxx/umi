@@ -312,11 +312,14 @@ name = "devices"
 version = "0.1.0"
 dependencies = [
  "arsc-rs",
+ "async-trait",
  "crossbeam-queue",
- "fdt",
  "futures-util",
  "hashbrown",
+ "kmem",
+ "ksc",
  "ksync",
+ "log",
  "rand-riscv",
  "rv39-paging",
  "spin",
@@ -454,6 +457,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "hart-id"
+version = "0.1.0"
+
+[[package]]
 name = "hash32"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -531,8 +538,10 @@ dependencies = [
 name = "kmem"
 version = "0.1.0"
 dependencies = [
+ "arsc-rs",
  "async-trait",
  "futures-util",
+ "hart-id",
  "hashbrown",
  "ksc-core",
  "ksync",
@@ -540,7 +549,9 @@ dependencies = [
  "log",
  "rand-riscv",
  "range-map",
+ "riscv",
  "rv39-paging",
+ "sbi-rt",
  "scoped_threadpool",
  "spin",
  "static_assertions",
@@ -679,6 +690,10 @@ dependencies = [
  "art",
  "co-trap",
  "config",
+ "devices",
+ "fdt",
+ "hart-id",
+ "hashbrown",
  "kalloc",
  "klog",
  "kmem",
@@ -686,11 +701,16 @@ dependencies = [
  "ksync",
  "ktime",
  "log",
+ "pin-project",
  "r0",
+ "rand-riscv",
  "riscv",
  "rv39-paging",
  "sbi-rt",
+ "spin",
  "static_assertions",
+ "sygnal",
+ "virtio-drivers",
 ]
 
 [[package]]
@@ -1040,6 +1060,7 @@ dependencies = [
  "array-macro",
  "crossbeam-queue",
  "futures-util",
+ "ksc-core",
  "ksync",
  "rv39-paging",
  "spin",
