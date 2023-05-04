@@ -16,13 +16,13 @@ use super::TaskState;
 
 #[pin_project]
 pub struct TaskFut<F> {
-    virt: Arsc<Virt>,
+    virt: Pin<Arsc<Virt>>,
     #[pin]
     fut: F,
 }
 
 impl<F> TaskFut<F> {
-    pub fn new(virt: Arsc<Virt>, fut: F) -> Self {
+    pub fn new(virt: Pin<Arsc<Virt>>, fut: F) -> Self {
         TaskFut { virt, fut }
     }
 }

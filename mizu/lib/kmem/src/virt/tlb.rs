@@ -1,4 +1,4 @@
-use core::{mem, ptr, sync::atomic::Ordering::SeqCst};
+use core::{mem, pin::Pin, ptr, sync::atomic::Ordering::SeqCst};
 
 use arsc_rs::Arsc;
 use riscv::{
@@ -12,11 +12,11 @@ use crate::Virt;
 #[thread_local]
 static mut CUR_VIRT: *const Virt = ptr::null();
 
-pub fn set_virt(virt: Arsc<Virt>) {
-    let addr = unsafe { ptr::addr_of_mut!(*virt.root.data_ptr()) };
+pub fn set_virt(virt: Pin<Arsc<Virt>>) {
+    let addr = unsafe { ptr::addr_of_mut!(**virt.root.as_ptr()) };
 
     virt.cpu_mask.fetch_or(1 << hart_id::hart_id(), SeqCst);
-    let new = Arsc::into_raw(virt);
+    let new = Arsc::into_raw(unsafe { Pin::into_inner_unchecked(virt) });
     let old = unsafe { mem::replace(&mut CUR_VIRT, new) };
 
     if !old.is_null() && old != new {

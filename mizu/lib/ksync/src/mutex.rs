@@ -43,6 +43,10 @@ impl<T: ?Sized> Mutex<T> {
         self.data.get_mut()
     }
 
+    pub fn as_ptr(&self) -> *mut T {
+        self.data.get()
+    }
+
     #[inline]
     pub fn try_lock(&self) -> Option<MutexGuard<'_, T>> {
         match self.state.compare_exchange(0, 1, Acquire, Acquire) {

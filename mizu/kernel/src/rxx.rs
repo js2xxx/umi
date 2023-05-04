@@ -34,6 +34,7 @@ pub fn executor() -> &'static Arsc<Executor> {
     EXECUTOR.get().unwrap()
 }
 
+#[cfg(not(feature = "test"))]
 fn run_art(payload: usize) {
     type Payload = *mut Box<dyn FnOnce() + Send>;
     if hart_id::is_bsp() {
