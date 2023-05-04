@@ -2,7 +2,7 @@ use core::num::NonZeroU32;
 
 use crossbeam_queue::SegQueue;
 use hashbrown::{hash_map::Entry, HashMap};
-use ksync::{unbounded, Receiver, Sender};
+use ksync::{unbounded, Receiver, Sender, TryRecvError};
 use rand_riscv::RandomState;
 use spin::RwLock;
 
@@ -40,6 +40,10 @@ impl IntrManager {
         Some(Interrupt(rx))
     }
 
+    pub fn check_pending(&self, pin: NonZeroU32) -> bool {
+        self.plic.pending(pin.get())
+    }
+
     pub fn notify(&self, cx: usize) {
         let pin = self.plic.claim(cx);
         if pin > 0 {
@@ -61,5 +65,13 @@ pub struct Interrupt(Receiver<SegQueue<()>>);
 impl Interrupt {
     pub async fn wait(&self) -> bool {
         self.0.recv().await.is_ok()
+    }
+
+    pub fn try_wait(&self) -> Option<bool> {
+        match self.0.try_recv() {
+            Ok(_) | Err(TryRecvError::Closed(Some(_))) => Some(true),
+            Err(TryRecvError::Empty) => None,
+            Err(TryRecvError::Closed(None)) => Some(false),
+        }
     }
 }

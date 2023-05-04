@@ -151,6 +151,10 @@ impl IoSliceExt for IoSliceMut<'_> {
     }
 }
 
+pub fn ioslice_len(bufs: &&mut [impl IoSliceExt]) -> usize {
+    bufs.iter().fold(0, |sum, buf| sum + buf.len())
+}
+
 pub fn advance_slices(bufs: &mut &mut [impl IoSliceExt], n: usize) {
     // Number of buffers to remove.
     let mut remove = 0;

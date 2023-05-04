@@ -76,13 +76,20 @@ impl VirtioBlock {
                 break;
             }
             match listener.take() {
-                Some(listener) => listener.await,
+                Some(listener) => {
+                    log::trace!("VirtioBlock::wait_for_token: token = {token}");
+                    listener.await
+                }
                 None => listener = Some(self.event[token as usize].listen()),
             }
         }
     }
 
     pub async fn read_chunk(&self, block: usize, buf: &mut [u8]) -> virtio_drivers::Result {
+        log::trace!(
+            "VirtioBlock::read_chunk: block = {block}, buf len = {}",
+            buf.len()
+        );
         assert!(buf.len() <= Self::SECTOR_SIZE);
 
         let mut req = BlkReq::default();
@@ -100,6 +107,10 @@ impl VirtioBlock {
     }
 
     pub async fn write_chunk(&self, block: usize, buf: &[u8]) -> virtio_drivers::Result {
+        log::trace!(
+            "VirtioBlock::write_chunk: block = {block}, buf len = {}",
+            buf.len()
+        );
         assert!(buf.len() <= Self::SECTOR_SIZE);
 
         let mut req = BlkReq::default();

@@ -54,3 +54,13 @@ impl const Default for PreemptState {
 
 #[thread_local]
 pub static PREEMPT: PreemptState = PreemptState::default();
+
+#[no_mangle]
+unsafe extern "C" fn preempt_disable() {
+    PREEMPT.disable()
+}
+
+#[no_mangle]
+unsafe extern "C" fn preempt_enable() {
+    PREEMPT.enable()
+}

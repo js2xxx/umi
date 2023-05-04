@@ -3,6 +3,7 @@ use core::ops::Range;
 
 use arsc_rs::Arsc;
 use async_trait::async_trait;
+use futures_lite::future::yield_now;
 use futures_util::future::try_join_all;
 use kmem::{Backend, Frame};
 use ksc::Error::{self, ENOMEM, ENOSPC};
@@ -29,10 +30,13 @@ pub trait Block: Send + Sync + 'static {
 
     async fn intr_dispatch(self: Arsc<Self>, intr: Interrupt) {
         loop {
-            if !intr.wait().await {
+            // TODO: use `intr.wait().await`.
+            if let Some(false) = intr.try_wait() {
                 break;
             }
-            self.ack_interrupt()
+
+            self.ack_interrupt();
+            yield_now().await;
         }
     }
 }
@@ -70,7 +74,9 @@ impl Backend for BlockBackend {
         self.device.capacity_blocks() << self.device.block_shift()
     }
 
-    async fn commit(&self, index: usize, _writable: bool) -> Result<Arc<Frame>, Error> {
+    async fn commit(&self, index: usize, writable: bool) -> Result<Arc<Frame>, Error> {
+        log::trace!("BlockBackend::commit: index = {index}, writable = {writable}");
+
         let block_iter = block_iter(&*self.device, index)?;
 
         let frame = Frame::new().ok_or(ENOMEM)?;
@@ -87,6 +93,11 @@ impl Backend for BlockBackend {
     }
 
     async fn flush(&self, index: usize, frame: &Frame) -> Result<(), Error> {
+        log::trace!(
+            "BlockBackend::flush: index = {index}, frame = {:?}",
+            frame.base()
+        );
+
         let block_iter = block_iter(&*self.device, index)?;
 
         try_join_all(block_iter.map(|(block, buf_range)| {

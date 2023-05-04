@@ -82,6 +82,7 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
     };
 
     use config::VIRT_END;
+    use riscv::register::{sie, sstatus};
     use sbi_rt::{NoReason, Shutdown};
 
     static GLOBAL_INIT: AtomicBool = AtomicBool::new(false);
@@ -126,7 +127,7 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
 
     if hart_id::is_bsp() {
         // Init logger.
-        unsafe { klog::init_logger(log::Level::Debug) };
+        unsafe { klog::init_logger(log::Level::Trace) };
 
         // Init the kernel heap.
         unsafe { kalloc::init(&mut _sheap, &mut _eheap) };
@@ -136,6 +137,15 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
             let range = (&_end as *const u8).into()..VIRT_END.into();
             kmem::init_frames(range)
         }
+    }
+
+    unsafe {
+        sie::set_sext();
+        sie::set_stimer();
+        sie::set_ssoft();
+        sstatus::set_spie();
+
+        ksync::enable();
     }
 
     run_art(payload);

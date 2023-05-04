@@ -16,7 +16,7 @@ use spin::{Lazy, Mutex};
 use umifs::{
     misc::Zero,
     traits::File,
-    types::{advance_slices, IoSlice, IoSliceMut, SeekFrom},
+    types::{advance_slices, ioslice_len, IoSlice, IoSliceMut, SeekFrom},
 };
 
 use crate::lru::LruCache;
@@ -318,7 +318,8 @@ impl File for Phys {
     }
 
     async fn read_at(&self, offset: usize, mut buffer: &mut [IoSliceMut]) -> Result<usize, Error> {
-        let (start, end) = (offset, offset.checked_add(buffer.len()).ok_or(EINVAL)?);
+        let ioslice_len = ioslice_len(&buffer);
+        let (start, end) = (offset, offset.checked_add(ioslice_len).ok_or(EINVAL)?);
         if start == end {
             return Ok(0);
         }
@@ -360,7 +361,8 @@ impl File for Phys {
     }
 
     async fn write_at(&self, offset: usize, mut buffer: &mut [IoSlice]) -> Result<usize, Error> {
-        let (start, end) = (offset, offset.checked_add(buffer.len()).ok_or(EINVAL)?);
+        let ioslice_len = ioslice_len(&buffer);
+        let (start, end) = (offset, offset.checked_add(ioslice_len).ok_or(EINVAL)?);
         if start == end {
             return Ok(0);
         }
@@ -429,6 +431,9 @@ fn copy_from_frame(
 ) -> usize {
     let mut read_len = 0;
     loop {
+        if buffer.is_empty() {
+            break read_len;
+        }
         let buf = &mut buffer[0];
         let len = buf.len().min(end - start);
         if len == 0 {
@@ -452,6 +457,9 @@ fn copy_to_frame(
 ) -> usize {
     let mut written_len = 0;
     loop {
+        if buffer.is_empty() {
+            break written_len;
+        }
         let buf = buffer[0];
         let len = buf.len().min(end - start);
         if len == 0 {
