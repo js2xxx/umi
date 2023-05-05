@@ -48,8 +48,8 @@ impl VirtioBlock {
         }
     }
 
-    pub fn capacity_blocks(&self) -> u64 {
-        unsafe { (*self.device.data_ptr()).capacity() }
+    pub fn capacity_blocks(&self) -> usize {
+        unsafe { (*self.device.data_ptr()).capacity() as usize }
     }
 
     pub fn readonly(&self) -> bool {
@@ -147,7 +147,7 @@ impl Block for VirtioBlock {
     }
 
     fn capacity_blocks(&self) -> usize {
-        self.capacity_blocks() as usize
+        self.capacity_blocks()
     }
 
     fn ack_interrupt(&self) {
@@ -170,3 +170,4 @@ impl Block for VirtioBlock {
         res.map_err(virtio_rw_err)
     }
 }
+impl_backend_for_block!(VirtioBlock);

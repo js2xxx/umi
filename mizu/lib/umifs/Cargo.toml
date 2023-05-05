@@ -13,5 +13,6 @@ ksc-core = {path = "../ksc-core"}
 ktime-core = {path = "../ktime-core"}
 rv39-paging = {path = "../paging"}
 # External crates
+arsc-rs = {git = "https://github.com/js2xxx/arsc"}
 async-trait = "0"
 bitflags = "2"

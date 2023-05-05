@@ -7,6 +7,7 @@ use core::{
     sync::atomic::{AtomicUsize, Ordering::SeqCst},
 };
 
+use arsc_rs::Arsc;
 use async_trait::async_trait;
 use futures_util::future::try_join_all;
 use ksc_core::Error::{self, EINVAL, ENOMEM};
@@ -71,11 +72,11 @@ pub struct FrameInfo {
 pub struct Phys {
     frames: Mutex<LruCache<usize, FrameInfo>>,
     position: AtomicUsize,
-    backend: Arc<dyn Backend>,
+    backend: Arsc<dyn Backend>,
 }
 
 impl Phys {
-    pub fn new(backend: Arc<dyn Backend>, initial_pos: usize) -> Self {
+    pub fn new(backend: Arsc<dyn Backend>, initial_pos: usize) -> Self {
         Phys {
             frames: Mutex::new(LruCache::unbounded_with_hasher(RandomState::new())),
             position: initial_pos.into(),
@@ -90,7 +91,7 @@ impl Phys {
 
 impl Phys {
     pub fn new_anon() -> Phys {
-        Phys::new(Arc::new(Zero), 0)
+        Phys::new(Arsc::new(Zero), 0)
     }
 }
 
@@ -269,12 +270,22 @@ impl Default for Phys {
 
 #[async_trait]
 #[allow(clippy::len_without_is_empty)]
-pub trait Backend: Send + Sync + 'static {
+pub trait Backend: ToBackend + Send + Sync + 'static {
     async fn len(&self) -> usize;
 
     async fn commit(&self, index: usize, writable: bool) -> Result<Arc<Frame>, Error>;
 
     async fn flush(&self, index: usize, frame: &Frame) -> Result<(), Error>;
+}
+
+pub trait ToBackend {
+    fn to_backend(self: Arsc<Self>) -> Arsc<dyn Backend>;
+}
+
+impl<T: Backend> ToBackend for T {
+    fn to_backend(self: Arsc<Self>) -> Arsc<dyn Backend> {
+        self as _
+    }
 }
 
 #[async_trait]

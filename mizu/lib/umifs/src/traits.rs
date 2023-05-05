@@ -1,6 +1,7 @@
 use alloc::{boxed::Box, sync::Arc};
 use core::any::Any;
 
+use arsc_rs::Arsc;
 use async_trait::async_trait;
 use ksc_core::Error;
 
@@ -11,10 +12,16 @@ use crate::{
 
 pub trait IntoAny: Any {
     fn into_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync>;
+
+    fn into_any_arsc(self: Arsc<Self>) -> Arsc<dyn Any + Send + Sync>;
 }
 
 impl<T: Any + Send + Sync> IntoAny for T {
     fn into_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync> {
+        self as _
+    }
+
+    fn into_any_arsc(self: Arsc<Self>) -> Arsc<dyn Any + Send + Sync> {
         self as _
     }
 }
@@ -31,7 +38,7 @@ pub trait Entry: IntoAny {
 }
 
 #[async_trait]
-pub trait File: Send + Sync {
+pub trait File: IntoAny + Send + Sync {
     async fn read(&self, buffer: &mut [IoSliceMut]) -> Result<usize, Error> {
         let offset = self.seek(SeekFrom::Current(0)).await?;
         self.read_at(offset, buffer).await
