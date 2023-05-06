@@ -21,7 +21,11 @@ impl IntrManager {
         }
     }
 
-    pub fn insert(&self, cx: usize, pin: NonZeroU32) -> Option<Interrupt> {
+    pub fn insert(
+        &self,
+        cx: impl IntoIterator<Item = usize>,
+        pin: NonZeroU32,
+    ) -> Option<Interrupt> {
         let pin = pin.get();
         let rx = ksync::critical(|| match self.map.write().entry(pin) {
             Entry::Occupied(entry) if entry.get().is_closed() => {
@@ -36,7 +40,8 @@ impl IntrManager {
             }
             _ => None,
         })?;
-        self.plic.enable(pin, cx, true);
+        cx.into_iter()
+            .for_each(|cx| self.plic.enable(pin, cx, true));
         Some(Interrupt(rx))
     }
 

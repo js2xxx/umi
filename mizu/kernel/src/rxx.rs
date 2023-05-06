@@ -102,10 +102,6 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
 
     if !GLOBAL_INIT.load(Relaxed) {
         r0::zero_bss(&mut _sbss, &mut _ebss);
-
-        // Can't use cmpxchg here, because `zero_bss` will reinitialize it to zero.
-        GLOBAL_INIT.store(true, Release);
-        hart_id::init_bsp_id(hartid);
     }
 
     // Initialize TLS
@@ -116,7 +112,6 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
 
         let len = (&_tdata_size) as *const u32 as usize;
         tp.copy_from_nonoverlapping(&_stdata, len / mem::size_of::<u32>());
-        hart_id::init_hart_id(hartid);
     }
 
     // Disable interrupt in `ksync`.
@@ -125,12 +120,16 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
     // Init default kernel trap handler.
     unsafe { crate::trap::init() };
 
-    if hart_id::is_bsp() {
+    if !GLOBAL_INIT.load(Relaxed) {
         // Init logger.
         unsafe { klog::init_logger(log::Level::Trace) };
 
         // Init the kernel heap.
         unsafe { kalloc::init(&mut _sheap, &mut _eheap) };
+
+        // Can't use cmpxchg here, because `zero_bss` will reinitialize it to zero.
+        GLOBAL_INIT.store(true, Release);
+        hart_id::init_bsp_id(hartid);
 
         // Init the frame allocator.
         unsafe {
@@ -138,6 +137,7 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
             kmem::init_frames(range)
         }
     }
+    hart_id::init_hart_id(hartid);
 
     unsafe {
         sie::set_sext();

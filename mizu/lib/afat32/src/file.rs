@@ -1,4 +1,4 @@
-use alloc::{boxed::Box, vec::Vec, sync::Arc};
+use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use core::sync::atomic::{
     AtomicUsize,
     Ordering::{Relaxed, SeqCst},
@@ -10,8 +10,12 @@ use futures_util::TryStreamExt;
 use ksc_core::Error::{self, EINVAL, EISDIR, ENOSYS, ENOTDIR};
 use ksync::{Mutex, RwLock, RwLockUpgradableReadGuard, RwLockWriteGuard};
 use umifs::{
+    path::Path,
     traits::{Entry, File},
-    types::{advance_slices, ioslice_len, IoSlice, IoSliceMut, Metadata, SeekFrom, OpenOptions, Permissions, FileType}, path::Path,
+    types::{
+        advance_slices, ioslice_len, FileType, IoSlice, IoSliceMut, Metadata, OpenOptions,
+        Permissions, SeekFrom,
+    },
 };
 
 use crate::{dirent::DirEntryEditor, fs::FatFileSystem, TimeProvider};
@@ -313,7 +317,7 @@ impl<T: TimeProvider> Entry for FatFile<T> {
         _perm: Permissions,
     ) -> Result<(Arc<dyn Entry>, bool), Error> {
         if !path.as_str().is_empty() {
-            return Err(ENOTDIR)
+            return Err(ENOTDIR);
         }
         if !matches!(expect_ty, None | Some(FileType::FILE)) {
             return Err(ENOTDIR);

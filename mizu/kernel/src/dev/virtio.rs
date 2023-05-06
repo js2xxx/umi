@@ -32,8 +32,7 @@ pub fn virtio_mmio_init(node: &FdtNode) -> bool {
             let device = tryb!(VirtioBlock::new(mmio).inspect_err(|err| {
                 log::debug!("Failed to initialize VirtIO block device: {err}");
             }));
-            // TODO: Replace `hart_id` by a more balanced method.
-            let intr = someb!(intr_manager.insert(hart_id::hart_id(), intr_pin));
+            let intr = someb!(intr_manager.insert(hart_id::hart_ids(), intr_pin));
 
             let device = Arsc::new(device);
             executor()

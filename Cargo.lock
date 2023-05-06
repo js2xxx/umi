@@ -488,6 +488,10 @@ dependencies = [
 [[package]]
 name = "hart-id"
 version = "0.1.0"
+dependencies = [
+ "ksync-core",
+ "spin",
+]
 
 [[package]]
 name = "hash32"
