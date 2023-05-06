@@ -278,6 +278,13 @@ pub enum Error {
     EHWPOISON = 133,
 }
 
+impl<I: fmt::Debug> From<nom::Err<nom::error::Error<I>>> for Error {
+    fn from(value: nom::Err<nom::error::Error<I>>) -> Self {
+        log::error!("nom error: {value}");
+        EIO
+    }
+}
+
 impl From<core::alloc::LayoutError> for Error {
     #[inline]
     fn from(_: core::alloc::LayoutError) -> Self {

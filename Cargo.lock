@@ -529,6 +529,7 @@ dependencies = [
 name = "klog"
 version = "0.1.0"
 dependencies = [
+ "hart-id",
  "ksync-core",
  "ktime-core",
  "log",
@@ -581,6 +582,8 @@ version = "0.1.0"
 dependencies = [
  "bevy_utils_proc_macros",
  "enum-primitive-derive",
+ "log",
+ "nom",
  "num-traits",
  "rv39-paging",
 ]
@@ -1100,6 +1103,7 @@ dependencies = [
  "bitflags 2.2.1",
  "ksc-core",
  "ktime-core",
+ "log",
  "rv39-paging",
 ]
 

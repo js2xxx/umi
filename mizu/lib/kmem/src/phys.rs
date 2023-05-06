@@ -103,6 +103,11 @@ impl Phys {
         writable: bool,
         pin: bool,
     ) -> Result<Arc<Frame>, Error> {
+        log::trace!(
+            "Phys::commit index = {index} {} {}",
+            if writable { "writable" } else { "" },
+            if pin { "pin" } else { "" }
+        );
         let mut frames = self.frames.lock().await;
 
         let frame = frames.get_mut(&index).map(|fi| {
@@ -333,6 +338,11 @@ impl File for Phys {
     }
 
     async fn read_at(&self, offset: usize, mut buffer: &mut [IoSliceMut]) -> Result<usize, Error> {
+        log::trace!(
+            "Phys::read_at {offset}, buffer len = {}",
+            ioslice_len(&buffer)
+        );
+
         let ioslice_len = ioslice_len(&buffer);
         let (start, end) = (offset, offset.checked_add(ioslice_len).ok_or(EINVAL)?);
         if start == end {
@@ -376,6 +386,11 @@ impl File for Phys {
     }
 
     async fn write_at(&self, offset: usize, mut buffer: &mut [IoSlice]) -> Result<usize, Error> {
+        log::trace!(
+            "Phys::write_at {offset}, buffer len = {}",
+            ioslice_len(&buffer)
+        );
+
         let ioslice_len = ioslice_len(&buffer);
         let (start, end) = (offset, offset.checked_add(ioslice_len).ok_or(EINVAL)?);
         if start == end {

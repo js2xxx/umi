@@ -16,3 +16,4 @@ rv39-paging = {path = "../paging"}
 arsc-rs = {git = "https://github.com/js2xxx/arsc"}
 async-trait = "0"
 bitflags = "2"
+log = "0"

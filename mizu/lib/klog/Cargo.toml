@@ -9,6 +9,7 @@ test = ["ktime-core/test"]
 
 [dependencies]
 # Local crates
+hart-id = {path = "../hart-id"}
 ksync-core = {path = "../ksync-core"}
 ktime-core = {path = "../ktime-core"}
 # External crates

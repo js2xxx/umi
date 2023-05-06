@@ -3,11 +3,14 @@ use core::any::Any;
 
 use arsc_rs::Arsc;
 use async_trait::async_trait;
-use ksc_core::Error;
+use ksc_core::Error::{self, EINTR, EIO};
 
 use crate::{
     path::Path,
-    types::{DirEntry, IoSlice, IoSliceMut, Metadata, OpenOptions, Permissions, SeekFrom},
+    types::{
+        advance_slices, ioslice_is_empty, DirEntry, IoSlice, IoSliceMut, Metadata, OpenOptions,
+        Permissions, SeekFrom,
+    },
 };
 
 pub trait IntoAny: Any {
@@ -61,6 +64,88 @@ pub trait File: IntoAny + Send + Sync {
 
     async fn flush(&self) -> Result<(), Error>;
 }
+
+#[async_trait]
+pub trait FileExt: File {
+    async fn read_exact_at(
+        &self,
+        mut offset: usize,
+        mut buffer: &mut [IoSliceMut],
+    ) -> Result<(), Error> {
+        while !ioslice_is_empty(&buffer) {
+            match self.read_at(offset, &mut *buffer).await {
+                Ok(0) => break,
+                Ok(n) => {
+                    offset += n;
+                    advance_slices(&mut buffer, n)
+                }
+                Err(EINTR) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        if ioslice_is_empty(&buffer) {
+            Ok(())
+        } else {
+            Err(EIO)
+        }
+    }
+
+    async fn read_exact(&self, mut buffer: &mut [IoSliceMut]) -> Result<(), Error> {
+        while !ioslice_is_empty(&buffer) {
+            match self.read(&mut *buffer).await {
+                Ok(0) => break,
+                Ok(n) => advance_slices(&mut buffer, n),
+                Err(EINTR) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        if ioslice_is_empty(&buffer) {
+            Ok(())
+        } else {
+            Err(EIO)
+        }
+    }
+
+    async fn write_all_at(
+        &self,
+        mut offset: usize,
+        mut buffer: &mut [IoSlice],
+    ) -> Result<(), Error> {
+        while !ioslice_is_empty(&buffer) {
+            match self.write_at(offset, &mut *buffer).await {
+                Ok(0) => break,
+                Ok(n) => {
+                    offset += n;
+                    advance_slices(&mut buffer, n)
+                }
+                Err(EINTR) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        if ioslice_is_empty(&buffer) {
+            Ok(())
+        } else {
+            Err(EIO)
+        }
+    }
+
+    async fn write_all(&self, mut buffer: &mut [IoSlice]) -> Result<(), Error> {
+        while !ioslice_is_empty(&buffer) {
+            match self.write(&mut *buffer).await {
+                Ok(0) => break,
+                Ok(n) => advance_slices(&mut buffer, n),
+                Err(EINTR) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        if ioslice_is_empty(&buffer) {
+            Ok(())
+        } else {
+            Err(EIO)
+        }
+    }
+}
+impl<T: File + ?Sized> FileExt for T {}
 
 /// Used in implementations of `read_at` by files where random access is not
 /// supported.
