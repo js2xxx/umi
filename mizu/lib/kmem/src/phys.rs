@@ -339,7 +339,7 @@ impl File for Phys {
 
     async fn read_at(&self, offset: usize, mut buffer: &mut [IoSliceMut]) -> Result<usize, Error> {
         log::trace!(
-            "Phys::read_at {offset}, buffer len = {}",
+            "Phys::read_at {offset:#x}, buffer len = {}",
             ioslice_len(&buffer)
         );
 
@@ -387,7 +387,7 @@ impl File for Phys {
 
     async fn write_at(&self, offset: usize, mut buffer: &mut [IoSlice]) -> Result<usize, Error> {
         log::trace!(
-            "Phys::write_at {offset}, buffer len = {}",
+            "Phys::write_at {offset:#x}, buffer len = {}",
             ioslice_len(&buffer)
         );
 

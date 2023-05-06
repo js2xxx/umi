@@ -16,6 +16,7 @@ test = [
 
 [dependencies]
 # Local crates
+afat32 = {path = "../lib/afat32"}
 art = {path = "../lib/art"}
 co-trap = {path = "../lib/co-trap"}
 config = {path = "../lib/config", default-features = false}
@@ -34,6 +35,7 @@ umifs = {path = "../lib/umifs"}
 # External crates
 arsc-rs = {git = "https://github.com/js2xxx/arsc"}
 fdt = "0"
+futures-util = {version = "0", default-features = false, features = ["alloc"]}
 hashbrown = {version = "0", default-features = false, features = ["inline-more"]}
 log = "0"
 pin-project = "1"

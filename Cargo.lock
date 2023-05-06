@@ -3,6 +3,22 @@
 version = 3
 
 [[package]]
+name = "afat32"
+version = "0.1.0"
+dependencies = [
+ "arsc-rs",
+ "async-trait",
+ "bitflags 2.2.1",
+ "concat-arrays",
+ "futures-util",
+ "ksc-core",
+ "ksync",
+ "log",
+ "nom",
+ "umifs",
+]
+
+[[package]]
 name = "ahash"
 version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -252,6 +268,17 @@ dependencies = [
  "num-traits",
  "riscv",
  "static_assertions",
+]
+
+[[package]]
+name = "concat-arrays"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1df715824eb382e34b7afb7463b0247bf41538aeba731fba05241ecdb5dc3747"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -688,15 +715,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "minimal-lexical"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
+
+[[package]]
 name = "mizu"
 version = "0.1.0"
 dependencies = [
+ "afat32",
  "arsc-rs",
  "art",
  "co-trap",
  "config",
  "devices",
  "fdt",
+ "futures-util",
  "hart-id",
  "hashbrown",
  "kalloc",
@@ -733,6 +768,16 @@ name = "nb"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8d5439c4ad607c3c23abf66de8c8bf57ba8adcd1f129e699851a6e43935d339d"
+
+[[package]]
+name = "nom"
+version = "7.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d273983c5a657a70a3e8f2a01329822f3b8c8172b73826411a55751e404a0a4a"
+dependencies = [
+ "memchr",
+ "minimal-lexical",
+]
 
 [[package]]
 name = "num-integer"
