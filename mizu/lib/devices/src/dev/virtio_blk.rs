@@ -30,7 +30,7 @@ impl VirtioBlock {
             let size = device.virt_queue_size() as usize;
 
             VirtioBlock {
-                virt_queue: Semaphore::new(size),
+                virt_queue: Semaphore::new(size / 3),
                 device: Mutex::new(device),
                 event: iter::repeat_with(Event::new).take(size).collect(),
             }

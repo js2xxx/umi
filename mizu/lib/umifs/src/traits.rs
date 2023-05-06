@@ -41,12 +41,16 @@ pub trait Entry: IntoAny {
 pub trait File: IntoAny + Send + Sync {
     async fn read(&self, buffer: &mut [IoSliceMut]) -> Result<usize, Error> {
         let offset = self.seek(SeekFrom::Current(0)).await?;
-        self.read_at(offset, buffer).await
+        let read_len = self.read_at(offset, buffer).await?;
+        self.seek(SeekFrom::Current(read_len as isize)).await?;
+        Ok(read_len)
     }
 
     async fn write(&self, buffer: &mut [IoSlice]) -> Result<usize, Error> {
         let offset = self.seek(SeekFrom::Current(0)).await?;
-        self.write_at(offset, buffer).await
+        let written_len = self.write_at(offset, buffer).await?;
+        self.seek(SeekFrom::Current(written_len as isize)).await?;
+        Ok(written_len)
     }
 
     async fn seek(&self, whence: SeekFrom) -> Result<usize, Error>;

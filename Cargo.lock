@@ -21,8 +21,8 @@ checksum = "457661fa6716c30b73d7c41400a8a78780d20523b83a9441dabec28e93f27cf4"
 
 [[package]]
 name = "arsc-rs"
-version = "0.1.0"
-source = "git+https://github.com/js2xxx/arsc#7a118ba49be1ca7bd818d34f18a759318b2d56f6"
+version = "0.1.2"
+source = "git+https://github.com/js2xxx/arsc#a35008dce76e1427c788b45c07d294825cfc901b"
 dependencies = [
  "log",
  "memoffset",
@@ -712,6 +712,7 @@ dependencies = [
  "spin",
  "static_assertions",
  "sygnal",
+ "umifs",
  "virtio-drivers",
 ]
 

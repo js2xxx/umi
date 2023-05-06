@@ -11,9 +11,10 @@ use arsc_rs::Arsc;
 use async_trait::async_trait;
 use futures_util::future::try_join_all;
 use ksc_core::Error::{self, EINVAL, ENOMEM};
+use ksync::Mutex;
 use rand_riscv::RandomState;
 use rv39_paging::{PAddr, ID_OFFSET, PAGE_SHIFT, PAGE_SIZE};
-use spin::{Lazy, Mutex};
+use spin::Lazy;
 use umifs::{
     misc::Zero,
     traits::File,
@@ -102,36 +103,37 @@ impl Phys {
         writable: bool,
         pin: bool,
     ) -> Result<Arc<Frame>, Error> {
-        let frame = ksync::critical(|| {
-            self.frames.lock().get_mut(&index).map(|fi| {
-                if writable {
-                    fi.dirty = true;
-                    fi.pin_count += pin as usize;
-                }
-                fi.frame.clone()
-            })
+        let mut frames = self.frames.lock().await;
+
+        let frame = frames.get_mut(&index).map(|fi| {
+            if writable {
+                fi.dirty = true;
+                fi.pin_count += pin as usize;
+            }
+            fi.frame.clone()
         });
         if let Some(frame) = frame {
             return Ok(frame);
         }
 
         let frame = self.backend.commit(index, writable).await?;
-        if let Some((index, fi)) = ksync::critical(|| {
-            let fi = FrameInfo {
-                frame: frame.clone(),
-                dirty: false,
-                pin_count: pin as usize,
-            };
-            let mut frames = self.frames.lock();
+
+        let fi = FrameInfo {
+            frame: frame.clone(),
+            dirty: false,
+            pin_count: pin as usize,
+        };
+
+        let old_entry = {
             let mut data = frames.push(index, fi);
 
             let index = match data.as_ref() {
-                None => return Ok(None),
+                None => return Ok(frame),
                 Some(&(index, _)) => index,
             };
             let mut looped = false;
 
-            Ok(loop {
+            loop {
                 data = match data {
                     Some((i, _)) if i == index && looped => return Err(ENOMEM),
                     // Find a frame that is not pinned.
@@ -140,8 +142,10 @@ impl Phys {
                     None => break None,
                 };
                 looped = true;
-            })
-        })? {
+            }
+        };
+
+        if let Some((index, fi)) = old_entry {
             debug_assert!(fi.pin_count == 0);
             if fi.dirty {
                 self.backend.flush(index, &fi.frame).await?;
@@ -156,8 +160,8 @@ impl Phys {
         force_dirty: Option<bool>,
         unpin: bool,
     ) -> Result<(), Error> {
-        let frame = ksync::critical(|| {
-            let mut frames = self.frames.lock();
+        let frame = {
+            let mut frames = self.frames.lock().await;
 
             let fi = frames.get_mut(&index);
             fi.and_then(|fi| {
@@ -166,7 +170,7 @@ impl Phys {
                     .unwrap_or_else(|| mem::replace(&mut fi.dirty, false))
                     .then(|| fi.frame.clone())
             })
-        });
+        };
         if let Some(frame) = frame {
             self.backend.flush(index, &frame).await?;
         }
@@ -174,15 +178,15 @@ impl Phys {
     }
 
     pub async fn flush_all(&self) -> Result<(), Error> {
-        let frames = ksync::critical(|| {
-            let mut frames = self.frames.lock();
+        let frames = {
+            let mut frames = self.frames.lock().await;
 
             let iter = frames.iter_mut();
             iter.filter_map(|(&index, fi)| {
                 mem::replace(&mut fi.dirty, false).then(|| (index, fi.frame.clone()))
             })
             .collect::<Vec<_>>()
-        });
+        };
 
         let flush_fn = |(index, frame): (usize, Arc<Frame>)| async move {
             self.backend.flush(index, &frame).await
@@ -195,8 +199,8 @@ impl Phys {
         let mut ret = Vec::new();
         let mut dirties = VecDeque::new();
 
-        ksync::critical(|| {
-            let mut frames = self.frames.lock();
+        {
+            let mut frames = self.frames.lock().await;
             let max_trial = frames.len();
             let mut trial = 0;
             while let Some((index, mut fi)) = frames.pop_lru() {
@@ -222,7 +226,7 @@ impl Phys {
                     break;
                 }
             }
-        });
+        };
 
         while ret.len() < max_count.get() {
             match dirties.pop_front() {
@@ -234,8 +238,8 @@ impl Phys {
             }
         }
 
-        ksync::critical(|| {
-            let mut frames = self.frames.lock();
+        {
+            let mut frames = self.frames.lock().await;
             dirties.into_iter().for_each(|(index, frame, dirty, pinc)| {
                 let fi = FrameInfo {
                     frame: Arc::new(frame),
@@ -244,7 +248,7 @@ impl Phys {
                 };
                 frames.push(index, fi);
             })
-        });
+        };
 
         Ok(ret)
     }

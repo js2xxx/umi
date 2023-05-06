@@ -193,6 +193,11 @@ macro_rules! shared_ptr {
                     None
                 }
             }
+
+            #[inline]
+            pub fn $lock(self: &$ptr<Self>) -> $lock_fut<T> {
+                $lock_fut::Unpolled(self.clone())
+            }
         }
 
         impl<T: ?Sized> Future for $lock_fut<T> {
