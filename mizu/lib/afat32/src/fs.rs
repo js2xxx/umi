@@ -1,10 +1,11 @@
-use alloc::{sync::Arc, vec};
+use alloc::{boxed::Box, sync::Arc, vec};
 use core::sync::atomic::{AtomicU8, Ordering::SeqCst};
 
 use arsc_rs::Arsc;
+use async_trait::async_trait;
 use ksc_core::Error::{self, ENOSYS};
 use ksync::RwLock;
-use umifs::traits::{File, FileExt};
+use umifs::traits::{Entry, File, FileExt, FileSystem};
 
 use crate::{
     raw::{BiosParameterBlock, BootSector, FsInfoSector},
@@ -191,7 +192,7 @@ impl<T: TimeProvider> FatFileSystem<T> {
         Ok(())
     }
 
-    pub async fn root_dir(self: &Arsc<Self>) -> Result<FatDir<T>, Error> {
+    pub async fn root_dir(self: Arsc<Self>) -> Result<FatDir<T>, Error> {
         FatFile::new(self.clone(), Some(self.bpb.root_dir_first_cluster), None)
             .await
             .map(FatDir::new)
@@ -213,6 +214,17 @@ impl<T: TimeProvider> FatFileSystem<T> {
 
     pub fn status(&self) -> FsStatusFlags {
         FsStatusFlags::load(&self.current_status_flags)
+    }
+}
+
+#[async_trait]
+impl<T: TimeProvider> FileSystem for FatFileSystem<T> {
+    async fn root_dir(self: Arsc<Self>) -> Result<Arc<dyn Entry>, Error> {
+        self.root_dir().await.map(|dir| Arc::new(dir) as _)
+    }
+
+    async fn flush(&self) -> Result<(), Error> {
+        (*self).flush().await
     }
 }
 

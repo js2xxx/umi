@@ -30,14 +30,19 @@ impl File for Null {
     }
 }
 
+#[async_trait]
 impl Entry for Null {
-    fn open(
+    async fn open(
         self: Arc<Self>,
         path: &Path,
+        expect_ty: Option<FileType>,
         options: OpenOptions,
         perm: Permissions,
     ) -> Result<(Arc<dyn Entry>, bool), Error> {
         if !path.as_str().is_empty() {
+            return Err(ENOTDIR);
+        }
+        if !matches!(expect_ty, None | Some(FileType::FILE)) {
             return Err(ENOTDIR);
         }
         if options.contains(OpenOptions::CREAT) {
@@ -53,6 +58,7 @@ impl Entry for Null {
         Metadata {
             ty: FileType::FILE,
             len: 0,
+            offset: 0,
             perm: Permissions::all_same(true, true, false),
             last_access: None,
             last_modified: None,
@@ -84,14 +90,19 @@ impl File for Zero {
     }
 }
 
+#[async_trait]
 impl Entry for Zero {
-    fn open(
+    async fn open(
         self: Arc<Self>,
         path: &Path,
+        expect_ty: Option<FileType>,
         options: OpenOptions,
         perm: Permissions,
     ) -> Result<(Arc<dyn Entry>, bool), Error> {
         if !path.as_str().is_empty() {
+            return Err(ENOTDIR);
+        }
+        if !matches!(expect_ty, None | Some(FileType::FILE)) {
             return Err(ENOTDIR);
         }
         if options.contains(OpenOptions::CREAT) {
@@ -107,6 +118,7 @@ impl Entry for Zero {
         Metadata {
             ty: FileType::FILE,
             len: 0,
+            offset: 0,
             perm: Permissions::all_same(true, true, false),
             last_access: None,
             last_modified: None,

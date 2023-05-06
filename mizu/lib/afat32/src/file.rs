@@ -1,4 +1,4 @@
-use alloc::{boxed::Box, vec::Vec};
+use alloc::{boxed::Box, vec::Vec, sync::Arc};
 use core::sync::atomic::{
     AtomicUsize,
     Ordering::{Relaxed, SeqCst},
@@ -7,11 +7,11 @@ use core::sync::atomic::{
 use arsc_rs::Arsc;
 use async_trait::async_trait;
 use futures_util::TryStreamExt;
-use ksc_core::Error::{self, EINVAL, EISDIR, ENOSYS};
+use ksc_core::Error::{self, EINVAL, EISDIR, ENOSYS, ENOTDIR};
 use ksync::{Mutex, RwLock, RwLockUpgradableReadGuard, RwLockWriteGuard};
 use umifs::{
-    traits::File,
-    types::{advance_slices, ioslice_len, IoSlice, IoSliceMut, SeekFrom},
+    traits::{Entry, File},
+    types::{advance_slices, ioslice_len, IoSlice, IoSliceMut, Metadata, SeekFrom, OpenOptions, Permissions, FileType}, path::Path,
 };
 
 use crate::{dirent::DirEntryEditor, fs::FatFileSystem, TimeProvider};
@@ -300,5 +300,29 @@ impl<T: TimeProvider> File for FatFile<T> {
             entry.lock().await.flush(&**self.fs.fat.device()).await?;
         }
         Ok(())
+    }
+}
+
+#[async_trait]
+impl<T: TimeProvider> Entry for FatFile<T> {
+    async fn open(
+        self: Arc<Self>,
+        path: &Path,
+        expect_ty: Option<FileType>,
+        _options: OpenOptions,
+        _perm: Permissions,
+    ) -> Result<(Arc<dyn Entry>, bool), Error> {
+        if !path.as_str().is_empty() {
+            return Err(ENOTDIR)
+        }
+        if !matches!(expect_ty, None | Some(FileType::FILE)) {
+            return Err(ENOTDIR);
+        }
+        // TODO: Check options & permissions
+        Ok((self, false))
+    }
+
+    fn metadata(&self) -> Metadata {
+        todo!()
     }
 }

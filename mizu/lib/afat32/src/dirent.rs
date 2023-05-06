@@ -545,7 +545,7 @@ pub struct DirEntry<T: TimeProvider> {
     pub(crate) short_name: ShortName,
     pub(crate) lfn_utf16: LfnBuffer,
     pub(crate) entry_pos: u64,
-    pub(crate) range: Range<u64>,
+    pub(crate) offset_range: Range<u64>,
     pub(crate) fs: Arsc<FatFileSystem<T>>,
 }
 
@@ -642,7 +642,7 @@ impl<T: TimeProvider> DirEntry<T> {
                 let file = FatFile::new(self.fs.clone(), Some(n), Some(self.editor())).await?;
                 Ok(FatDir::new(file))
             }
-            None => self.fs.root_dir().await,
+            None => self.fs.clone().root_dir().await,
         }
     }
 
@@ -711,7 +711,7 @@ impl<T: TimeProvider> DirEntry<T> {
     }
 
     pub(crate) async fn free_all_entries(&self, inner: &FatFile<T>) -> Result<(), Error> {
-        for offset in self.range.clone().step_by(DIR_ENTRY_SIZE as usize) {
+        for offset in self.offset_range.clone().step_by(DIR_ENTRY_SIZE as usize) {
             let mut buf = [0; DIR_ENTRY_SIZE as usize];
             inner
                 .read_exact_at(offset as usize, &mut [&mut buf])

@@ -5,7 +5,7 @@ use bitflags::bitflags;
 use ktime_core::Instant;
 
 bitflags! {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
     pub struct OpenOptions: u32 {
         const ACCMODE   = 0o0000003;
         const RDONLY    = 0o0000000;
@@ -28,7 +28,7 @@ bitflags! {
         const CLOEXEC   = 0o2000000;
     }
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
     pub struct Permissions: u32 {
         const SELF_R = 1;
         const SELF_W = 1 << 1;
@@ -81,6 +81,7 @@ impl Permissions {
 pub struct Metadata {
     pub ty: FileType,
     pub len: usize,
+    pub offset: u64,
     pub perm: Permissions,
     pub last_access: Option<Instant>,
     pub last_modified: Option<Instant>,

@@ -8,8 +8,8 @@ use ksc_core::Error::{self, EINTR, EIO};
 use crate::{
     path::Path,
     types::{
-        advance_slices, ioslice_is_empty, DirEntry, IoSlice, IoSliceMut, Metadata, OpenOptions,
-        Permissions, SeekFrom,
+        advance_slices, ioslice_is_empty, DirEntry, FileType, IoSlice, IoSliceMut, Metadata,
+        OpenOptions, Permissions, SeekFrom,
     },
 };
 
@@ -29,10 +29,19 @@ impl<T: Any + Send + Sync> IntoAny for T {
     }
 }
 
-pub trait Entry: IntoAny {
-    fn open(
+#[async_trait]
+pub trait FileSystem: IntoAny + Send + Sync + 'static {
+    async fn root_dir(self: Arsc<Self>) -> Result<Arc<dyn Entry>, Error>;
+
+    async fn flush(&self) -> Result<(), Error>;
+}
+
+#[async_trait]
+pub trait Entry: IntoAny + Send + Sync {
+    async fn open(
         self: Arc<Self>,
         path: &Path,
+        expect_ty: Option<FileType>,
         options: OpenOptions,
         perm: Permissions,
     ) -> Result<(Arc<dyn Entry>, bool), Error>;
@@ -177,24 +186,24 @@ pub async fn write_at_by_seek<F: File>(
 
 #[async_trait]
 pub trait Directory: Entry {
-    async fn next_dirent(&self, last: Option<&str>) -> Result<DirEntry, Error>;
+    async fn next_dirent(&self, last: Option<&DirEntry>) -> Result<Option<DirEntry>, Error>;
 }
 
 #[async_trait]
 pub trait DirectoryMut: Directory {
     async fn rename(
         self: Arc<Self>,
-        src: &str,
+        src_path: &Path,
         dst_parent: Arc<dyn DirectoryMut>,
-        dst: &str,
+        dst_path: &Path,
     ) -> Result<(), Error>;
 
     async fn link(
         self: Arc<Self>,
-        src: &str,
+        src_path: &Path,
         dst_parent: Arc<dyn DirectoryMut>,
-        dst: &str,
+        dst_path: &Path,
     ) -> Result<(), Error>;
 
-    async fn unlink(&self, name: &str, expect_dir: bool) -> Result<(), Error>;
+    async fn unlink(&self, path: &Path, expect_dir: Option<bool>) -> Result<(), Error>;
 }

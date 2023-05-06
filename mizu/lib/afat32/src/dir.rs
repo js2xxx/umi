@@ -1,9 +1,14 @@
-use alloc::vec::Vec;
+use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use core::{cmp, iter, num, pin::pin, slice, str};
 
+use async_trait::async_trait;
 use futures_util::{stream, Stream, StreamExt};
-use ksc_core::Error::{self, EEXIST, EINVAL, EISDIR, ENOENT, ENOTDIR, ENOTEMPTY};
-use umifs::{path::Path, traits::FileExt};
+use ksc_core::Error::{self, EEXIST, EINVAL, EISDIR, ENOENT, ENOSYS, ENOTDIR, ENOTEMPTY};
+use umifs::{
+    path::Path,
+    traits::{Directory, DirectoryMut, Entry, FileExt},
+    types::{FileType, Metadata, OpenOptions, Permissions},
+};
 
 use crate::{
     dirent::{
@@ -72,7 +77,8 @@ impl<T: TimeProvider> FatDir<T> {
                         short_name,
                         lfn_utf16: lfn_builder.into_buf(),
                         entry_pos: abs_pos,
-                        range: begin_offset as u64..(offset as u64 + u64::from(DIR_ENTRY_SIZE)),
+                        offset_range: begin_offset as u64
+                            ..(offset as u64 + u64::from(DIR_ENTRY_SIZE)),
                         fs: self.file.fs.clone(),
                     }));
                 }
@@ -155,6 +161,23 @@ impl<T: TimeProvider> FatDir<T> {
         }
     }
 
+    pub async fn open(&self, path: &Path) -> Result<DirEntry<T>, Error> {
+        let mut storage: Option<Self> = None;
+        let mut node = self;
+
+        let mut comps = path.components().peekable();
+        while let Some(comp) = comps.next() {
+            if comps.peek().is_some() {
+                let e = node.find_entry(comp.as_str(), Some(true), None).await?;
+                node = storage.insert(e.to_dir().await?);
+            } else {
+                let e = node.find_entry(comp.as_str(), Some(false), None).await?;
+                return Ok(e);
+            }
+        }
+        Err(EINVAL)
+    }
+
     pub async fn open_file(&self, path: &Path) -> Result<FatFile<T>, Error> {
         let mut storage: Option<Self> = None;
         let mut node = self;
@@ -183,7 +206,7 @@ impl<T: TimeProvider> FatDir<T> {
         storage.ok_or(EINVAL)
     }
 
-    pub async fn create_file(&self, path: &Path) -> Result<FatFile<T>, Error> {
+    pub async fn create_file(&self, path: &Path) -> Result<(FatFile<T>, bool), Error> {
         let mut storage: Option<Self> = None;
         let mut node = self;
 
@@ -203,17 +226,20 @@ impl<T: TimeProvider> FatDir<T> {
                             FileAttributes::from_bits_truncate(0),
                             None,
                         );
-                        Ok(node.write_entry(name, sfn_entry).await?.to_file().await?)
+                        Ok((
+                            node.write_entry(name, sfn_entry).await?.to_file().await?,
+                            true,
+                        ))
                     }
                     // file already exists - return it
-                    DirEntryOrShortName::DirEntry(e) => Ok(e.to_file().await?),
+                    DirEntryOrShortName::DirEntry(e) => Ok((e.to_file().await?, false)),
                 };
             }
         }
         Err(EINVAL)
     }
 
-    pub async fn create_dir(&self, path: &Path) -> Result<FatDir<T>, Error> {
+    pub async fn create_dir(&self, path: &Path) -> Result<(FatDir<T>, bool), Error> {
         let mut storage: Option<Self> = None;
         let mut node = self;
 
@@ -253,17 +279,17 @@ impl<T: TimeProvider> FatDir<T> {
                             node.file.first_cluster().await,
                         );
                         dir.write_entry("..", sfn_entry).await?;
-                        Ok(dir)
+                        Ok((dir, true))
                     }
                     // directory already exists - return it
-                    DirEntryOrShortName::DirEntry(e) => Ok(e.to_dir().await?),
+                    DirEntryOrShortName::DirEntry(e) => Ok((e.to_dir().await?, false)),
                 };
             }
         }
         Err(EINVAL)
     }
 
-    pub async fn remove(&self, path: &Path) -> Result<(), Error> {
+    pub async fn remove(&self, path: &Path, is_dir: Option<bool>) -> Result<(), Error> {
         let mut storage: Option<Self> = None;
         let mut node = self;
 
@@ -275,6 +301,14 @@ impl<T: TimeProvider> FatDir<T> {
             } else {
                 let name = comp.as_str();
                 let e = node.find_entry(name, None, None).await?;
+                if is_dir.is_some() && Some(e.is_dir()) != is_dir {
+                    return if e.is_dir() {
+                        Err(EISDIR)
+                    } else {
+                        Err(ENOTDIR)
+                    };
+                }
+
                 if e.is_dir() && !e.to_dir().await?.is_empty().await? {
                     return Err(ENOTEMPTY);
                 }
@@ -355,6 +389,104 @@ impl<T: TimeProvider> FatDir<T> {
         let sfn_entry = e.data.renamed(short_name);
         dst_dir.write_entry(dst_name, sfn_entry).await?;
         Ok(())
+    }
+}
+
+#[async_trait]
+impl<T: TimeProvider> Entry for FatDir<T> {
+    async fn open(
+        self: Arc<Self>,
+        path: &Path,
+        expect_ty: Option<FileType>,
+        options: OpenOptions,
+        _perm: Permissions,
+    ) -> Result<(Arc<dyn Entry>, bool), Error> {
+        // TODO: Check open options & permissions
+        match expect_ty {
+            None => {
+                if options.contains(OpenOptions::CREAT) {
+                    return Err(EINVAL);
+                }
+                let dirent = (*self).open(path).await?;
+                Ok(if dirent.is_dir() {
+                    (Arc::new(dirent.to_dir().await?), false)
+                } else {
+                    (Arc::new(dirent.to_file().await?), false)
+                })
+            }
+            Some(FileType::FILE) => Ok(if options.contains(OpenOptions::CREAT) {
+                let (file, created) = self.create_file(path).await?;
+                (Arc::new(file), created)
+            } else {
+                (Arc::new(self.open_file(path).await?), false)
+            }),
+            Some(FileType::DIR) => Ok(if options.contains(OpenOptions::CREAT) {
+                let (file, created) = self.create_dir(path).await?;
+                (Arc::new(file), created)
+            } else {
+                (Arc::new(self.open_dir(path).await?), false)
+            }),
+            Some(_) => Err(ENOSYS),
+        }
+    }
+
+    fn metadata(&self) -> Metadata {
+        todo!()
+    }
+}
+
+#[async_trait]
+impl<T: TimeProvider> Directory for FatDir<T> {
+    async fn next_dirent(
+        &self,
+        last: Option<&umifs::types::DirEntry>,
+    ) -> Result<Option<umifs::types::DirEntry>, Error> {
+        let last = last.map(|last| last.metadata.offset);
+        let dirent = self.next_dirent(last, true).await?;
+
+        Ok(dirent.map(|d| umifs::types::DirEntry {
+            name: d.file_name(),
+            metadata: Metadata {
+                ty: if d.is_dir() {
+                    FileType::DIR
+                } else {
+                    FileType::FILE
+                },
+                len: d.len() as usize,
+                offset: d.entry_pos,
+                perm: Permissions::all(),
+                last_access: None,
+                last_modified: None,
+            },
+        }))
+    }
+}
+
+#[async_trait]
+impl<T: TimeProvider> DirectoryMut for FatDir<T> {
+    async fn rename(
+        self: Arc<Self>,
+        src_path: &Path,
+        dst_parent: Arc<dyn DirectoryMut>,
+        dst_path: &Path,
+    ) -> Result<(), Error> {
+        let Ok(dst_parent) = dst_parent.into_any().downcast::<Self>() else {
+            return Err(ENOSYS)
+        };
+        (*self).rename(src_path, &dst_parent, dst_path).await
+    }
+
+    async fn link(
+        self: Arc<Self>,
+        _: &Path,
+        _: Arc<dyn DirectoryMut>,
+        _: &Path,
+    ) -> Result<(), Error> {
+        Err(ENOSYS)
+    }
+
+    async fn unlink(&self, path: &Path, expect_dir: Option<bool>) -> Result<(), Error> {
+        self.remove(path, expect_dir).await
     }
 }
 
@@ -462,7 +594,7 @@ impl<T: TimeProvider> FatDir<T> {
             short_name,
             lfn_utf16,
             entry_pos,
-            range: start_pos..(entry_pos + u64::from(DIR_ENTRY_SIZE)),
+            offset_range: start_pos..(entry_pos + u64::from(DIR_ENTRY_SIZE)),
 
             fs: self.file.fs.clone(),
         })
