@@ -1,4 +1,3 @@
-use alloc::boxed::Box;
 #[cfg(not(feature = "test"))]
 use core::arch::asm;
 
@@ -36,6 +35,8 @@ pub fn executor() -> &'static Arsc<Executor> {
 
 #[cfg(not(feature = "test"))]
 fn run_art(payload: usize) {
+    use alloc::boxed::Box;
+
     type Payload = *mut Box<dyn FnOnce() + Send>;
     if hart_id::is_bsp() {
         log::debug!("Starting ART");

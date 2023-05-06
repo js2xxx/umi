@@ -28,7 +28,10 @@ pub fn handle_intr(intr: Interrupt, from: &str) {
     match intr {
         Interrupt::SupervisorTimer => {
             ktime::timer_tick();
+            #[cfg(not(feature = "test"))]
             let raw = ktime::Instant::now_raw();
+            #[cfg(feature = "test")]
+            let raw = 0;
             sbi_rt::set_timer(raw + config::TIME_FREQ as u64 / TIMER_GRAN_DIV);
         }
         Interrupt::SupervisorExternal => crate::dev::INTR.notify(hart_id::hart_id()),

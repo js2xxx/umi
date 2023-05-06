@@ -749,14 +749,12 @@ mod tests {
 
     #[test]
     fn short_name_without_ext() {
-        let oem_cp_conv = LossyOemCpConverter::new();
         assert_eq!(ShortName::new(b"FOO        ").to_string(), "FOO");
         assert_eq!(ShortName::new(b"LOOK AT    ").to_string(), "LOOK AT");
     }
 
     #[test]
     fn short_name_eq_ignore_case() {
-        let oem_cp_conv = LossyOemCpConverter::new();
         let raw_short_name: &[u8; SFN_SIZE] = b"\x99OOK AT M \x99";
         assert!(ShortName::new(raw_short_name).eq_ignore_case("\u{FFFD}OOK AT.M \u{FFFD}",));
         assert!(ShortName::new(raw_short_name).eq_ignore_case("\u{FFFD}ook AT.m \u{FFFD}",));
@@ -773,7 +771,6 @@ mod tests {
 
     #[test]
     fn lowercase_short_name() {
-        let oem_cp_conv = LossyOemCpConverter::new();
         let raw_short_name: &[u8; SFN_SIZE] = b"FOO     RS ";
         let mut raw_entry = DirFileEntryData {
             name: *raw_short_name,
