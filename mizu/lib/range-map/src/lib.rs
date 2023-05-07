@@ -144,6 +144,35 @@ impl<K: Ord, V> RangeMap<K, V> {
         predicate(None)
     }
 
+    pub fn find_free<F>(&self, mut predicate: F) -> Option<Range<K>>
+    where
+        F: FnMut(Option<Range<&K>>) -> FindResult<K>,
+    {
+        loop {
+            match self.find_gap(&mut predicate) {
+                FindResult::Found(key) => break Some(key),
+                FindResult::Next => {}
+                FindResult::NotFound => break None,
+            }
+        }
+    }
+
+    pub fn find_free_with_aslr<R, C>(
+        &self,
+        mut aslr_key: AslrKey<R>,
+        convert: C,
+    ) -> Option<Range<K>>
+    where
+        R: RngCore,
+        C: Fn(&K) -> usize,
+        K: From<usize>,
+    {
+        self.find_free(move |key| {
+            let key = key.map(|key| convert(key.start)..convert(key.end));
+            aslr_key.find_key_usize(key).map(From::from)
+        })
+    }
+
     /// Allocate a range with the given `predicate`.
     ///
     /// # Arguments
@@ -151,17 +180,11 @@ impl<K: Ord, V> RangeMap<K, V> {
     /// - `predicate` - receives ranges in one round, or a `None` when a round
     ///   finished, and returns whether the round should continue, retry or
     ///   break with or without a result.
-    pub fn allocate_with<F>(&mut self, mut predicate: F) -> Option<Entry<'_, K, V>>
+    pub fn allocate_with<F>(&mut self, predicate: F) -> Option<Entry<'_, K, V>>
     where
         F: FnMut(Option<Range<&K>>) -> FindResult<K>,
     {
-        let key = loop {
-            match self.find_gap(&mut predicate) {
-                FindResult::Found(key) => break key,
-                FindResult::Next => {}
-                FindResult::NotFound => return None,
-            }
-        };
+        let key = self.find_free(predicate)?;
 
         Some(match self.map.entry(key.start) {
             Vacant(entry) => Entry {

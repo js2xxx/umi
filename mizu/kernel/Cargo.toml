@@ -38,6 +38,7 @@ async-trait = "0"
 crossbeam-queue = {version = "0", default-features = false, features = ["alloc", "nightly"]}
 fdt = "0"
 futures-util = {version = "0", default-features = false, features = ["alloc"]}
+goblin = {version = "0", default-features = false, features = ["elf32", "elf64", "endian_fd"]}
 hashbrown = {version = "0", default-features = false, features = ["inline-more"]}
 log = "0"
 pin-project = "1"

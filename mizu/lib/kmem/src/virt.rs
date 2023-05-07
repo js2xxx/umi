@@ -17,6 +17,8 @@ use rv39_paging::{Attr, LAddr, Table, ID_OFFSET, PAGE_LAYOUT, PAGE_MASK, PAGE_SH
 
 use crate::{frame::frames, Phys};
 
+const ASLR_BIT: u32 = 30;
+
 struct Mapping {
     phys: Arc<Phys>,
     start_index: usize,
@@ -110,8 +112,6 @@ impl Virt {
         count: usize,
         attr: Attr,
     ) -> Result<LAddr, Error> {
-        const ASLR_BIT: u32 = 30;
-
         let mut map = self.map.lock().await;
         match addr {
             Some(start) => {
@@ -142,6 +142,25 @@ impl Virt {
                 Ok(addr)
             }
         }
+    }
+
+    pub async fn find_free(
+        &self,
+        start: Option<LAddr>,
+        count: usize,
+    ) -> Result<Range<LAddr>, Error> {
+        let layout = PAGE_LAYOUT.repeat(count)?.0;
+        let aslr_key = AslrKey::new(ASLR_BIT, rand_riscv::rng(), layout);
+
+        let map = self.map.lock().await;
+        match start {
+            None => map.find_free_with_aslr(aslr_key, LAddr::val),
+            Some(start) => {
+                let range = start..(start + (count << PAGE_SHIFT));
+                (!map.intersects(range.clone())).then_some(range)
+            }
+        }
+        .ok_or(ENOSPC)
     }
 
     pub async fn commit(&self, range: Range<LAddr>) -> Result<(), Error> {

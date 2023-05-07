@@ -8,7 +8,7 @@ use spin::Lazy;
 
 use crate::rxx::BOOT_PAGES;
 
-const USER_RANGE: Range<usize> = 0x100000..((!CANONICAL_PREFIX) + 1);
+const USER_RANGE: Range<usize> = 0x1000..((!CANONICAL_PREFIX) + 1);
 
 pub fn kernel_table() -> &'static Table {
     static KERNEL_TABLE: Lazy<Box<Table>> = Lazy::new(|| Box::new(BOOT_PAGES));

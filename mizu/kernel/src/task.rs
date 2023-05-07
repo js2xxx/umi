@@ -1,3 +1,6 @@
+pub mod elf;
+mod future;
+
 use alloc::sync::{Arc, Weak};
 use core::{
     pin::Pin,
@@ -16,8 +19,6 @@ use crate::{
     executor,
     task::future::{user_loop, TaskFut},
 };
-
-mod future;
 
 pub struct TaskState {
     task: Arc<Task>,
