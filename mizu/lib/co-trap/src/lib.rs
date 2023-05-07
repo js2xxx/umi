@@ -4,6 +4,8 @@
 
 mod tf;
 
+use core::sync::atomic::{compiler_fence, Ordering::SeqCst};
+
 use enum_primitive_derive::Primitive;
 use num_traits::FromPrimitive;
 use riscv::register::{
@@ -36,6 +38,7 @@ impl StvecTemp {
     /// - `entry` and `mode` must be valid.
     pub unsafe fn new(entry: usize, mode: TrapMode) -> Self {
         let old = stvec::read();
+        compiler_fence(SeqCst);
         unsafe { stvec::write(entry, mode) };
         StvecTemp(old)
     }

@@ -90,4 +90,4 @@ MEMORY
 }
 
 PROVIDE(_heap_size = 24M);
-PROVIDE(_stack_size = 16K);
+PROVIDE(_stack_size = 256K);

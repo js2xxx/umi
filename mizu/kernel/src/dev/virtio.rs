@@ -1,6 +1,6 @@
+use alloc::sync::Arc;
 use core::num::NonZeroU32;
 
-use arsc_rs::Arsc;
 use devices::dev::{Block, VirtioBlock};
 use fdt::node::FdtNode;
 use rv39_paging::{PAddr, ID_OFFSET};
@@ -34,7 +34,7 @@ pub fn virtio_mmio_init(node: &FdtNode) -> bool {
             }));
             let intr = someb!(intr_manager.insert(hart_id::hart_ids(), intr_pin));
 
-            let device = Arsc::new(device);
+            let device = Arc::new(device);
             executor()
                 .spawn(device.clone().intr_dispatch(intr))
                 .detach();

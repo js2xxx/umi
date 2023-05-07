@@ -6,7 +6,7 @@ use futures_util::{stream, Stream, StreamExt};
 use ksc_core::Error::{self, EEXIST, EINVAL, EISDIR, ENOENT, ENOSYS, ENOTDIR, ENOTEMPTY};
 use umifs::{
     path::Path,
-    traits::{Directory, DirectoryMut, Entry, FileExt},
+    traits::{Directory, DirectoryMut, Entry, IoExt, ToIo},
     types::{FileType, Metadata, OpenOptions, Permissions},
 };
 
@@ -57,7 +57,7 @@ impl<T: TimeProvider> FatDir<T> {
         let mut begin_offset = offset;
         loop {
             let mut buf = [0; DIR_ENTRY_SIZE as usize];
-            self.file.read_exact_at(offset, &mut [&mut buf]).await?;
+            self.file.read_exact_at(offset, &mut buf).await?;
             let (_, raw_entry) = DirEntryData::parse(&buf)?;
             if raw_entry.is_end() {
                 return Ok(None);
@@ -392,6 +392,8 @@ impl<T: TimeProvider> FatDir<T> {
     }
 }
 
+impl<T: TimeProvider> ToIo for FatDir<T> {}
+
 #[async_trait]
 impl<T: TimeProvider> Entry for FatDir<T> {
     async fn open(
@@ -498,7 +500,7 @@ impl<T: TimeProvider> FatDir<T> {
         loop {
             let mut buf = [0; DIR_ENTRY_SIZE as usize];
             self.file
-                .read_exact_at((i * DIR_ENTRY_SIZE) as usize, &mut [&mut buf])
+                .read_exact_at((i * DIR_ENTRY_SIZE) as usize, &mut buf)
                 .await?;
 
             let (_, raw_entry) = DirEntryData::parse(&buf)?;
@@ -557,7 +559,7 @@ impl<T: TimeProvider> FatDir<T> {
         for (index, lfn_entry) in lfn_iter.enumerate() {
             let offset = start_pos as usize + index * DIR_ENTRY_SIZE as usize;
             self.file
-                .write_all_at(offset, &mut [&lfn_entry.to_bytes()])
+                .write_all_at(offset, &lfn_entry.to_bytes())
                 .await?;
         }
         Ok((
@@ -585,7 +587,7 @@ impl<T: TimeProvider> FatDir<T> {
             .await?;
         // write short name entry
         self.file
-            .write_all_at(entry_pos as usize, &mut [&raw_entry.to_bytes()])
+            .write_all_at(entry_pos as usize, &raw_entry.to_bytes())
             .await?;
         // return new logical entry descriptor
         let short_name = ShortName::new(raw_entry.name());

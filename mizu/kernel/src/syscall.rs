@@ -1,7 +1,10 @@
 use core::ops::ControlFlow;
 
 use co_trap::TrapFrame;
-use ksc::{AHandlers, Scn};
+use ksc::{
+    AHandlers,
+    Scn::{self, *},
+};
 use spin::Lazy;
 use sygnal::SigInfo;
 
@@ -12,4 +15,4 @@ pub type ScRet = ControlFlow<i32, Option<SigInfo>>;
 
 // TODO: Add handlers to the static.
 pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> =
-    Lazy::new(|| AHandlers::new().map(Scn::EXIT, Task::exit));
+    Lazy::new(|| AHandlers::new().map(EXIT, Task::exit));

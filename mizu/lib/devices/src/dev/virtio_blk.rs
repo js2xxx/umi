@@ -129,6 +129,7 @@ impl VirtioBlock {
 }
 
 fn virtio_rw_err(err: virtio_drivers::Error) -> Error {
+    log::error!("virt IO error: {err:?}");
     match err {
         virtio_drivers::Error::QueueFull => ENOBUFS,
         virtio_drivers::Error::InvalidParam => EINVAL,
@@ -154,20 +155,16 @@ impl Block for VirtioBlock {
         self.ack_interrupt()
     }
 
-    async fn read(&self, block: usize, buf: &mut [u8]) -> Result<(), Error> {
+    async fn read(&self, block: usize, buf: &mut [u8]) -> Result<usize, Error> {
         let len = buf.len().min(Self::SECTOR_SIZE);
-        let buf = &mut buf[..len];
-
-        let res = self.read_chunk(block, buf).await;
-        res.map_err(virtio_rw_err)
+        let res = self.read_chunk(block, &mut buf[..len]).await;
+        res.map_err(virtio_rw_err).map(|_| len)
     }
 
-    async fn write(&self, block: usize, buf: &[u8]) -> Result<(), Error> {
+    async fn write(&self, block: usize, buf: &[u8]) -> Result<usize, Error> {
         let len = buf.len().min(Self::SECTOR_SIZE);
-        let buf = &buf[..len];
-
-        let res = self.write_chunk(block, buf).await;
-        res.map_err(virtio_rw_err)
+        let res = self.write_chunk(block, &buf[..len]).await;
+        res.map_err(virtio_rw_err).map(|_| len)
     }
 }
-impl_backend_for_block!(VirtioBlock);
+impl_io_for_block!(VirtioBlock);

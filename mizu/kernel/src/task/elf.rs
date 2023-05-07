@@ -10,7 +10,7 @@ use goblin::elf64::{header::*, program_header::*, section_header::*};
 use kmem::{Phys, Virt};
 use ksc::Error::{ENOEXEC, ENOSYS};
 use rv39_paging::{Attr, LAddr, PAGE_MASK, PAGE_SHIFT};
-use umifs::traits::FileExt;
+use umifs::traits::IoExt;
 
 #[derive(Debug)]
 pub enum Error {
@@ -66,7 +66,7 @@ fn parse_attr(flags: u32) -> Attr {
 
 async fn parse_header(phys: &Phys, force_dyn: Option<bool>) -> Result<(Header, bool), Error> {
     let mut data = [0; mem::size_of::<Header>()];
-    phys.read_exact_at(0, &mut [&mut data])
+    phys.read_exact_at(0, &mut data)
         .await
         .map_err(Error::PhysRead)?;
 
@@ -96,7 +96,7 @@ async fn parse_segments(
     count: usize,
 ) -> Result<Vec<ProgramHeader>, Error> {
     let mut data = vec![0; count * mem::size_of::<ProgramHeader>()];
-    phys.read_exact_at(offset, &mut [&mut data])
+    phys.read_exact_at(offset, &mut data)
         .await
         .map_err(Error::PhysRead)?;
 
@@ -109,7 +109,7 @@ async fn parse_sections(
     count: usize,
 ) -> Result<Vec<SectionHeader>, Error> {
     let mut data = vec![0; count * mem::size_of::<SectionHeader>()];
-    phys.read_exact_at(offset, &mut [&mut data])
+    phys.read_exact_at(offset, &mut data)
         .await
         .map_err(Error::PhysRead)?;
 
@@ -156,7 +156,7 @@ async fn map_segment(
 
     if fsize > 0 {
         log::trace!(
-            "Map {:#x}~{:#x} -> {:?}",
+            "elf::load: Map {:#x}~{:#x} -> {:?}",
             offset,
             offset + fsize,
             base + address
@@ -178,15 +178,15 @@ async fn map_segment(
         let mem = Phys::new_anon();
 
         let mut cdata = vec![0; csize];
-        phys.read_exact_at(fend, &mut [&mut cdata])
+        phys.read_exact_at(fend, &mut cdata)
             .await
             .map_err(Error::PhysRead)?;
-        mem.write_all_at(0, &mut [&cdata])
+        mem.write_all_at(0, &cdata)
             .await
             .map_err(Error::PhysWrite)?;
 
         log::trace!(
-            "Alloc {:#x}~{:#x} -> {:?}",
+            "elf::load: Alloc {:#x}~{:#x} -> {:?}",
             fend,
             fend + asize,
             base + address
@@ -195,7 +195,7 @@ async fn map_segment(
             Some(base + address),
             Arc::new(mem),
             0,
-            csize >> PAGE_SHIFT,
+            asize >> PAGE_SHIFT,
             attr,
         )
         .await
@@ -205,7 +205,7 @@ async fn map_segment(
 }
 
 pub async fn get_interp(phys: &Phys) -> Result<Option<Vec<u8>>, Error> {
-    let (header, _) = parse_header(phys, Some(true)).await?;
+    let (header, _) = parse_header(phys, None).await?;
     let segments = parse_segments(phys, header.e_phoff as usize, header.e_phnum as usize).await?;
 
     let iter = stream::iter(segments.into_iter()).filter_map(|segment| async move {
@@ -215,7 +215,7 @@ pub async fn get_interp(phys: &Phys) -> Result<Option<Vec<u8>>, Error> {
 
             let mut ret = vec![0; size];
 
-            let res = phys.read_exact_at(offset, &mut [&mut ret]).await;
+            let res = phys.read_exact_at(offset, &mut ret).await;
             Some(res.map_err(Error::PhysRead).map(|_| ret))
         } else {
             None
@@ -237,6 +237,7 @@ pub async fn load(
     let segments = parse_segments(phys, header.e_phoff as usize, header.e_phnum as usize).await?;
     let sections = parse_sections(phys, header.e_shoff as usize, header.e_shnum as usize).await?;
     let (min, max) = get_addr_range_info(&segments);
+    log::trace!("elf::load: address range: {min:#x}..{max:#x}");
 
     let base = {
         let count = (max - min + PAGE_MASK) >> PAGE_SHIFT;
@@ -245,15 +246,17 @@ pub async fn load(
         let find_free = virt.find_free(start, count);
         find_free.await.map_err(Error::VirtAlloc)?.start
     };
+    let offset = if is_dyn { base } else { LAddr::from(0usize) };
+    log::trace!("elf::load: set base at {base:?}");
 
-    let entry = base + header.e_entry as usize;
+    let entry = offset + header.e_entry as usize;
 
     let mut stack = None;
     let mut dynamic = None;
     let mut tls = None;
     for segment in segments {
         match segment.p_type {
-            PT_LOAD => map_segment(&segment, phys, virt, base).await?,
+            PT_LOAD => map_segment(&segment, phys, virt, offset).await?,
             PT_GNU_STACK => stack = Some((segment.p_memsz as usize, parse_attr(segment.p_flags))),
             PT_DYNAMIC => dynamic = Some(segment),
             PT_TLS => tls = Some(segment),

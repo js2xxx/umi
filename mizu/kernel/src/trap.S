@@ -4,6 +4,7 @@
 
 .global ktrap_entry
 .type ktrap_entry, @function
+.align 4
 ktrap_entry:
     addi sp, sp, -20*8
 

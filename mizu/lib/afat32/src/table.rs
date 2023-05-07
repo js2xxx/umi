@@ -6,7 +6,7 @@ use core::{
 
 use futures_util::{future::try_join_all, stream, FutureExt, Stream, StreamExt, TryStreamExt};
 use ksc_core::Error::{self, EINVAL, ENOSPC};
-use umifs::traits::{File, FileExt};
+use umifs::traits::{Io, IoExt};
 
 use crate::raw::BiosParameterBlock;
 
@@ -79,7 +79,7 @@ impl FatEntry {
 }
 
 pub struct Fat {
-    device: Arc<dyn File>,
+    device: Arc<dyn Io>,
     start_offset: usize,
     cluster_count: u32,
     mirrors: u8,
@@ -98,7 +98,7 @@ impl fmt::Debug for Fat {
 impl Fat {
     const ENTRY_SIZE: usize = mem::size_of::<u32>();
 
-    pub fn new(device: Arc<dyn File>, bpb: &BiosParameterBlock) -> Self {
+    pub fn new(device: Arc<dyn Io>, bpb: &BiosParameterBlock) -> Self {
         let sectors_per_fat = bpb.sectors_per_fat();
         let mirroring_enabled = bpb.mirroring_enabled();
         let (fat_first_sector, mirrors) = if mirroring_enabled {
@@ -116,7 +116,7 @@ impl Fat {
         }
     }
 
-    pub fn device(&self) -> &Arc<dyn File> {
+    pub fn device(&self) -> &Arc<dyn Io> {
         &self.device
     }
 
@@ -142,7 +142,7 @@ impl Fat {
             return Err(EINVAL);
         }
         self.device
-            .read_exact_at(self.offset(0, cluster), &mut [&mut buf])
+            .read_exact_at(self.offset(0, cluster), &mut buf)
             .await?;
 
         Ok(u32::from_le_bytes(buf))
@@ -161,7 +161,7 @@ impl Fat {
         let buffer = &raw.to_le_bytes();
         try_join_all((0..self.mirrors).map(|mirror| async move {
             let offset = self.offset(mirror, cluster);
-            self.device.write_all_at(offset, &mut [buffer]).await
+            self.device.write_all_at(offset, buffer).await
         }))
         .await?;
 

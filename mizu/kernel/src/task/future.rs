@@ -3,12 +3,14 @@ use core::{
     ops::ControlFlow::{Break, Continue},
     pin::Pin,
     task::{Context, Poll},
+    time::Duration,
 };
 
 use arsc_rs::Arsc;
 use co_trap::{FastResult, TrapFrame};
 use kmem::Virt;
 use ksc::ENOSYS;
+use ktime::Instant;
 use pin_project::pin_project;
 use riscv::register::scause::{Exception, Scause, Trap};
 use sygnal::{ActionType, Sig, SigCode, SigInfo};
@@ -38,13 +40,16 @@ impl<F: Future> Future for TaskFut<F> {
     }
 }
 
+const TASK_GRAN: Duration = Duration::from_millis(1);
+
 pub async fn user_loop(mut ts: TaskState, mut tf: TrapFrame) {
-    loop {
+    let mut time = Instant::now();
+    'life: loop {
         while let Some(si) = ts.task.sig.pop(ts.sig_mask) {
             let action = ts.task.sig_actions.get(si.sig);
             match action.ty {
                 ActionType::Ignore | ActionType::Resume => {}
-                ActionType::Kill => break,
+                ActionType::Kill => break 'life,
                 ActionType::Suspend => {
                     ts.task.sig.wait_one(Sig::SIGCONT).await;
                 }
@@ -56,14 +61,20 @@ pub async fn user_loop(mut ts: TaskState, mut tf: TrapFrame) {
         match fr {
             FastResult::Continue => {}
             FastResult::Pending => continue,
-            FastResult::Break => break,
+            FastResult::Break => break 'life,
             FastResult::Yield => unreachable!(),
         }
 
         match handle_scause(scause, &mut ts, &mut tf).await {
             Continue(Some(sig)) => ts.task.sig.push(sig),
             Continue(None) => {}
-            Break(_code) => break,
+            Break(_code) => break 'life,
+        }
+
+        let new_time = Instant::now();
+        if new_time - time >= TASK_GRAN {
+            time = new_time;
+            yield_now().await
         }
     }
 }
@@ -71,33 +82,61 @@ pub async fn user_loop(mut ts: TaskState, mut tf: TrapFrame) {
 async fn handle_scause(scause: Scause, ts: &mut TaskState, tf: &mut TrapFrame) -> ScRet {
     match scause.cause() {
         Trap::Interrupt(intr) => crate::trap::handle_intr(intr, "user task"),
-        Trap::Exception(excep) => match excep {
-            Exception::UserEnvCall => {
-                let res = async {
-                    let scn = tf.scn().ok_or(ENOSYS)?;
-                    crate::syscall::SYSCALL
-                        .handle(scn, (ts, tf))
-                        .await
-                        .ok_or(ENOSYS)
+        Trap::Exception(excep) => {
+            log::warn!("user exception {excep:?}");
+            match excep {
+                Exception::UserEnvCall => {
+                    let res = async {
+                        let scn = tf.scn().ok_or(ENOSYS)?;
+                        crate::syscall::SYSCALL
+                            .handle(scn, (ts, tf))
+                            .await
+                            .ok_or(ENOSYS)
+                    }
+                    .await;
+                    match res {
+                        Ok(res) => return res,
+                        Err(err) => tf.set_syscall_ret(err.into_raw()),
+                    }
                 }
-                .await;
-                match res {
-                    Ok(res) => return res,
-                    Err(err) => tf.set_syscall_ret(err.into_raw()),
+                Exception::LoadPageFault
+                | Exception::StorePageFault
+                | Exception::InstructionPageFault => {
+                    return Continue(Some(SigInfo {
+                        sig: Sig::SIGSEGV,
+                        code: SigCode::KERNEL,
+                        fields: sygnal::SigFields::SigSys {
+                            addr: tf.stval.into(),
+                            num: 0,
+                        },
+                    }))
                 }
+                _ => todo!(),
             }
-            Exception::LoadPageFault | Exception::StorePageFault => {
-                return Continue(Some(SigInfo {
-                    sig: Sig::SIGSEGV,
-                    code: SigCode::KERNEL,
-                    fields: sygnal::SigFields::SigSys {
-                        addr: tf.stval.into(),
-                        num: 0,
-                    },
-                }))
-            }
-            _ => todo!(),
-        },
+        }
     }
     Continue(None)
+}
+
+pub fn yield_now() -> YieldNow {
+    YieldNow(false)
+}
+
+/// Future for the [`yield_now()`] function.
+#[derive(Debug)]
+#[must_use = "futures do nothing unless you `.await` or poll them"]
+pub struct YieldNow(bool);
+
+impl Future for YieldNow {
+    type Output = ();
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        if !self.0 {
+            self.0 = true;
+            cx.waker().wake_by_ref();
+            Poll::Pending
+        } else {
+            Poll::Ready(())
+        }
+    }
 }

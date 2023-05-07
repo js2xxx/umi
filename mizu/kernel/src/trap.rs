@@ -13,9 +13,7 @@ const TIMER_GRAN_DIV: u64 = 200;
 
 #[no_mangle]
 extern "C" fn ktrap_handler(_tf: &mut KTrapFrame) {
-    let cause = scause::read().cause();
-    log::debug!("KTRAP {cause:?} at {:x}", sepc::read());
-    match cause {
+    match scause::read().cause() {
         Trap::Interrupt(intr) => handle_intr(intr, "kernel"),
         Trap::Exception(excep) => match excep {
             Exception::Breakpoint => sepc::write(sepc::read() + 2),

@@ -5,7 +5,7 @@ use arsc_rs::Arsc;
 use async_trait::async_trait;
 use ksc_core::Error::{self, ENOSYS};
 use ksync::RwLock;
-use umifs::traits::{Entry, File, FileExt, FileSystem};
+use umifs::traits::{Entry, FileSystem, Io, IoExt};
 
 use crate::{
     raw::{BiosParameterBlock, BootSector, FsInfoSector},
@@ -53,12 +53,12 @@ pub struct FatFileSystem<T: TimeProvider> {
 
 impl<T: TimeProvider> FatFileSystem<T> {
     pub async fn new(
-        device: Arc<dyn File>,
+        device: Arc<dyn Io>,
         block_shift: u32,
         time_provider: T,
     ) -> Result<Arsc<Self>, Error> {
         let mut b0 = vec![0; 1 << block_shift];
-        device.read_exact_at(0, &mut [&mut b0]).await?;
+        device.read_exact_at(0, &mut b0).await?;
 
         let (_, bs) = BootSector::parse(&b0)?;
         let bpb = bs.bpb;
@@ -71,10 +71,7 @@ impl<T: TimeProvider> FatFileSystem<T> {
         }
 
         let fis = bpb.bytes_from_sectors(bpb.fs_info_sector());
-        device
-            .read_exact_at(fis as usize, &mut [&mut b0])
-            .await
-            .unwrap();
+        device.read_exact_at(fis as usize, &mut b0).await.unwrap();
         let (_, mut fis) = FsInfoSector::parse(&b0)?;
 
         log::trace!("FIS: {fis:#?}");
@@ -146,11 +143,10 @@ impl<T: TimeProvider> FatFileSystem<T> {
                 .bpb
                 .bytes_from_sectors(u32::from(self.bpb.fs_info_sector));
             let (prefix, suffix) = fs_info.to_bytes();
-            let mut buffer: [&[u8]; 3] = [&prefix, &[0; 480], &suffix];
-            self.fat
-                .device()
-                .write_all_at(offset as usize, &mut buffer)
-                .await?;
+            for b in [&prefix, &[0; 480], &suffix] as [&[u8]; 3] {
+                self.fat.device().write_all_at(offset as usize, b).await?;
+            }
+
             fs_info.dirty = false;
         }
         Ok(())
@@ -171,10 +167,7 @@ impl<T: TimeProvider> FatFileSystem<T> {
         // could be dangerous Compute reserver_1 field offset and write new
         // flags
         let offset = 0x041;
-        self.fat
-            .device()
-            .write_all_at(offset, &mut [&[encoded]])
-            .await?;
+        self.fat.device().write_all_at(offset, &[encoded]).await?;
         FsStatusFlags::store(&self.current_status_flags, flags);
         Ok(())
     }
@@ -229,15 +222,14 @@ impl<T: TimeProvider> FileSystem for FatFileSystem<T> {
 }
 
 pub(crate) async fn write_zeros(
-    disk: &dyn File,
+    disk: &dyn Io,
     mut start: usize,
     mut len: usize,
 ) -> Result<(), Error> {
     const ZEROS: [u8; 512] = [0_u8; 512];
     while len > 0 {
         let write_size = len.min(ZEROS.len());
-        disk.write_all_at(start, &mut [&ZEROS[..write_size]])
-            .await?;
+        disk.write_all_at(start, &ZEROS[..write_size]).await?;
         start += write_size;
         len -= write_size;
     }

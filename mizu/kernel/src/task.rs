@@ -7,6 +7,7 @@ use alloc::{
     vec::Vec,
 };
 use core::{
+    mem,
     ops::ControlFlow::Break,
     pin::Pin,
     sync::atomic::{AtomicUsize, Ordering::SeqCst},
@@ -21,6 +22,7 @@ use ksc::{
     Error::{self, ENOSYS},
 };
 use rand_riscv::RandomState;
+use riscv::register::sstatus;
 use rv39_paging::{Attr, LAddr, PAGE_MASK, PAGE_SHIFT, PAGE_SIZE};
 use spin::{Lazy, Mutex};
 use sygnal::{ActionSet, SigSet, Signals};
@@ -122,6 +124,10 @@ impl InitTask {
                 ..Default::default()
             },
             sepc: entry.val(),
+            sstatus: {
+                let sstatus: usize = unsafe { mem::transmute(sstatus::read()) };
+                (sstatus | (1 << 5)) & !(1 << 8)
+            },
             ..Default::default()
         }
     }

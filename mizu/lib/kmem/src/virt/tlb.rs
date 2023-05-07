@@ -19,14 +19,16 @@ pub fn set_virt(virt: Pin<Arsc<Virt>>) {
     let new = Arsc::into_raw(unsafe { Pin::into_inner_unchecked(virt) });
     let old = unsafe { mem::replace(&mut CUR_VIRT, new) };
 
-    if !old.is_null() && old != new {
+    if old != new {
         let paddr = *LAddr::from(addr).to_paddr(ID_OFFSET);
         unsafe {
             satp::set(Sv39, 0, paddr >> PAGE_SHIFT);
             sfence_vma_all()
         }
-        let old = unsafe { Arsc::from_raw(old) };
-        old.cpu_mask.fetch_and(!(1 << hart_id::hart_id()), SeqCst);
+        if !old.is_null() {
+            let old = unsafe { Arsc::from_raw(old) };
+            old.cpu_mask.fetch_and(!(1 << hart_id::hart_id()), SeqCst);
+        }
     }
 }
 

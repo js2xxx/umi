@@ -11,7 +11,7 @@ use ksc_core::Error::{self, EINVAL, EISDIR, ENOSYS, ENOTDIR};
 use ksync::{Mutex, RwLock, RwLockUpgradableReadGuard, RwLockWriteGuard};
 use umifs::{
     path::Path,
-    traits::{Entry, File},
+    traits::{Entry, Io},
     types::{
         advance_slices, ioslice_len, FileType, IoSlice, IoSliceMut, Metadata, OpenOptions,
         Permissions, SeekFrom,
@@ -165,7 +165,7 @@ impl<T: TimeProvider> FatFile<T> {
 }
 
 #[async_trait]
-impl<T: TimeProvider> File for FatFile<T> {
+impl<T: TimeProvider> Io for FatFile<T> {
     async fn seek(&self, whence: SeekFrom) -> Result<usize, Error> {
         log::trace!("FatFile::seek {whence:?}");
 

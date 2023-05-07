@@ -52,11 +52,7 @@ impl Mapping {
             let entry = table.la2pte_alloc(addr, frames(), ID_OFFSET)?;
             if !entry.is_set() {
                 let frame = self.phys.commit(index, writable, true).await?;
-                *entry = rv39_paging::Entry::new(
-                    frame.base(),
-                    self.attr | Attr::VALID,
-                    rv39_paging::Level::pt(),
-                );
+                *entry = rv39_paging::Entry::new(frame.base(), self.attr, rv39_paging::Level::pt());
                 tlb::flush(cpu_mask, addr, 1)
             }
         }
@@ -123,7 +119,7 @@ impl Virt {
                 let mapping = Mapping {
                     phys,
                     start_index,
-                    attr,
+                    attr: attr | Attr::VALID,
                 };
                 map.try_insert(start..end, mapping).map_err(|_| EEXIST)?;
                 Ok(start)
@@ -137,7 +133,7 @@ impl Virt {
                 ent.insert(Mapping {
                     phys,
                     start_index,
-                    attr,
+                    attr: attr | Attr::VALID,
                 });
                 Ok(addr)
             }

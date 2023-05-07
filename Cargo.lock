@@ -353,6 +353,7 @@ dependencies = [
  "rv39-paging",
  "spin",
  "static_assertions",
+ "umio",
  "virtio-drivers",
  "volatile",
 ]
@@ -601,6 +602,7 @@ dependencies = [
  "spin",
  "static_assertions",
  "umifs",
+ "umio",
 ]
 
 [[package]]
@@ -1194,6 +1196,17 @@ dependencies = [
  "ktime-core",
  "log",
  "rv39-paging",
+ "umio",
+]
+
+[[package]]
+name = "umio"
+version = "0.1.0"
+dependencies = [
+ "arsc-rs",
+ "async-trait",
+ "ksc-core",
+ "log",
 ]
 
 [[package]]

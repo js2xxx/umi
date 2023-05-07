@@ -14,6 +14,7 @@ ksc = {path = "../ksc"}
 ksync = {path = "../ksync"}
 rand-riscv = {path = "../rand-riscv"}
 rv39-paging = {path = "../paging"}
+umio = {path = "../umio"}
 # External crates
 arsc-rs = {git = "https://github.com/js2xxx/arsc"}
 async-trait = "0"

@@ -2,17 +2,18 @@ use alloc::{boxed::Box, sync::Arc};
 
 use async_trait::async_trait;
 use ksc_core::Error::{self, EEXIST, ENOTDIR, EPERM};
+use umio::Io;
 
 use crate::{
     path::Path,
-    traits::{Entry, File},
+    traits::Entry,
     types::{FileType, IoSlice, IoSliceMut, Metadata, OpenOptions, Permissions, SeekFrom},
 };
 
 pub struct Null;
 
 #[async_trait]
-impl File for Null {
+impl Io for Null {
     async fn seek(&self, _: SeekFrom) -> Result<usize, Error> {
         Ok(0)
     }
@@ -69,7 +70,7 @@ impl Entry for Null {
 pub struct Zero;
 
 #[async_trait]
-impl File for Zero {
+impl Io for Zero {
     async fn seek(&self, _: SeekFrom) -> Result<usize, Error> {
         Ok(0)
     }
