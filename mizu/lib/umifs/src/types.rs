@@ -5,7 +5,7 @@ use bitflags::bitflags;
 use ktime_core::Instant;
 
 bitflags! {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
     pub struct OpenOptions: u32 {
         const ACCMODE   = 0o0000003;
         const RDONLY    = 0o0000000;
@@ -28,7 +28,7 @@ bitflags! {
         const CLOEXEC   = 0o2000000;
     }
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
     pub struct Permissions: u32 {
         const SELF_R = 1;
         const SELF_W = 1 << 1;
@@ -81,6 +81,7 @@ impl Permissions {
 pub struct Metadata {
     pub ty: FileType,
     pub len: usize,
+    pub offset: u64,
     pub perm: Permissions,
     pub last_access: Option<Instant>,
     pub last_modified: Option<Instant>,
@@ -149,6 +150,14 @@ impl IoSliceExt for IoSliceMut<'_> {
 
         *self = unsafe { slice::from_raw_parts_mut(self.as_mut_ptr().add(n), self.len() - n) };
     }
+}
+
+pub fn ioslice_len(bufs: &&mut [impl IoSliceExt]) -> usize {
+    bufs.iter().fold(0, |sum, buf| sum + buf.len())
+}
+
+pub fn ioslice_is_empty(bufs: &&mut [impl IoSliceExt]) -> bool {
+    bufs.iter().all(|b| b.len() == 0)
 }
 
 pub fn advance_slices(bufs: &mut &mut [impl IoSliceExt], n: usize) {

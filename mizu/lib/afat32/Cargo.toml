@@ -1,19 +1,19 @@
 [package]
 edition = "2021"
 license = "MIT OR Apache-2.0"
-name = "umifs"
+name = "afat32"
 version = "0.1.0"
-
-[features]
-test = []
 
 [dependencies]
 # Local crates
 ksc-core = {path = "../ksc-core"}
-ktime-core = {path = "../ktime-core"}
-rv39-paging = {path = "../paging"}
+ksync = {path = "../ksync"}
+umifs = {path = "../umifs"}
 # External crates
 arsc-rs = {git = "https://github.com/js2xxx/arsc"}
 async-trait = "0"
 bitflags = "2"
+concat-arrays = "0"
+futures-util = {version = "0", default-features = false, features = ["alloc"]}
 log = "0"
+nom = {version = "7", default-features = false, features = ["alloc"]}

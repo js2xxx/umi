@@ -9,20 +9,20 @@ use co_trap::{FastResult, TrapFrame};
 use kmem::Virt;
 use ksc::ENOSYS;
 use pin_project::pin_project;
-use riscv::register::scause::{Exception, Interrupt, Scause, Trap};
+use riscv::register::scause::{Exception, Scause, Trap};
 use sygnal::{ActionType, Sig, SigInfo};
 
 use super::TaskState;
 
 #[pin_project]
 pub struct TaskFut<F> {
-    virt: Arsc<Virt>,
+    virt: Pin<Arsc<Virt>>,
     #[pin]
     fut: F,
 }
 
 impl<F> TaskFut<F> {
-    pub fn new(virt: Arsc<Virt>, fut: F) -> Self {
+    pub fn new(virt: Pin<Arsc<Virt>>, fut: F) -> Self {
         TaskFut { virt, fut }
     }
 }
@@ -70,11 +70,7 @@ async fn handle_scause(
     tf: &mut TrapFrame,
 ) -> Result<(), SigInfo> {
     match scause.cause() {
-        Trap::Interrupt(intr) => match intr {
-            Interrupt::SupervisorTimer => ktime::timer_tick(),
-            Interrupt::SupervisorExternal => crate::dev::INTR.notify(hart_id::hart_id()),
-            _ => todo!(),
-        },
+        Trap::Interrupt(intr) => crate::trap::handle_intr(intr, "user task"),
         Trap::Exception(excep) => match excep {
             Exception::UserEnvCall => {
                 let res = async {

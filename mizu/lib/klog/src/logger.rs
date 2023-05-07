@@ -30,13 +30,14 @@ impl log::Log for Logger {
         }
 
         let time = Instant::now();
+        let id = hart_id::hart_id();
         if record.level() < Level::Debug {
-            println!("[{time:?}] {}: {}", record.level(), record.args())
+            println!("[{time:?}] {}#{id}: {}", record.level(), record.args())
         } else {
             let file = record.file().unwrap_or("<NULL>");
             let line = OptionU32Display(record.line());
             println!(
-                "[{time:?}] {}: [{file}:{line}] {}",
+                "[{time:?}] {}#{id}: [{file}:{line}] {}",
                 record.level(),
                 record.args()
             )

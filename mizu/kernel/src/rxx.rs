@@ -1,4 +1,3 @@
-use alloc::boxed::Box;
 #[cfg(not(feature = "test"))]
 use core::arch::asm;
 
@@ -34,7 +33,10 @@ pub fn executor() -> &'static Arsc<Executor> {
     EXECUTOR.get().unwrap()
 }
 
+#[cfg(not(feature = "test"))]
 fn run_art(payload: usize) {
+    use alloc::boxed::Box;
+
     type Payload = *mut Box<dyn FnOnce() + Send>;
     if hart_id::is_bsp() {
         log::debug!("Starting ART");
@@ -81,6 +83,7 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
     };
 
     use config::VIRT_END;
+    use riscv::register::{sie, sstatus};
     use sbi_rt::{NoReason, Shutdown};
 
     static GLOBAL_INIT: AtomicBool = AtomicBool::new(false);
@@ -100,10 +103,6 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
 
     if !GLOBAL_INIT.load(Relaxed) {
         r0::zero_bss(&mut _sbss, &mut _ebss);
-
-        // Can't use cmpxchg here, because `zero_bss` will reinitialize it to zero.
-        GLOBAL_INIT.store(true, Release);
-        hart_id::init_bsp_id(hartid);
     }
 
     // Initialize TLS
@@ -114,7 +113,6 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
 
         let len = (&_tdata_size) as *const u32 as usize;
         tp.copy_from_nonoverlapping(&_stdata, len / mem::size_of::<u32>());
-        hart_id::init_hart_id(hartid);
     }
 
     // Disable interrupt in `ksync`.
@@ -123,18 +121,32 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
     // Init default kernel trap handler.
     unsafe { crate::trap::init() };
 
-    if hart_id::is_bsp() {
+    if !GLOBAL_INIT.load(Relaxed) {
         // Init logger.
-        unsafe { klog::init_logger(log::Level::Debug) };
+        unsafe { klog::init_logger(log::Level::Trace) };
 
         // Init the kernel heap.
         unsafe { kalloc::init(&mut _sheap, &mut _eheap) };
+
+        // Can't use cmpxchg here, because `zero_bss` will reinitialize it to zero.
+        GLOBAL_INIT.store(true, Release);
+        hart_id::init_bsp_id(hartid);
 
         // Init the frame allocator.
         unsafe {
             let range = (&_end as *const u8).into()..VIRT_END.into();
             kmem::init_frames(range)
         }
+    }
+    hart_id::init_hart_id(hartid);
+
+    unsafe {
+        sie::set_sext();
+        sie::set_stimer();
+        sie::set_ssoft();
+        sstatus::set_spie();
+
+        ksync::enable();
     }
 
     run_art(payload);

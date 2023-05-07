@@ -3,6 +3,22 @@
 version = 3
 
 [[package]]
+name = "afat32"
+version = "0.1.0"
+dependencies = [
+ "arsc-rs",
+ "async-trait",
+ "bitflags 2.2.1",
+ "concat-arrays",
+ "futures-util",
+ "ksc-core",
+ "ksync",
+ "log",
+ "nom",
+ "umifs",
+]
+
+[[package]]
 name = "ahash"
 version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -21,8 +37,8 @@ checksum = "457661fa6716c30b73d7c41400a8a78780d20523b83a9441dabec28e93f27cf4"
 
 [[package]]
 name = "arsc-rs"
-version = "0.1.0"
-source = "git+https://github.com/js2xxx/arsc#7a118ba49be1ca7bd818d34f18a759318b2d56f6"
+version = "0.1.2"
+source = "git+https://github.com/js2xxx/arsc#a35008dce76e1427c788b45c07d294825cfc901b"
 dependencies = [
  "log",
  "memoffset",
@@ -255,6 +271,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "concat-arrays"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1df715824eb382e34b7afb7463b0247bf41538aeba731fba05241ecdb5dc3747"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
+]
+
+[[package]]
 name = "concurrent-queue"
 version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -315,6 +342,7 @@ dependencies = [
  "arsc-rs",
  "async-trait",
  "crossbeam-queue",
+ "futures-lite",
  "futures-util",
  "hashbrown",
  "kmem",
@@ -460,6 +488,10 @@ dependencies = [
 [[package]]
 name = "hart-id"
 version = "0.1.0"
+dependencies = [
+ "ksync-core",
+ "spin",
+]
 
 [[package]]
 name = "hash32"
@@ -528,6 +560,7 @@ dependencies = [
 name = "klog"
 version = "0.1.0"
 dependencies = [
+ "hart-id",
  "ksync-core",
  "ktime-core",
  "log",
@@ -580,6 +613,8 @@ version = "0.1.0"
 dependencies = [
  "bevy_utils_proc_macros",
  "enum-primitive-derive",
+ "log",
+ "nom",
  "num-traits",
  "rv39-paging",
 ]
@@ -645,9 +680,9 @@ checksum = "6a987beff54b60ffa6d51982e1aa1146bc42f19bd26be28b0586f252fccf5317"
 
 [[package]]
 name = "linux-raw-sys"
-version = "0.3.6"
+version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b64f40e5e03e0d54f03845c8197d0291253cdbedfb1cb46b13c2c117554a9f4c"
+checksum = "ece97ea872ece730aed82664c424eb4c8291e1ff2480247ccf7409044bc6479f"
 
 [[package]]
 name = "lock_api"
@@ -684,15 +719,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "minimal-lexical"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
+
+[[package]]
 name = "mizu"
 version = "0.1.0"
 dependencies = [
+ "afat32",
  "arsc-rs",
  "art",
+ "async-trait",
  "co-trap",
  "config",
+ "crossbeam-queue",
  "devices",
  "fdt",
+ "futures-util",
  "hart-id",
  "hashbrown",
  "kalloc",
@@ -711,6 +756,7 @@ dependencies = [
  "spin",
  "static_assertions",
  "sygnal",
+ "umifs",
  "virtio-drivers",
 ]
 
@@ -728,6 +774,16 @@ name = "nb"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8d5439c4ad607c3c23abf66de8c8bf57ba8adcd1f129e699851a6e43935d339d"
+
+[[package]]
+name = "nom"
+version = "7.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d273983c5a657a70a3e8f2a01329822f3b8c8172b73826411a55751e404a0a4a"
+dependencies = [
+ "memchr",
+ "minimal-lexical",
+]
 
 [[package]]
 name = "num-integer"
@@ -918,9 +974,9 @@ dependencies = [
 
 [[package]]
 name = "rustix"
-version = "0.37.18"
+version = "0.37.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8bbfc1d1c7c40c01715f47d71444744a81669ca84e8b63e25a55e169b1f86433"
+checksum = "acf8729d8542766f1b2cf77eb034d52f40d375bb8b615d0b147089946e16613d"
 dependencies = [
  "bitflags 1.3.2",
  "errno",
@@ -1093,10 +1149,12 @@ dependencies = [
 name = "umifs"
 version = "0.1.0"
 dependencies = [
+ "arsc-rs",
  "async-trait",
  "bitflags 2.2.1",
  "ksc-core",
  "ktime-core",
+ "log",
  "rv39-paging",
 ]
 

@@ -2,7 +2,7 @@ use core::num::NonZeroU32;
 
 use crossbeam_queue::SegQueue;
 use hashbrown::{hash_map::Entry, HashMap};
-use ksync::{unbounded, Receiver, Sender};
+use ksync::{unbounded, Receiver, Sender, TryRecvError};
 use rand_riscv::RandomState;
 use spin::RwLock;
 
@@ -21,7 +21,11 @@ impl IntrManager {
         }
     }
 
-    pub fn insert(&self, cx: usize, pin: NonZeroU32) -> Option<Interrupt> {
+    pub fn insert(
+        &self,
+        cx: impl IntoIterator<Item = usize>,
+        pin: NonZeroU32,
+    ) -> Option<Interrupt> {
         let pin = pin.get();
         let rx = ksync::critical(|| match self.map.write().entry(pin) {
             Entry::Occupied(entry) if entry.get().is_closed() => {
@@ -36,8 +40,13 @@ impl IntrManager {
             }
             _ => None,
         })?;
-        self.plic.enable(pin, cx, true);
+        cx.into_iter()
+            .for_each(|cx| self.plic.enable(pin, cx, true));
         Some(Interrupt(rx))
+    }
+
+    pub fn check_pending(&self, pin: NonZeroU32) -> bool {
+        self.plic.pending(pin.get())
     }
 
     pub fn notify(&self, cx: usize) {
@@ -61,5 +70,13 @@ pub struct Interrupt(Receiver<SegQueue<()>>);
 impl Interrupt {
     pub async fn wait(&self) -> bool {
         self.0.recv().await.is_ok()
+    }
+
+    pub fn try_wait(&self) -> Option<bool> {
+        match self.0.try_recv() {
+            Ok(_) | Err(TryRecvError::Closed(Some(_))) => Some(true),
+            Err(TryRecvError::Empty) => None,
+            Err(TryRecvError::Closed(None)) => Some(false),
+        }
     }
 }

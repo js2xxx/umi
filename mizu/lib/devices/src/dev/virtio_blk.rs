@@ -30,7 +30,7 @@ impl VirtioBlock {
             let size = device.virt_queue_size() as usize;
 
             VirtioBlock {
-                virt_queue: Semaphore::new(size),
+                virt_queue: Semaphore::new(size / 3),
                 device: Mutex::new(device),
                 event: iter::repeat_with(Event::new).take(size).collect(),
             }
@@ -48,8 +48,8 @@ impl VirtioBlock {
         }
     }
 
-    pub fn capacity_blocks(&self) -> u64 {
-        unsafe { (*self.device.data_ptr()).capacity() }
+    pub fn capacity_blocks(&self) -> usize {
+        unsafe { (*self.device.data_ptr()).capacity() as usize }
     }
 
     pub fn readonly(&self) -> bool {
@@ -76,13 +76,20 @@ impl VirtioBlock {
                 break;
             }
             match listener.take() {
-                Some(listener) => listener.await,
+                Some(listener) => {
+                    log::trace!("VirtioBlock::wait_for_token: token = {token}");
+                    listener.await
+                }
                 None => listener = Some(self.event[token as usize].listen()),
             }
         }
     }
 
     pub async fn read_chunk(&self, block: usize, buf: &mut [u8]) -> virtio_drivers::Result {
+        log::trace!(
+            "VirtioBlock::read_chunk: block = {block}, buf len = {}",
+            buf.len()
+        );
         assert!(buf.len() <= Self::SECTOR_SIZE);
 
         let mut req = BlkReq::default();
@@ -100,6 +107,10 @@ impl VirtioBlock {
     }
 
     pub async fn write_chunk(&self, block: usize, buf: &[u8]) -> virtio_drivers::Result {
+        log::trace!(
+            "VirtioBlock::write_chunk: block = {block}, buf len = {}",
+            buf.len()
+        );
         assert!(buf.len() <= Self::SECTOR_SIZE);
 
         let mut req = BlkReq::default();
@@ -136,7 +147,7 @@ impl Block for VirtioBlock {
     }
 
     fn capacity_blocks(&self) -> usize {
-        self.capacity_blocks() as usize
+        self.capacity_blocks()
     }
 
     fn ack_interrupt(&self) {
@@ -159,3 +170,4 @@ impl Block for VirtioBlock {
         res.map_err(virtio_rw_err)
     }
 }
+impl_backend_for_block!(VirtioBlock);

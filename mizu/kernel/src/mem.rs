@@ -1,6 +1,7 @@
 use alloc::boxed::Box;
-use core::ops::Range;
+use core::{ops::Range, pin::Pin};
 
+use arsc_rs::Arsc;
 use kmem::Virt;
 use rv39_paging::{Table, CANONICAL_PREFIX};
 use spin::Lazy;
@@ -14,9 +15,9 @@ pub fn kernel_table() -> &'static Table {
     &KERNEL_TABLE
 }
 
-pub fn new_virt() -> Virt {
+pub fn new_virt() -> Pin<Arsc<Virt>> {
     Virt::new(
         USER_RANGE.start.into()..USER_RANGE.end.into(),
-        Box::new(*kernel_table()),
+        *kernel_table(),
     )
 }

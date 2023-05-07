@@ -1,5 +1,8 @@
 use alloc::sync::{Arc, Weak};
-use core::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+use core::{
+    pin::Pin,
+    sync::atomic::{AtomicUsize, Ordering::SeqCst},
+};
 
 use arsc_rs::Arsc;
 use co_trap::TrapFrame;
@@ -24,7 +27,7 @@ pub struct TaskState {
 pub struct Task {
     main: Weak<Task>,
     tid: usize,
-    virt: Arsc<Virt>,
+    virt: Pin<Arsc<Virt>>,
 
     sig: Signals,
     sig_actions: ActionSet,
@@ -57,7 +60,7 @@ pub fn process(id: usize) -> Option<Arc<Task>> {
 
 pub struct InitTask {
     main: Weak<Task>,
-    virt: Arsc<Virt>,
+    virt: Pin<Arsc<Virt>>,
     tf: TrapFrame,
 }
 

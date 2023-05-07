@@ -9,6 +9,7 @@
 #![feature(thread_local)]
 
 pub mod dev;
+pub mod fs;
 pub mod mem;
 mod rxx;
 pub mod syscall;
@@ -20,10 +21,24 @@ extern crate klog;
 
 extern crate alloc;
 
+use umifs::types::FileType;
+
 pub use self::rxx::executor;
 
 async fn main(fdt: usize) {
     println!("Hello from executor");
 
     unsafe { dev::init(fdt as _).expect("failed to initialize devices") };
+    fs::fs_init().await;
+
+    let (fs, path) = fs::get("chdir".as_ref()).unwrap();
+    let rt = fs.root_dir().await.unwrap();
+    rt.open(
+        path,
+        Some(FileType::FILE),
+        Default::default(),
+        Default::default(),
+    )
+    .await
+    .unwrap();
 }

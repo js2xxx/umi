@@ -16,6 +16,7 @@ test = [
 
 [dependencies]
 # Local crates
+afat32 = {path = "../lib/afat32"}
 art = {path = "../lib/art"}
 co-trap = {path = "../lib/co-trap"}
 config = {path = "../lib/config", default-features = false}
@@ -30,9 +31,13 @@ ktime = {path = "../lib/ktime"}
 rand-riscv = {path = "../lib/rand-riscv"}
 rv39-paging = {path = "../lib/paging"}
 sygnal = {path = "../lib/sygnal"}
+umifs = {path = "../lib/umifs"}
 # External crates
 arsc-rs = {git = "https://github.com/js2xxx/arsc"}
+async-trait = "0"
+crossbeam-queue = {version = "0", default-features = false, features = ["alloc", "nightly"]}
 fdt = "0"
+futures-util = {version = "0", default-features = false, features = ["alloc"]}
 hashbrown = {version = "0", default-features = false, features = ["inline-more"]}
 log = "0"
 pin-project = "1"

@@ -1,4 +1,6 @@
 .extern ktrap_handler
+.extern preempt_disable
+.extern preempt_enable
 
 .global ktrap_entry
 .type ktrap_entry, @function
@@ -25,9 +27,13 @@ ktrap_entry:
     sd t5, 18*8(sp)
     sd t6, 19*8(sp)
 
+    call preempt_disable
+
     mv a0, sp
     addi a0, a0, 4
     call ktrap_handler
+
+    call preempt_enable
 
     ld ra, 1*8(sp)
     // Ignore sp

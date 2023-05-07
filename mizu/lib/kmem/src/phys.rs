@@ -7,16 +7,18 @@ use core::{
     sync::atomic::{AtomicUsize, Ordering::SeqCst},
 };
 
+use arsc_rs::Arsc;
 use async_trait::async_trait;
 use futures_util::future::try_join_all;
 use ksc_core::Error::{self, EINVAL, ENOMEM};
+use ksync::Mutex;
 use rand_riscv::RandomState;
 use rv39_paging::{PAddr, ID_OFFSET, PAGE_SHIFT, PAGE_SIZE};
-use spin::{Lazy, Mutex};
+use spin::Lazy;
 use umifs::{
     misc::Zero,
     traits::File,
-    types::{advance_slices, IoSlice, IoSliceMut, SeekFrom},
+    types::{advance_slices, ioslice_len, IoSlice, IoSliceMut, SeekFrom},
 };
 
 use crate::lru::LruCache;
@@ -71,11 +73,11 @@ pub struct FrameInfo {
 pub struct Phys {
     frames: Mutex<LruCache<usize, FrameInfo>>,
     position: AtomicUsize,
-    backend: Arc<dyn Backend>,
+    backend: Arsc<dyn Backend>,
 }
 
 impl Phys {
-    pub fn new(backend: Arc<dyn Backend>, initial_pos: usize) -> Self {
+    pub fn new(backend: Arsc<dyn Backend>, initial_pos: usize) -> Self {
         Phys {
             frames: Mutex::new(LruCache::unbounded_with_hasher(RandomState::new())),
             position: initial_pos.into(),
@@ -90,7 +92,7 @@ impl Phys {
 
 impl Phys {
     pub fn new_anon() -> Phys {
-        Phys::new(Arc::new(Zero), 0)
+        Phys::new(Arsc::new(Zero), 0)
     }
 }
 
@@ -101,36 +103,42 @@ impl Phys {
         writable: bool,
         pin: bool,
     ) -> Result<Arc<Frame>, Error> {
-        let frame = ksync::critical(|| {
-            self.frames.lock().get_mut(&index).map(|fi| {
-                if writable {
-                    fi.dirty = true;
-                    fi.pin_count += pin as usize;
-                }
-                fi.frame.clone()
-            })
+        log::trace!(
+            "Phys::commit index = {index} {} {}",
+            if writable { "writable" } else { "" },
+            if pin { "pin" } else { "" }
+        );
+        let mut frames = self.frames.lock().await;
+
+        let frame = frames.get_mut(&index).map(|fi| {
+            if writable {
+                fi.dirty = true;
+                fi.pin_count += pin as usize;
+            }
+            fi.frame.clone()
         });
         if let Some(frame) = frame {
             return Ok(frame);
         }
 
         let frame = self.backend.commit(index, writable).await?;
-        if let Some((index, fi)) = ksync::critical(|| {
-            let fi = FrameInfo {
-                frame: frame.clone(),
-                dirty: false,
-                pin_count: pin as usize,
-            };
-            let mut frames = self.frames.lock();
+
+        let fi = FrameInfo {
+            frame: frame.clone(),
+            dirty: false,
+            pin_count: pin as usize,
+        };
+
+        let old_entry = {
             let mut data = frames.push(index, fi);
 
             let index = match data.as_ref() {
-                None => return Ok(None),
+                None => return Ok(frame),
                 Some(&(index, _)) => index,
             };
             let mut looped = false;
 
-            Ok(loop {
+            loop {
                 data = match data {
                     Some((i, _)) if i == index && looped => return Err(ENOMEM),
                     // Find a frame that is not pinned.
@@ -139,8 +147,10 @@ impl Phys {
                     None => break None,
                 };
                 looped = true;
-            })
-        })? {
+            }
+        };
+
+        if let Some((index, fi)) = old_entry {
             debug_assert!(fi.pin_count == 0);
             if fi.dirty {
                 self.backend.flush(index, &fi.frame).await?;
@@ -155,8 +165,8 @@ impl Phys {
         force_dirty: Option<bool>,
         unpin: bool,
     ) -> Result<(), Error> {
-        let frame = ksync::critical(|| {
-            let mut frames = self.frames.lock();
+        let frame = {
+            let mut frames = self.frames.lock().await;
 
             let fi = frames.get_mut(&index);
             fi.and_then(|fi| {
@@ -165,7 +175,7 @@ impl Phys {
                     .unwrap_or_else(|| mem::replace(&mut fi.dirty, false))
                     .then(|| fi.frame.clone())
             })
-        });
+        };
         if let Some(frame) = frame {
             self.backend.flush(index, &frame).await?;
         }
@@ -173,15 +183,15 @@ impl Phys {
     }
 
     pub async fn flush_all(&self) -> Result<(), Error> {
-        let frames = ksync::critical(|| {
-            let mut frames = self.frames.lock();
+        let frames = {
+            let mut frames = self.frames.lock().await;
 
             let iter = frames.iter_mut();
             iter.filter_map(|(&index, fi)| {
                 mem::replace(&mut fi.dirty, false).then(|| (index, fi.frame.clone()))
             })
             .collect::<Vec<_>>()
-        });
+        };
 
         let flush_fn = |(index, frame): (usize, Arc<Frame>)| async move {
             self.backend.flush(index, &frame).await
@@ -194,8 +204,8 @@ impl Phys {
         let mut ret = Vec::new();
         let mut dirties = VecDeque::new();
 
-        ksync::critical(|| {
-            let mut frames = self.frames.lock();
+        {
+            let mut frames = self.frames.lock().await;
             let max_trial = frames.len();
             let mut trial = 0;
             while let Some((index, mut fi)) = frames.pop_lru() {
@@ -221,7 +231,7 @@ impl Phys {
                     break;
                 }
             }
-        });
+        };
 
         while ret.len() < max_count.get() {
             match dirties.pop_front() {
@@ -233,8 +243,8 @@ impl Phys {
             }
         }
 
-        ksync::critical(|| {
-            let mut frames = self.frames.lock();
+        {
+            let mut frames = self.frames.lock().await;
             dirties.into_iter().for_each(|(index, frame, dirty, pinc)| {
                 let fi = FrameInfo {
                     frame: Arc::new(frame),
@@ -243,7 +253,7 @@ impl Phys {
                 };
                 frames.push(index, fi);
             })
-        });
+        };
 
         Ok(ret)
     }
@@ -269,12 +279,22 @@ impl Default for Phys {
 
 #[async_trait]
 #[allow(clippy::len_without_is_empty)]
-pub trait Backend: Send + Sync + 'static {
+pub trait Backend: ToBackend + Send + Sync + 'static {
     async fn len(&self) -> usize;
 
     async fn commit(&self, index: usize, writable: bool) -> Result<Arc<Frame>, Error>;
 
     async fn flush(&self, index: usize, frame: &Frame) -> Result<(), Error>;
+}
+
+pub trait ToBackend {
+    fn to_backend(self: Arsc<Self>) -> Arsc<dyn Backend>;
+}
+
+impl<T: Backend> ToBackend for T {
+    fn to_backend(self: Arsc<Self>) -> Arsc<dyn Backend> {
+        self as _
+    }
 }
 
 #[async_trait]
@@ -318,7 +338,13 @@ impl File for Phys {
     }
 
     async fn read_at(&self, offset: usize, mut buffer: &mut [IoSliceMut]) -> Result<usize, Error> {
-        let (start, end) = (offset, offset.checked_add(buffer.len()).ok_or(EINVAL)?);
+        log::trace!(
+            "Phys::read_at {offset:#x}, buffer len = {}",
+            ioslice_len(&buffer)
+        );
+
+        let ioslice_len = ioslice_len(&buffer);
+        let (start, end) = (offset, offset.checked_add(ioslice_len).ok_or(EINVAL)?);
         if start == end {
             return Ok(0);
         }
@@ -360,7 +386,13 @@ impl File for Phys {
     }
 
     async fn write_at(&self, offset: usize, mut buffer: &mut [IoSlice]) -> Result<usize, Error> {
-        let (start, end) = (offset, offset.checked_add(buffer.len()).ok_or(EINVAL)?);
+        log::trace!(
+            "Phys::write_at {offset:#x}, buffer len = {}",
+            ioslice_len(&buffer)
+        );
+
+        let ioslice_len = ioslice_len(&buffer);
+        let (start, end) = (offset, offset.checked_add(ioslice_len).ok_or(EINVAL)?);
         if start == end {
             return Ok(0);
         }
@@ -429,6 +461,9 @@ fn copy_from_frame(
 ) -> usize {
     let mut read_len = 0;
     loop {
+        if buffer.is_empty() {
+            break read_len;
+        }
         let buf = &mut buffer[0];
         let len = buf.len().min(end - start);
         if len == 0 {
@@ -452,6 +487,9 @@ fn copy_to_frame(
 ) -> usize {
     let mut written_len = 0;
     loop {
+        if buffer.is_empty() {
+            break written_len;
+        }
         let buf = buffer[0];
         let len = buf.len().min(end - start);
         if len == 0 {

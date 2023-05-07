@@ -1,17 +1,17 @@
-use alloc::{boxed::Box, sync::Arc};
+use alloc::boxed::Box;
 use core::ops::Range;
 
 use arsc_rs::Arsc;
 use async_trait::async_trait;
-use futures_util::future::try_join_all;
-use kmem::{Backend, Frame};
-use ksc::Error::{self, ENOMEM, ENOSPC};
+use futures_lite::future::yield_now;
+use kmem::Backend;
+use ksc::Error::{self, ENOSPC};
 use rv39_paging::PAGE_SHIFT;
 
 use crate::Interrupt;
 
 #[async_trait]
-pub trait Block: Send + Sync + 'static {
+pub trait Block: Backend {
     fn block_shift(&self) -> u32;
 
     #[inline]
@@ -29,76 +29,68 @@ pub trait Block: Send + Sync + 'static {
 
     async fn intr_dispatch(self: Arsc<Self>, intr: Interrupt) {
         loop {
-            if !intr.wait().await {
+            // TODO: use `intr.wait().await`.
+            if let Some(false) = intr.try_wait() {
                 break;
             }
-            self.ack_interrupt()
+
+            self.ack_interrupt();
+            yield_now().await;
         }
     }
 }
 
-pub struct BlockBackend {
-    device: Arsc<dyn Block>,
-}
+macro_rules! impl_backend_for_block {
+    ($type:ident) => {
+        #[async_trait]
+        impl kmem::Backend for $type {
+            #[inline]
+            async fn len(&self) -> usize {
+                self.capacity_blocks() << self.block_shift()
+            }
 
-impl BlockBackend {
-    pub fn new(device: Arsc<dyn Block>) -> Self {
-        BlockBackend { device }
-    }
+            async fn commit(
+                &self,
+                index: usize,
+                writable: bool,
+            ) -> Result<alloc::sync::Arc<kmem::Frame>, Error> {
+                log::trace!("BlockBackend::commit: index = {index}, writable = {writable}");
 
-    pub fn device(&self) -> &Arsc<dyn Block> {
-        &self.device
-    }
-}
+                let block_iter = $crate::dev::block::block_iter(self, index)?;
 
-impl<B: Block> From<Arsc<B>> for BlockBackend {
-    fn from(value: Arsc<B>) -> Self {
-        BlockBackend::new(value)
-    }
-}
+                let frame = kmem::Frame::new().ok_or(ENOMEM)?;
 
-impl From<Arsc<dyn Block>> for BlockBackend {
-    fn from(value: Arsc<dyn Block>) -> Self {
-        BlockBackend::new(value)
-    }
-}
+                futures_util::future::try_join_all(block_iter.map(|(block, buf_range)| {
+                    let mut ptr = frame.as_ptr();
+                    let buf = &mut unsafe { ptr.as_mut() }[buf_range];
 
-#[async_trait]
-impl Backend for BlockBackend {
-    #[inline]
-    async fn len(&self) -> usize {
-        self.device.capacity_blocks() << self.device.block_shift()
-    }
+                    self.read(block, buf)
+                }))
+                .await?;
 
-    async fn commit(&self, index: usize, _writable: bool) -> Result<Arc<Frame>, Error> {
-        let block_iter = block_iter(&*self.device, index)?;
+                Ok(alloc::sync::Arc::new(frame))
+            }
 
-        let frame = Frame::new().ok_or(ENOMEM)?;
+            async fn flush(&self, index: usize, frame: &kmem::Frame) -> Result<(), Error> {
+                log::trace!(
+                    "BlockBackend::flush: index = {index}, frame = {:?}",
+                    frame.base()
+                );
 
-        try_join_all(block_iter.map(|(block, buf_range)| {
-            let mut ptr = frame.as_ptr();
-            let buf = &mut unsafe { ptr.as_mut() }[buf_range];
+                let block_iter = $crate::dev::block::block_iter(self, index)?;
 
-            self.device.read(block, buf)
-        }))
-        .await?;
+                futures_util::future::try_join_all(block_iter.map(|(block, buf_range)| {
+                    let ptr = frame.as_ptr();
+                    let buf = &unsafe { ptr.as_ref() }[buf_range];
 
-        Ok(Arc::new(frame))
-    }
+                    self.write(block, buf)
+                }))
+                .await?;
 
-    async fn flush(&self, index: usize, frame: &Frame) -> Result<(), Error> {
-        let block_iter = block_iter(&*self.device, index)?;
-
-        try_join_all(block_iter.map(|(block, buf_range)| {
-            let ptr = frame.as_ptr();
-            let buf = &unsafe { ptr.as_ref() }[buf_range];
-
-            self.device.write(block, buf)
-        }))
-        .await?;
-
-        Ok(())
-    }
+                Ok(())
+            }
+        }
+    };
 }
 
 fn block_range(index: usize, block_shift: u32) -> Range<usize> {
@@ -107,7 +99,7 @@ fn block_range(index: usize, block_shift: u32) -> Range<usize> {
     (index << nr_blocks_in_frame_shift)..((index + 1) << nr_blocks_in_frame_shift)
 }
 
-fn block_iter(
+pub(crate) fn block_iter(
     device: &dyn Block,
     index: usize,
 ) -> Result<impl Iterator<Item = (usize, Range<usize>)>, Error> {
