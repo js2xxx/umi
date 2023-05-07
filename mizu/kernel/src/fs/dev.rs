@@ -78,7 +78,7 @@ impl Entry for DevBlocks {
     ) -> Result<(Arc<dyn Entry>, bool), Error> {
         if let Ok(n) = path.as_str().parse() {
             let block = crate::dev::block(n).ok_or(ENOENT)?;
-            let _phys = Arc::new(Phys::new(block.to_backend(), 0));
+            let _phys = Arc::new(Phys::new(block.to_backend(), 0, false));
             todo!("implement Entry for Phys using phys' backend")
         }
         Err(ENOENT)

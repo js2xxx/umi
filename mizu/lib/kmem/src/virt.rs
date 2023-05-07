@@ -10,7 +10,7 @@ use core::{
 };
 
 use arsc_rs::Arsc;
-use ksc_core::Error::{self, EEXIST, EINVAL, ENOSPC};
+use ksc_core::Error::{self, EEXIST, EINVAL, ENOSPC, EPERM};
 use ksync::Mutex;
 use range_map::{AslrKey, RangeMap};
 use rv39_paging::{Attr, LAddr, Table, ID_OFFSET, PAGE_LAYOUT, PAGE_MASK, PAGE_SHIFT};
@@ -196,6 +196,9 @@ impl Virt {
         let mut table = self.root.lock().await;
 
         for (addr, mapping) in map.range_mut(range.clone()) {
+            if !mapping.attr.contains(attr) {
+                return Err(EPERM);
+            }
             let count = (addr.end.val() - addr.start.val()) >> PAGE_SHIFT;
 
             let cpu_mask = self.cpu_mask.load(Relaxed);
@@ -206,6 +209,9 @@ impl Virt {
         }
 
         if let Some((mut mapping, mut entry)) = map.split_entry(range.start) {
+            if !mapping.attr.contains(attr) {
+                return Err(EPERM);
+            }
             let addr = entry.old_key();
             let offset = (range.start.val() - addr.start.val()) >> PAGE_SHIFT;
             let count = (addr.end.val() - range.start.val()) >> PAGE_SHIFT;
@@ -230,6 +236,9 @@ impl Virt {
             entry.set_latter(latter);
         }
         if let Some((mut mapping, mut entry)) = map.split_entry(range.end) {
+            if !mapping.attr.contains(attr) {
+                return Err(EPERM);
+            }
             let addr = entry.old_key();
             let count = (range.end.val() - addr.start.val()) >> PAGE_SHIFT;
 

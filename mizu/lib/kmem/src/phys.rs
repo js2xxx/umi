@@ -10,7 +10,7 @@ use core::{
 use arsc_rs::Arsc;
 use async_trait::async_trait;
 use futures_util::future::try_join_all;
-use ksc_core::Error::{self, EINVAL, ENOMEM};
+use ksc_core::Error::{self, EINVAL, ENOMEM, EPERM};
 use ksync::Mutex;
 use rand_riscv::RandomState;
 use rv39_paging::{PAddr, ID_OFFSET, PAGE_SHIFT, PAGE_SIZE};
@@ -73,26 +73,40 @@ pub struct FrameInfo {
 pub struct Phys {
     frames: Mutex<LruCache<usize, FrameInfo>>,
     position: AtomicUsize,
+    cow: bool,
     backend: Arsc<dyn Backend>,
 }
 
 impl Phys {
-    pub fn new(backend: Arsc<dyn Backend>, initial_pos: usize) -> Self {
+    pub fn new(backend: Arsc<dyn Backend>, initial_pos: usize, cow: bool) -> Self {
         Phys {
             frames: Mutex::new(LruCache::unbounded_with_hasher(RandomState::new())),
             position: initial_pos.into(),
+            cow,
             backend,
         }
+    }
+
+    pub fn clone_as(&self, cow: bool) -> Result<Self, Error> {
+        if self.cow && !cow {
+            return Err(EPERM);
+        }
+        // TODO: Reuse frames among COW physes.
+        Ok(Phys::new(self.backend.clone(), 0, cow))
     }
 
     pub fn backend(&self) -> &dyn Backend {
         &*self.backend
     }
+
+    pub fn is_cow(&self) -> bool {
+        self.cow
+    }
 }
 
 impl Phys {
     pub fn new_anon() -> Phys {
-        Phys::new(Arsc::new(Zero), 0)
+        Phys::new(Arsc::new(Zero), 0, true)
     }
 }
 
@@ -112,7 +126,7 @@ impl Phys {
 
         let frame = frames.get_mut(&index).map(|fi| {
             if writable {
-                fi.dirty = true;
+                fi.dirty = !self.cow;
                 fi.pin_count += pin as usize;
             }
             fi.frame.clone()
@@ -172,6 +186,7 @@ impl Phys {
             fi.and_then(|fi| {
                 fi.pin_count -= unpin as usize;
                 force_dirty
+                    .map(|d| d & !self.cow)
                     .unwrap_or_else(|| mem::replace(&mut fi.dirty, false))
                     .then(|| fi.frame.clone())
             })

@@ -68,7 +68,7 @@ pub async fn fs_init() {
     mount("dev".into(), Arsc::new(dev::DevFs));
     for block in blocks() {
         let block_shift = block.block_shift();
-        let phys = Phys::new(block.to_backend(), 0);
+        let phys = Phys::new(block.to_backend(), 0, false);
         if let Ok(fs) =
             afat32::FatFileSystem::new(Arc::new(phys), block_shift, NullTimeProvider).await
         {
