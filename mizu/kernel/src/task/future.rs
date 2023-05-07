@@ -1,5 +1,6 @@
 use core::{
     future::Future,
+    ops::ControlFlow::{Break, Continue},
     pin::Pin,
     task::{Context, Poll},
 };
@@ -10,9 +11,10 @@ use kmem::Virt;
 use ksc::ENOSYS;
 use pin_project::pin_project;
 use riscv::register::scause::{Exception, Scause, Trap};
-use sygnal::{ActionType, Sig, SigInfo};
+use sygnal::{ActionType, Sig, SigCode, SigInfo};
 
 use super::TaskState;
+use crate::syscall::ScRet;
 
 #[pin_project]
 pub struct TaskFut<F> {
@@ -58,17 +60,15 @@ pub async fn user_loop(mut ts: TaskState, mut tf: TrapFrame) {
             FastResult::Yield => unreachable!(),
         }
 
-        if let Err(sig) = handle_scause(scause, &mut ts, &mut tf).await {
-            ts.task.sig.push(sig);
+        match handle_scause(scause, &mut ts, &mut tf).await {
+            Continue(Some(sig)) => ts.task.sig.push(sig),
+            Continue(None) => {}
+            Break(_code) => break,
         }
     }
 }
 
-async fn handle_scause(
-    scause: Scause,
-    ts: &mut TaskState,
-    tf: &mut TrapFrame,
-) -> Result<(), SigInfo> {
+async fn handle_scause(scause: Scause, ts: &mut TaskState, tf: &mut TrapFrame) -> ScRet {
     match scause.cause() {
         Trap::Interrupt(intr) => crate::trap::handle_intr(intr, "user task"),
         Trap::Exception(excep) => match excep {
@@ -82,12 +82,22 @@ async fn handle_scause(
                 }
                 .await;
                 match res {
-                    Ok(res) => res?,
+                    Ok(res) => return res,
                     Err(err) => tf.set_syscall_ret(err.into_raw()),
                 }
+            }
+            Exception::LoadPageFault | Exception::StorePageFault => {
+                return Continue(Some(SigInfo {
+                    sig: Sig::SIGSEGV,
+                    code: SigCode::KERNEL,
+                    fields: sygnal::SigFields::SigSys {
+                        addr: tf.stval.into(),
+                        num: 0,
+                    },
+                }))
             }
             _ => todo!(),
         },
     }
-    Ok(())
+    Continue(None)
 }

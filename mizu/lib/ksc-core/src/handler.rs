@@ -1,5 +1,5 @@
 use alloc::boxed::Box;
-use core::{future::Future, pin::Pin};
+use core::{future::Future, ops::ControlFlow, pin::Pin};
 
 use bevy_utils_proc_macros::all_tuples;
 
@@ -56,14 +56,25 @@ macro_rules! impl_param {
 
 all_tuples!(impl_param, 0, 12, S, P);
 
-impl Param for usize {
-    type Item<'a> = usize;
+macro_rules! impl_primitives {
+    ($($type:ident),* $(,)?) => {
+        $(
+            impl Param for $type {
+                type Item<'a> = $type;
+            }
+        )*
+    };
 }
-
-impl Param for bool {
-    type Item<'a> = bool;
-}
+impl_primitives!(bool, char, u8, u16, u32, u64, usize, i8, i16, i32, i64, isize);
 
 impl<T: Param, E: Param> Param for Result<T, E> {
     type Item<'a> = Result<<T as Param>::Item<'a>, <E as Param>::Item<'a>>;
+}
+
+impl<T: Param> Param for Option<T> {
+    type Item<'a> = Option<<T as Param>::Item<'a>>;
+}
+
+impl<B: Param, C: Param> Param for ControlFlow<B, C> {
+    type Item<'a> = ControlFlow<<B as Param>::Item<'a>, <C as Param>::Item<'a>>;
 }

@@ -1,5 +1,9 @@
 use alloc::{sync::Arc, vec, vec::Vec};
-use core::{mem, ops::Range, pin::pin};
+use core::{
+    mem,
+    ops::Range,
+    pin::{pin, Pin},
+};
 
 use futures_util::{stream, stream::StreamExt};
 use goblin::elf64::{header::*, program_header::*, section_header::*};
@@ -15,7 +19,6 @@ pub enum Error {
     PhysAlloc(ksc::Error),
     PhysRead(ksc::Error),
     PhysWrite(ksc::Error),
-    PhysSub(ksc::Error),
     VirtAlloc(ksc::Error),
     VirtMap(ksc::Error),
 }
@@ -29,7 +32,6 @@ impl From<Error> for ksc::Error {
             Error::PhysAlloc(err)
             | Error::PhysRead(err)
             | Error::PhysWrite(err)
-            | Error::PhysSub(err)
             | Error::VirtAlloc(err)
             | Error::VirtMap(err) => err,
         }
@@ -48,7 +50,7 @@ pub struct LoadedElf {
     pub sym_len: usize,
 }
 
-pub fn parse_attr(flags: u32) -> Attr {
+fn parse_attr(flags: u32) -> Attr {
     let mut ret = Attr::USER_ACCESS;
     if flags & PF_R != 0 {
         ret |= Attr::READABLE;
@@ -62,7 +64,7 @@ pub fn parse_attr(flags: u32) -> Attr {
     ret
 }
 
-pub async fn parse_header(phys: &Phys, force_dyn: Option<bool>) -> Result<(Header, bool), Error> {
+async fn parse_header(phys: &Phys, force_dyn: Option<bool>) -> Result<(Header, bool), Error> {
     let mut data = [0; mem::size_of::<Header>()];
     phys.read_exact_at(0, &mut [&mut data])
         .await
@@ -88,7 +90,7 @@ pub async fn parse_header(phys: &Phys, force_dyn: Option<bool>) -> Result<(Heade
     Ok((header, header.e_type == ET_DYN))
 }
 
-pub async fn parse_segments(
+async fn parse_segments(
     phys: &Phys,
     offset: usize,
     count: usize,
@@ -101,7 +103,7 @@ pub async fn parse_segments(
     Ok(ProgramHeader::from_bytes(&data, count))
 }
 
-pub async fn parse_sections(
+async fn parse_sections(
     phys: &Phys,
     offset: usize,
     count: usize,
@@ -114,7 +116,7 @@ pub async fn parse_sections(
     Ok(SectionHeader::from_bytes(&data, count))
 }
 
-pub fn get_addr_range_info(segments: &[ProgramHeader]) -> (usize, usize) {
+fn get_addr_range_info(segments: &[ProgramHeader]) -> (usize, usize) {
     segments
         .iter()
         .filter(|segment| segment.p_type == PT_LOAD)
@@ -125,10 +127,10 @@ pub fn get_addr_range_info(segments: &[ProgramHeader]) -> (usize, usize) {
         })
 }
 
-pub async fn map_segment(
+async fn map_segment(
     segment: &ProgramHeader,
     phys: &Arc<Phys>,
-    virt: &Virt,
+    virt: Pin<&Virt>,
     base: LAddr,
 ) -> Result<(), Error> {
     let msize = segment.p_memsz as usize;
@@ -153,8 +155,6 @@ pub async fn map_segment(
     let attr = parse_attr(segment.p_flags);
 
     if fsize > 0 {
-        let data = phys.clone_as(true).map_err(Error::PhysSub)?;
-
         log::trace!(
             "Map {:#x}~{:#x} -> {:?}",
             offset,
@@ -163,7 +163,7 @@ pub async fn map_segment(
         );
         virt.map(
             Some(base + address),
-            Arc::new(data),
+            phys.clone(),
             offset >> PAGE_SHIFT,
             fsize >> PAGE_SHIFT,
             attr,
@@ -227,8 +227,11 @@ pub async fn get_interp(phys: &Phys) -> Result<Option<Vec<u8>>, Error> {
 pub async fn load(
     phys: &Arc<Phys>,
     force_dyn: Option<bool>,
-    virt: &Virt,
+    virt: Pin<&Virt>,
 ) -> Result<LoadedElf, Error> {
+    if !phys.is_cow() {
+        return Err(Error::NotSupported("the Phys should be COW"));
+    }
     let (header, is_dyn) = parse_header(phys, force_dyn).await?;
 
     let segments = parse_segments(phys, header.e_phoff as usize, header.e_phnum as usize).await?;

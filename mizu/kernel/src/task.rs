@@ -1,24 +1,41 @@
 pub mod elf;
 mod future;
 
-use alloc::sync::{Arc, Weak};
+use alloc::{
+    boxed::Box,
+    sync::{Arc, Weak},
+    vec::Vec,
+};
 use core::{
+    ops::ControlFlow::Break,
     pin::Pin,
     sync::atomic::{AtomicUsize, Ordering::SeqCst},
 };
 
 use arsc_rs::Arsc;
-use co_trap::TrapFrame;
+use co_trap::{TrapFrame, UserCx};
 use hashbrown::HashMap;
-use kmem::Virt;
+use kmem::{Phys, Virt};
+use ksc::{
+    async_handler,
+    Error::{self, ENOSYS},
+};
 use rand_riscv::RandomState;
+use rv39_paging::{Attr, LAddr, PAGE_MASK, PAGE_SHIFT, PAGE_SIZE};
 use spin::{Lazy, Mutex};
 use sygnal::{ActionSet, SigSet, Signals};
+use umifs::path::Path;
 
 use crate::{
     executor,
+    syscall::ScRet,
     task::future::{user_loop, TaskFut},
 };
+
+const DEFAULT_STACK_SIZE: usize = PAGE_SIZE * 32;
+const DEFAULT_STACK_ATTR: Attr = Attr::USER_ACCESS
+    .union(Attr::READABLE)
+    .union(Attr::WRITABLE);
 
 pub struct TaskState {
     task: Arc<Task>,
@@ -41,6 +58,12 @@ impl Task {
 
     pub fn tid(&self) -> usize {
         self.tid
+    }
+
+    #[async_handler]
+    pub async fn exit(_: &mut TaskState, cx: UserCx<'_, fn(i32)>) -> ScRet {
+        // TODO: notify waiters.
+        Break(cx.args())
     }
 }
 
@@ -66,6 +89,89 @@ pub struct InitTask {
 }
 
 impl InitTask {
+    async fn load_stack(virt: Pin<&Virt>, stack: Option<(usize, Attr)>) -> Result<LAddr, Error> {
+        let (stack_size, stack_attr) = stack
+            .filter(|&(size, _)| size != 0)
+            .unwrap_or((DEFAULT_STACK_SIZE, DEFAULT_STACK_ATTR));
+        let stack_size = (stack_size + PAGE_MASK) & PAGE_MASK;
+
+        let addr = virt
+            .map(
+                None,
+                Arc::new(Phys::new_anon()),
+                0,
+                (stack_size >> PAGE_SHIFT) + 1,
+                stack_attr,
+            )
+            .await?;
+        virt.reprotect(addr..(addr + PAGE_SIZE), stack_attr - Attr::WRITABLE)
+            .await?;
+
+        Ok(addr + PAGE_SIZE + stack_size)
+    }
+
+    fn trap_frame(entry: LAddr, stack: LAddr, arg: usize) -> TrapFrame {
+        TrapFrame {
+            gpr: co_trap::Gpr {
+                tx: co_trap::Tx {
+                    sp: stack.val(),
+                    gp: entry.val(),
+                    a: [arg, 0, 0, 0, 0, 0, 0, 0],
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            sepc: entry.val(),
+            ..Default::default()
+        }
+    }
+
+    pub async fn from_elf(file: Phys, lib_path: Vec<&Path>) -> Result<Self, Error> {
+        let phys = Arc::new(file);
+        let virt = crate::mem::new_virt();
+
+        let has_interp = if let Some(interp) = elf::get_interp(&phys).await? {
+            let _ = (lib_path, interp);
+            todo!("load deynamic linker");
+        } else {
+            false
+        };
+
+        let loaded = elf::load(&phys, None, virt.as_ref()).await?;
+        if loaded.tls.is_some() && !has_interp {
+            return Err(ENOSYS);
+        }
+
+        let stack = Self::load_stack(virt.as_ref(), loaded.stack).await?;
+
+        let tf = Self::trap_frame(loaded.entry, stack, Default::default());
+
+        Ok(InitTask {
+            main: Weak::new(),
+            virt,
+            tf,
+        })
+    }
+
+    pub async fn thread(
+        task: Arc<Task>,
+        entry: LAddr,
+        arg: usize,
+        stack: Option<(usize, Attr)>,
+    ) -> Result<Self, Error> {
+        let virt = task.virt.clone();
+
+        let stack = Self::load_stack(virt.as_ref(), stack).await?;
+
+        let tf = Self::trap_frame(entry, stack, arg);
+
+        Ok(InitTask {
+            main: Weak::new(),
+            virt,
+            tf,
+        })
+    }
+
     pub fn spawn(self) -> Result<Arc<Task>, ksc::Error> {
         static TID: AtomicUsize = AtomicUsize::new(0);
 

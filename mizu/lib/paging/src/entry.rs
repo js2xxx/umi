@@ -13,7 +13,7 @@ use crate::{
 };
 
 bitflags! {
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug, Clone, Copy, Default)]
     pub struct Attr: usize {
         const VALID = 1 << 0;
         const READABLE = 1 << 1;
