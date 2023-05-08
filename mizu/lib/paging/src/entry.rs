@@ -359,7 +359,7 @@ impl Table {
             };
             let (pa, _) = pte.get(Level::pt());
             *pte = Entry::new(pa, flag | Attr::VALID, Level::pt());
-            latmp = latmp + PAGE_SIZE;
+            latmp += PAGE_SIZE;
         }
         Ok(*pte)
     }
@@ -410,7 +410,7 @@ impl Table {
             } else {
                 *pte = Entry::new(patmp, flags | Attr::VALID, Level::pt());
             }
-            latmp = latmp + PAGE_SIZE;
+            latmp += PAGE_SIZE;
             patmp += PAGE_SIZE;
         }
         Ok(*pte)

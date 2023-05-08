@@ -1,4 +1,4 @@
-pub mod elf;
+mod elf;
 mod future;
 
 use alloc::{
@@ -21,11 +21,12 @@ use ksc::{
     async_handler,
     Error::{self, ENOSYS},
 };
+use ksync::Broadcast;
 use rand_riscv::RandomState;
 use riscv::register::sstatus;
 use rv39_paging::{Attr, LAddr, PAGE_MASK, PAGE_SHIFT, PAGE_SIZE};
 use spin::{Lazy, Mutex};
-use sygnal::{ActionSet, SigSet, Signals};
+use sygnal::{ActionSet, Sig, SigSet, Signals};
 use umifs::path::Path;
 
 use crate::{
@@ -44,6 +45,14 @@ pub struct TaskState {
     sig_mask: SigSet,
 }
 
+#[derive(Clone)]
+pub enum TaskEvent {
+    Exited(i32),
+    Signaled(Sig),
+    Suspended(Sig),
+    Continued,
+}
+
 pub struct Task {
     main: Weak<Task>,
     tid: usize,
@@ -51,6 +60,7 @@ pub struct Task {
 
     sig: Signals,
     sig_actions: ActionSet,
+    event: Broadcast<TaskEvent>,
 }
 
 impl Task {
@@ -60,6 +70,10 @@ impl Task {
 
     pub fn tid(&self) -> usize {
         self.tid
+    }
+
+    pub fn event(&self) -> Broadcast<TaskEvent> {
+        self.event.clone()
     }
 
     #[async_handler]
@@ -74,6 +88,10 @@ static TASKS: Lazy<Mutex<HashMap<usize, Arc<Task>, RandomState>>> =
 
 pub fn task(id: usize) -> Option<Arc<Task>> {
     ksync::critical(|| TASKS.lock().get(&id).cloned())
+}
+
+pub fn task_event(id: usize) -> Option<Broadcast<TaskEvent>> {
+    ksync::critical(|| TASKS.lock().get(&id).map(|t| t.event.clone()))
 }
 
 pub fn process(id: usize) -> Option<Arc<Task>> {
@@ -196,6 +214,7 @@ impl InitTask {
 
             sig: Signals::new(),
             sig_actions: ActionSet::new(),
+            event: Broadcast::new(),
         });
 
         let ts = TaskState {

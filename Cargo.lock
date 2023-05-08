@@ -650,8 +650,11 @@ dependencies = [
  "crossbeam-queue",
  "event-listener 2.5.3 (git+https://github.com/js2xxx/event-listener)",
  "futures-lite",
+ "futures-util",
+ "hashbrown",
  "ksync-core",
  "ktime",
+ "rand-riscv",
  "smol",
  "spin",
 ]

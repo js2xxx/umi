@@ -15,7 +15,7 @@ use pin_project::pin_project;
 use riscv::register::scause::{Exception, Scause, Trap};
 use sygnal::{ActionType, Sig, SigCode, SigInfo};
 
-use super::TaskState;
+use super::{TaskEvent, TaskState};
 use crate::syscall::ScRet;
 
 #[pin_project]
@@ -46,11 +46,16 @@ pub async fn user_loop(mut ts: TaskState, mut tf: TrapFrame) {
     let mut time = Instant::now();
     'life: loop {
         while let Some(si) = ts.task.sig.pop(ts.sig_mask) {
+            let _ = ts.task.event.send(&TaskEvent::Signaled(si.sig)).await;
             let action = ts.task.sig_actions.get(si.sig);
             match action.ty {
-                ActionType::Ignore | ActionType::Resume => {}
+                ActionType::Ignore => {}
+                ActionType::Resume => {
+                    let _ = ts.task.event.send(&TaskEvent::Continued).await;
+                }
                 ActionType::Kill => break 'life,
                 ActionType::Suspend => {
+                    let _ = ts.task.event.send(&TaskEvent::Suspended(si.sig)).await;
                     ts.task.sig.wait_one(Sig::SIGCONT).await;
                 }
                 ActionType::User { .. } => todo!(),
@@ -68,7 +73,10 @@ pub async fn user_loop(mut ts: TaskState, mut tf: TrapFrame) {
         match handle_scause(scause, &mut ts, &mut tf).await {
             Continue(Some(sig)) => ts.task.sig.push(sig),
             Continue(None) => {}
-            Break(_code) => break 'life,
+            Break(code) => {
+                let _ = ts.task.event.send(&TaskEvent::Exited(code)).await;
+                break 'life;
+            }
         }
 
         let new_time = Instant::now();

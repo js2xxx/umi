@@ -8,11 +8,11 @@
 #![feature(result_option_inspect)]
 #![feature(thread_local)]
 
-pub mod dev;
+mod dev;
 pub mod fs;
-pub mod mem;
+mod mem;
 mod rxx;
-pub mod syscall;
+mod syscall;
 pub mod task;
 mod trap;
 
@@ -20,8 +20,6 @@ mod trap;
 extern crate klog;
 
 extern crate alloc;
-
-use core::time::Duration;
 
 use kmem::Phys;
 use umifs::types::FileType;
@@ -35,7 +33,7 @@ async fn main(fdt: usize) {
     unsafe { dev::init(fdt as _).expect("failed to initialize devices") };
     fs::fs_init().await;
 
-    let (fs, path) = fs::get("chdir".as_ref()).unwrap();
+    let (fs, path) = fs::get("write".as_ref()).unwrap();
     let rt = fs.root_dir().await.unwrap();
     let (entry, _) = rt
         .open(
@@ -53,8 +51,14 @@ async fn main(fdt: usize) {
     let init = InitTask::from_elf(phys, Default::default()).await.unwrap();
 
     sbi_rt::set_timer(0);
-    let _task = init.spawn().unwrap();
+    let task = init.spawn().unwrap();
+    let event = task.event();
+    loop {
+        if let Ok(task::TaskEvent::Exited(code)) = event.recv().await {
+            log::info!("returned with {code}");
+            break;
+        }
+    }
 
-    ktime::sleep(Duration::from_secs(1)).await;
     log::info!("Goodbye!");
 }

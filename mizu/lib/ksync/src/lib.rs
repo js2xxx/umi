@@ -4,6 +4,7 @@
 
 extern crate alloc;
 
+mod broadcast;
 pub mod epoch;
 mod mpmc;
 mod mutex;
@@ -14,4 +15,4 @@ mod semaphore;
 pub use event_listener as event;
 pub use ksync_core::*;
 
-pub use self::{mpmc::*, mutex::*, rcu::*, rw_lock::*, semaphore::*};
+pub use self::{broadcast::Broadcast, mpmc::*, mutex::*, rcu::*, rw_lock::*, semaphore::*};
