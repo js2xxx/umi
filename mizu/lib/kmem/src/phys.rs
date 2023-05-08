@@ -7,19 +7,14 @@ use core::{
     sync::atomic::{AtomicUsize, Ordering::SeqCst},
 };
 
-use arsc_rs::Arsc;
 use async_trait::async_trait;
 use futures_util::future::try_join_all;
-use ksc_core::Error::{self, EINVAL, ENOMEM};
+use ksc_core::Error::{self, EINVAL, ENOMEM, EPERM};
 use ksync::Mutex;
 use rand_riscv::RandomState;
 use rv39_paging::{PAddr, ID_OFFSET, PAGE_SHIFT, PAGE_SIZE};
-use spin::Lazy;
-use umifs::{
-    misc::Zero,
-    traits::File,
-    types::{advance_slices, ioslice_len, IoSlice, IoSliceMut, SeekFrom},
-};
+use umifs::misc::Zero;
+use umio::{advance_slices, ioslice_len, Io, IoExt, IoSlice, IoSliceMut, SeekFrom};
 
 use crate::lru::LruCache;
 
@@ -49,6 +44,14 @@ impl Frame {
     pub fn as_ptr(&self) -> NonNull<[u8]> {
         NonNull::slice_from_raw_parts(self.ptr, PAGE_SIZE)
     }
+
+    pub fn as_slice(&self) -> &[u8] {
+        unsafe { self.as_ptr().as_ref() }
+    }
+
+    pub fn as_mut_slice(&mut self) -> &mut [u8] {
+        unsafe { self.as_ptr().as_mut() }
+    }
 }
 
 impl Drop for Frame {
@@ -73,26 +76,36 @@ pub struct FrameInfo {
 pub struct Phys {
     frames: Mutex<LruCache<usize, FrameInfo>>,
     position: AtomicUsize,
-    backend: Arsc<dyn Backend>,
+    cow: bool,
+    backend: Arc<dyn Io>,
 }
 
 impl Phys {
-    pub fn new(backend: Arsc<dyn Backend>, initial_pos: usize) -> Self {
+    pub fn new(backend: Arc<dyn Io>, initial_pos: usize, cow: bool) -> Self {
         Phys {
             frames: Mutex::new(LruCache::unbounded_with_hasher(RandomState::new())),
             position: initial_pos.into(),
+            cow,
             backend,
         }
     }
 
-    pub fn backend(&self) -> &dyn Backend {
-        &*self.backend
+    pub fn clone_as(&self, cow: bool) -> Result<Self, Error> {
+        if self.cow && !cow {
+            return Err(EPERM);
+        }
+        // TODO: Reuse frames among COW physes.
+        Ok(Phys::new(self.backend.clone(), 0, cow))
+    }
+
+    pub fn is_cow(&self) -> bool {
+        self.cow
     }
 }
 
 impl Phys {
     pub fn new_anon() -> Phys {
-        Phys::new(Arsc::new(Zero), 0)
+        Phys::new(Arc::new(Zero), 0, true)
     }
 }
 
@@ -112,7 +125,7 @@ impl Phys {
 
         let frame = frames.get_mut(&index).map(|fi| {
             if writable {
-                fi.dirty = true;
+                fi.dirty = !self.cow;
                 fi.pin_count += pin as usize;
             }
             fi.frame.clone()
@@ -121,7 +134,7 @@ impl Phys {
             return Ok(frame);
         }
 
-        let frame = self.backend.commit(index, writable).await?;
+        let frame = commit(&self.backend, index).await?;
 
         let fi = FrameInfo {
             frame: frame.clone(),
@@ -153,7 +166,7 @@ impl Phys {
         if let Some((index, fi)) = old_entry {
             debug_assert!(fi.pin_count == 0);
             if fi.dirty {
-                self.backend.flush(index, &fi.frame).await?;
+                flush(&self.backend, index, &fi.frame).await?;
             }
         }
         Ok(frame)
@@ -172,12 +185,13 @@ impl Phys {
             fi.and_then(|fi| {
                 fi.pin_count -= unpin as usize;
                 force_dirty
+                    .map(|d| d & !self.cow)
                     .unwrap_or_else(|| mem::replace(&mut fi.dirty, false))
                     .then(|| fi.frame.clone())
             })
         };
         if let Some(frame) = frame {
-            self.backend.flush(index, &frame).await?;
+            flush(&self.backend, index, &frame).await?;
         }
         Ok(())
     }
@@ -194,7 +208,7 @@ impl Phys {
         };
 
         let flush_fn = |(index, frame): (usize, Arc<Frame>)| async move {
-            self.backend.flush(index, &frame).await
+            flush(&self.backend, index, &frame).await
         };
         try_join_all(frames.into_iter().map(flush_fn)).await?;
         Ok(())
@@ -236,7 +250,7 @@ impl Phys {
         while ret.len() < max_count.get() {
             match dirties.pop_front() {
                 Some((index, frame, ..)) => {
-                    self.backend.flush(index, &frame).await?;
+                    flush(&self.backend, index, &frame).await?;
                     ret.push(frame)
                 }
                 None => break,
@@ -278,54 +292,13 @@ impl Default for Phys {
 }
 
 #[async_trait]
-#[allow(clippy::len_without_is_empty)]
-pub trait Backend: ToBackend + Send + Sync + 'static {
-    async fn len(&self) -> usize;
-
-    async fn commit(&self, index: usize, writable: bool) -> Result<Arc<Frame>, Error>;
-
-    async fn flush(&self, index: usize, frame: &Frame) -> Result<(), Error>;
-}
-
-pub trait ToBackend {
-    fn to_backend(self: Arsc<Self>) -> Arsc<dyn Backend>;
-}
-
-impl<T: Backend> ToBackend for T {
-    fn to_backend(self: Arsc<Self>) -> Arsc<dyn Backend> {
-        self as _
-    }
-}
-
-#[async_trait]
-impl Backend for Zero {
-    async fn len(&self) -> usize {
-        0
-    }
-
-    async fn commit(&self, _: usize, writable: bool) -> Result<Arc<Frame>, Error> {
-        static ZERO: Lazy<Arc<Frame>> =
-            Lazy::new(|| Arc::new(Frame::new().expect("zero frame init failed")));
-        Ok(if writable {
-            Arc::new(Frame::new().ok_or(ksc_core::ENOMEM)?)
-        } else {
-            ZERO.clone()
-        })
-    }
-
-    #[inline]
-    async fn flush(&self, _: usize, _: &Frame) -> Result<(), Error> {
-        Ok(())
-    }
-}
-
-#[async_trait]
-impl File for Phys {
+impl Io for Phys {
     async fn seek(&self, whence: SeekFrom) -> Result<usize, Error> {
         let pos = match whence {
             SeekFrom::Start(pos) => pos,
             SeekFrom::End(pos) => {
-                let pos = pos.checked_add(self.backend.len().await.try_into()?);
+                let len = self.backend.seek(umio::SeekFrom::End(0)).await?;
+                let pos = pos.checked_add(len.try_into()?);
                 pos.ok_or(EINVAL)?.try_into()?
             }
             SeekFrom::Current(pos) => {
@@ -503,4 +476,25 @@ fn copy_to_frame(
         start += len;
         advance_slices(buffer, len);
     }
+}
+
+async fn commit<T: Io + ?Sized>(io: impl AsRef<T>, index: usize) -> Result<Arc<Frame>, Error> {
+    let io = io.as_ref();
+    let offset = index << PAGE_SHIFT;
+    let end = (offset + PAGE_SIZE).min(io.stream_len().await?);
+    let len = end - offset;
+
+    let mut frame = Frame::new().ok_or(ENOMEM)?;
+    io.read_exact_at(offset, &mut frame.as_mut_slice()[..len])
+        .await?;
+    Ok(Arc::new(frame))
+}
+
+async fn flush<T: Io + ?Sized>(
+    io: impl AsRef<T>,
+    index: usize,
+    frame: &Frame,
+) -> Result<(), Error> {
+    let io = io.as_ref();
+    io.write_all_at(index << PAGE_SHIFT, frame.as_slice()).await
 }

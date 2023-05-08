@@ -2,19 +2,24 @@ use alloc::{boxed::Box, sync::Arc};
 
 use async_trait::async_trait;
 use ksc_core::Error::{self, EEXIST, ENOTDIR, EPERM};
+use umio::Io;
 
 use crate::{
     path::Path,
-    traits::{Entry, File},
+    traits::Entry,
     types::{FileType, IoSlice, IoSliceMut, Metadata, OpenOptions, Permissions, SeekFrom},
 };
 
 pub struct Null;
 
 #[async_trait]
-impl File for Null {
+impl Io for Null {
     async fn seek(&self, _: SeekFrom) -> Result<usize, Error> {
         Ok(0)
+    }
+
+    async fn stream_len(&self) -> Result<usize, Error> {
+        Ok(isize::MAX as usize + 1)
     }
 
     async fn read_at(&self, _: usize, _: &mut [IoSliceMut]) -> Result<usize, Error> {
@@ -69,9 +74,13 @@ impl Entry for Null {
 pub struct Zero;
 
 #[async_trait]
-impl File for Zero {
+impl Io for Zero {
     async fn seek(&self, _: SeekFrom) -> Result<usize, Error> {
         Ok(0)
+    }
+
+    async fn stream_len(&self) -> Result<usize, Error> {
+        Ok(isize::MAX as usize + 1)
     }
 
     async fn read_at(&self, _: usize, buffer: &mut [IoSliceMut]) -> Result<usize, Error> {

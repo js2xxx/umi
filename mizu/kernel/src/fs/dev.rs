@@ -7,9 +7,11 @@ use ksc::Error::{self, ENOENT};
 use umifs::{
     misc::{Null, Zero},
     path::Path,
-    traits::{Entry, FileSystem},
+    traits::{Entry, FileSystem, ToIo},
     types::*,
 };
+
+use super::serial::Serial;
 
 pub struct DevFs;
 
@@ -25,6 +27,8 @@ impl FileSystem for DevFs {
 }
 
 pub struct DevRoot;
+
+impl ToIo for DevRoot {}
 
 #[async_trait]
 impl Entry for DevRoot {
@@ -43,6 +47,10 @@ impl Entry for DevRoot {
             "zero" => {
                 let zero = Arc::new(Zero);
                 zero.open(Path::new(""), expect_ty, options, perm).await
+            }
+            "serial" => {
+                let serial = Arc::new(Serial::default());
+                serial.open(Path::new(""), expect_ty, options, perm).await
             }
             _ => {
                 let (dir, next) = {
@@ -67,6 +75,8 @@ impl Entry for DevRoot {
 
 pub struct DevBlocks;
 
+impl ToIo for DevBlocks {}
+
 #[async_trait]
 impl Entry for DevBlocks {
     async fn open(
@@ -78,7 +88,7 @@ impl Entry for DevBlocks {
     ) -> Result<(Arc<dyn Entry>, bool), Error> {
         if let Ok(n) = path.as_str().parse() {
             let block = crate::dev::block(n).ok_or(ENOENT)?;
-            let _phys = Arc::new(Phys::new(block.to_backend(), 0));
+            let _phys = Arc::new(Phys::new(block.to_io().unwrap(), 0, false));
             todo!("implement Entry for Phys using phys' backend")
         }
         Err(ENOENT)

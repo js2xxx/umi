@@ -17,6 +17,7 @@ rand-riscv = {path = "../rand-riscv"}
 range-map = {path = "../range-map"}
 rv39-paging = {path = "../paging"}
 umifs = {path = "../umifs"}
+umio = {path = "../umio"}
 # External crates
 arsc-rs = {git = "https://github.com/js2xxx/arsc"}
 async-trait = "0"

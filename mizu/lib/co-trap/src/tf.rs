@@ -53,6 +53,7 @@ impl TrapFrame {
     }
 
     pub fn set_syscall_ret(&mut self, ret: usize) {
+        self.sepc += 4;
         self.gpr.tx.a[0] = ret;
     }
 }

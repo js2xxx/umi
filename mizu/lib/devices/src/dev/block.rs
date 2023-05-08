@@ -1,17 +1,14 @@
-use alloc::boxed::Box;
-use core::ops::Range;
+use alloc::{boxed::Box, sync::Arc};
 
-use arsc_rs::Arsc;
 use async_trait::async_trait;
 use futures_lite::future::yield_now;
-use kmem::Backend;
-use ksc::Error::{self, ENOSPC};
-use rv39_paging::PAGE_SHIFT;
+use ksc::Error;
+use umio::Io;
 
 use crate::Interrupt;
 
 #[async_trait]
-pub trait Block: Backend {
+pub trait Block: Io {
     fn block_shift(&self) -> u32;
 
     #[inline]
@@ -23,11 +20,11 @@ pub trait Block: Backend {
 
     fn ack_interrupt(&self);
 
-    async fn read(&self, block: usize, buf: &mut [u8]) -> Result<(), Error>;
+    async fn read(&self, block: usize, buf: &mut [u8]) -> Result<usize, Error>;
 
-    async fn write(&self, block: usize, buf: &[u8]) -> Result<(), Error>;
+    async fn write(&self, block: usize, buf: &[u8]) -> Result<usize, Error>;
 
-    async fn intr_dispatch(self: Arsc<Self>, intr: Interrupt) {
+    async fn intr_dispatch(self: Arc<Self>, intr: Interrupt) {
         loop {
             // TODO: use `intr.wait().await`.
             if let Some(false) = intr.try_wait() {
@@ -40,78 +37,75 @@ pub trait Block: Backend {
     }
 }
 
-macro_rules! impl_backend_for_block {
+macro_rules! impl_io_for_block {
     ($type:ident) => {
         #[async_trait]
-        impl kmem::Backend for $type {
-            #[inline]
-            async fn len(&self) -> usize {
-                self.capacity_blocks() << self.block_shift()
+        impl umio::Io for VirtioBlock {
+            async fn seek(&self, whence: umio::SeekFrom) -> Result<usize, Error> {
+                match whence {
+                    umio::SeekFrom::End(0) => Ok(self.capacity_blocks() << self.block_shift()),
+                    umio::SeekFrom::Start(0) | umio::SeekFrom::Current(0) => Ok(0),
+                    _ => Err(ksc::ENOSYS),
+                }
             }
 
-            async fn commit(
+            async fn stream_len(&self) -> Result<usize, Error> {
+                Ok(self.capacity_blocks() << self.block_shift())
+            }
+
+            async fn read_at(
                 &self,
-                index: usize,
-                writable: bool,
-            ) -> Result<alloc::sync::Arc<kmem::Frame>, Error> {
-                log::trace!("BlockBackend::commit: index = {index}, writable = {writable}");
-
-                let block_iter = $crate::dev::block::block_iter(self, index)?;
-
-                let frame = kmem::Frame::new().ok_or(ENOMEM)?;
-
-                futures_util::future::try_join_all(block_iter.map(|(block, buf_range)| {
-                    let mut ptr = frame.as_ptr();
-                    let buf = &mut unsafe { ptr.as_mut() }[buf_range];
-
-                    self.read(block, buf)
-                }))
-                .await?;
-
-                Ok(alloc::sync::Arc::new(frame))
+                offset: usize,
+                mut buffer: &mut [umio::IoSliceMut],
+            ) -> Result<usize, ksc::Error> {
+                if offset & ((1 << self.block_shift()) - 1) != 0 {
+                    return Ok(0);
+                }
+                let mut block = offset >> self.block_shift();
+                let mut read_len = 0;
+                loop {
+                    if buffer.is_empty() {
+                        break Ok(read_len);
+                    }
+                    let buf = &mut buffer[0];
+                    let len = Block::read(self, block, buf).await?;
+                    read_len += len;
+                    umio::advance_slices(&mut buffer, len);
+                    if len < Self::SECTOR_SIZE {
+                        break Ok(read_len);
+                    }
+                    block += len >> self.block_shift();
+                }
             }
 
-            async fn flush(&self, index: usize, frame: &kmem::Frame) -> Result<(), Error> {
-                log::trace!(
-                    "BlockBackend::flush: index = {index}, frame = {:?}",
-                    frame.base()
-                );
+            async fn write_at(
+                &self,
+                offset: usize,
+                mut buffer: &mut [umio::IoSlice],
+            ) -> Result<usize, ksc::Error> {
+                if offset & ((1 << self.block_shift()) - 1) != 0 {
+                    return Ok(0);
+                }
+                let mut block = offset >> self.block_shift();
+                let mut written_len = 0;
+                loop {
+                    if buffer.is_empty() {
+                        break Ok(written_len);
+                    }
+                    let buf = buffer[0];
+                    let len = Block::write(self, block, buf).await?;
+                    written_len += len;
+                    umio::advance_slices(&mut buffer, len);
+                    if len < Self::SECTOR_SIZE {
+                        break Ok(written_len);
+                    }
+                    block += len >> self.block_shift();
+                }
+            }
 
-                let block_iter = $crate::dev::block::block_iter(self, index)?;
-
-                futures_util::future::try_join_all(block_iter.map(|(block, buf_range)| {
-                    let ptr = frame.as_ptr();
-                    let buf = &unsafe { ptr.as_ref() }[buf_range];
-
-                    self.write(block, buf)
-                }))
-                .await?;
-
+            async fn flush(&self) -> Result<(), Error> {
                 Ok(())
             }
         }
     };
-}
-
-fn block_range(index: usize, block_shift: u32) -> Range<usize> {
-    let nr_blocks_in_frame_shift = PAGE_SHIFT - block_shift;
-
-    (index << nr_blocks_in_frame_shift)..((index + 1) << nr_blocks_in_frame_shift)
-}
-
-pub(crate) fn block_iter(
-    device: &dyn Block,
-    index: usize,
-) -> Result<impl Iterator<Item = (usize, Range<usize>)>, Error> {
-    let block_shift = device.block_shift();
-
-    let block_range = block_range(index, block_shift);
-    if block_range.end > device.capacity_blocks() {
-        return Err(ENOSPC);
-    }
-
-    Ok(block_range.enumerate().map(move |(index, block)| {
-        let buffer_range = (index << block_shift)..((index + 1) << block_shift);
-        (block, buffer_range)
-    }))
 }

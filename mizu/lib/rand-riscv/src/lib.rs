@@ -59,6 +59,7 @@ pub fn rng() -> Rng {
 }
 
 /// A wrapper around `ahash::RandomState`, using built-in seeds.
+#[derive(Clone)]
 pub struct RandomState(ahash::RandomState);
 
 impl fmt::Debug for RandomState {

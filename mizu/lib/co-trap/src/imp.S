@@ -102,6 +102,7 @@ _fast_return_to_user:
 
 .global _user_entry
 .type _user_entry, @function
+.align 4
 _user_entry:
     csrrw a0, sscratch, a0
     save_scratch
@@ -110,7 +111,12 @@ _user_entry:
     csrr a1, sscratch
     sd a1, 16*8(a0)
 
+    addi sp, sp, -16
+    sd ra, 8(sp)
     call _fast_func
+    ld ra, 8(sp)
+    addi sp, sp, 16
+
     // `a0` did not change;
     // `a1` <- status;
     bnez a1, .Lresume

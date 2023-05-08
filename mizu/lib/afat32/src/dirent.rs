@@ -6,7 +6,7 @@ use bitflags::bitflags;
 use concat_arrays::concat_arrays;
 use ksc_core::Error;
 use nom::IResult;
-use umifs::traits::{File, FileExt};
+use umifs::traits::{Io, IoExt};
 
 use crate::{
     dir::{FatDir, LfnBuffer},
@@ -519,7 +519,7 @@ impl DirEntryEditor {
         }
     }
 
-    pub(crate) async fn flush(&mut self, device: &dyn File) -> Result<(), Error> {
+    pub(crate) async fn flush(&mut self, device: &dyn Io) -> Result<(), Error> {
         if self.dirty {
             self.write(device).await?;
             self.dirty = false;
@@ -527,11 +527,9 @@ impl DirEntryEditor {
         Ok(())
     }
 
-    async fn write(&self, device: &dyn File) -> Result<(), Error> {
+    async fn write(&self, device: &dyn Io) -> Result<(), Error> {
         let bytes = self.data.to_bytes();
-        device
-            .write_all_at(self.pos as usize, &mut [&bytes])
-            .await?;
+        device.write_all_at(self.pos as usize, &bytes).await?;
         Ok(())
     }
 }
@@ -713,13 +711,11 @@ impl<T: TimeProvider> DirEntry<T> {
     pub(crate) async fn free_all_entries(&self, inner: &FatFile<T>) -> Result<(), Error> {
         for offset in self.offset_range.clone().step_by(DIR_ENTRY_SIZE as usize) {
             let mut buf = [0; DIR_ENTRY_SIZE as usize];
-            inner
-                .read_exact_at(offset as usize, &mut [&mut buf])
-                .await?;
+            inner.read_exact_at(offset as usize, &mut buf).await?;
             let (_, mut data) = DirEntryData::parse(&buf)?;
             data.set_deleted();
             inner
-                .write_all_at(offset as usize, &mut [&data.to_bytes()])
+                .write_all_at(offset as usize, &data.to_bytes())
                 .await?;
         }
         Ok(())

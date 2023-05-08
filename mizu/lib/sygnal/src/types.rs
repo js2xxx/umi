@@ -249,6 +249,31 @@ impl const Not for Sig {
     }
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[repr(i32)]
+pub enum SigCode {
+    /// sent by kill, sigsend, raise
+    USER = 0,
+    /// sent by the kernel from somewhere
+    KERNEL = 0x80,
+    /// sent by sigqueue
+    QUEUE = -1,
+    /// sent by timer expiration
+    TIMER = -2,
+    /// sent by real time mesq state change
+    MESGQ = -3,
+    /// sent by AIO completion
+    ASYNCIO = -4,
+    /// sent by queued SIGIO
+    SIGIO = -5,
+    /// sent by tkill system call
+    TKILL = -6,
+    /// sent by execve() killing subsidiary threads
+    DETHREAD = -7,
+    /// sent by glibc async name lookup completion
+    ASYNCNL = -60,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,8 +1,10 @@
 use core::{
     alloc::Layout,
+    mem,
     num::NonZeroUsize,
     ops::{Add, AddAssign, Deref, DerefMut, Range, Sub, SubAssign},
     ptr::NonNull,
+    slice,
 };
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Default, Hash)]
@@ -31,6 +33,10 @@ impl PAddr {
     #[inline]
     pub fn val(self) -> usize {
         self.0
+    }
+
+    pub fn range_to_laddr(this: Range<Self>, id_off: usize) -> Range<LAddr> {
+        this.start.to_laddr(id_off)..this.end.to_laddr(id_off)
     }
 }
 
@@ -84,24 +90,24 @@ impl core::fmt::Debug for PAddr {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
-pub struct LAddr(*mut u8);
+pub struct LAddr(usize);
 
 impl LAddr {
     #[inline]
-    pub const fn new(ptr: *mut u8) -> Self {
-        LAddr(ptr)
+    pub fn new(ptr: *mut u8) -> Self {
+        LAddr(ptr as _)
     }
 
     #[inline]
     pub fn val(&self) -> usize {
-        self.0 as usize
+        self.0
     }
 
     #[inline]
     pub fn as_non_null(self) -> Option<NonNull<u8>> {
-        NonNull::new(self.0)
+        NonNull::new(self.0 as _)
     }
 
     /// # Safety
@@ -109,7 +115,7 @@ impl LAddr {
     /// `self` must be non-null.
     #[inline]
     pub unsafe fn as_non_null_unchecked(self) -> NonNull<u8> {
-        NonNull::new_unchecked(self.0)
+        NonNull::new_unchecked(self.0 as _)
     }
 
     /// transfer kernel va to corresponding la
@@ -123,7 +129,21 @@ impl LAddr {
     }
 
     pub fn to_range(self, layout: Layout) -> Range<Self> {
-        self..Self(self.wrapping_add(layout.size()))
+        self..Self::new(self.wrapping_add(layout.size()))
+    }
+
+    /// # Safety
+    ///
+    /// See ['slice::from_raw_parts'] for more info.
+    pub unsafe fn as_slice<'a>(this: Range<Self>) -> &'a [u8] {
+        unsafe { slice::from_raw_parts(*this.start, this.end.val() - this.start.val()) }
+    }
+
+    /// # Safety
+    ///
+    /// See ['slice::from_raw_parts_mut'] for more info.
+    pub unsafe fn as_mut_slice<'a>(this: Range<Self>) -> &'a mut [u8] {
+        unsafe { slice::from_raw_parts_mut(*this.start, this.end.val() - this.start.val()) }
     }
 }
 
@@ -132,49 +152,49 @@ impl const Deref for LAddr {
 
     #[inline]
     fn deref(&self) -> &Self::Target {
-        &self.0
+        unsafe { mem::transmute(&self.0) }
     }
 }
 
 impl const DerefMut for LAddr {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
+        unsafe { mem::transmute(&mut self.0) }
     }
 }
 
 impl const From<usize> for LAddr {
     #[inline]
     fn from(val: usize) -> Self {
-        LAddr(val as *mut u8)
+        LAddr(val as _)
     }
 }
 
 impl const From<u64> for LAddr {
     #[inline]
     fn from(val: u64) -> Self {
-        LAddr(val as *mut u8)
+        LAddr(val as _)
     }
 }
 
-impl<T> const From<*const T> for LAddr {
+impl<T> From<*const T> for LAddr {
     #[inline]
     fn from(val: *const T) -> Self {
         LAddr(val as _)
     }
 }
 
-impl<T> const From<*mut T> for LAddr {
+impl<T> From<*mut T> for LAddr {
     #[inline]
     fn from(val: *mut T) -> Self {
         LAddr(val as _)
     }
 }
 
-impl<T: ?Sized> const From<NonNull<T>> for LAddr {
+impl<T: ?Sized> From<NonNull<T>> for LAddr {
     #[inline]
     fn from(ptr: NonNull<T>) -> Self {
-        LAddr(ptr.as_ptr().cast())
+        LAddr::new(ptr.as_ptr().cast())
     }
 }
 
@@ -183,5 +203,31 @@ impl Add<usize> for LAddr {
 
     fn add(self, rhs: usize) -> Self::Output {
         LAddr::from(self.val() + rhs)
+    }
+}
+
+impl AddAssign<usize> for LAddr {
+    fn add_assign(&mut self, rhs: usize) {
+        *self = *self + rhs;
+    }
+}
+
+impl Sub<usize> for LAddr {
+    type Output = Self;
+
+    fn sub(self, rhs: usize) -> Self::Output {
+        LAddr::from(self.val() - rhs)
+    }
+}
+
+impl SubAssign<usize> for LAddr {
+    fn sub_assign(&mut self, rhs: usize) {
+        *self = *self - rhs;
+    }
+}
+
+impl core::fmt::Debug for LAddr {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "LAddr({:#x})", self.0)
     }
 }

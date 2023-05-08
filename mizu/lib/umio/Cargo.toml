@@ -1,20 +1,13 @@
 [package]
 edition = "2021"
 license = "MIT OR Apache-2.0"
-name = "umifs"
+name = "umio"
 version = "0.1.0"
-
-[features]
-test = []
 
 [dependencies]
 # Local crates
 ksc-core = {path = "../ksc-core"}
-ktime-core = {path = "../ktime-core"}
-rv39-paging = {path = "../paging"}
-umio = {path = "../umio"}
 # External crates
 arsc-rs = {git = "https://github.com/js2xxx/arsc"}
 async-trait = "0"
-bitflags = "2"
 log = "0"

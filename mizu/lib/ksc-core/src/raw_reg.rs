@@ -1,4 +1,4 @@
-pub trait RawReg: Copy {
+pub trait RawReg {
     fn from_raw(raw: usize) -> Self;
 
     fn into_raw(self) -> usize;

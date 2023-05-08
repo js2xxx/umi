@@ -38,12 +38,14 @@ async-trait = "0"
 crossbeam-queue = {version = "0", default-features = false, features = ["alloc", "nightly"]}
 fdt = "0"
 futures-util = {version = "0", default-features = false, features = ["alloc"]}
+goblin = {version = "0", default-features = false, features = ["elf32", "elf64", "endian_fd"]}
 hashbrown = {version = "0", default-features = false, features = ["inline-more"]}
 log = "0"
 pin-project = "1"
 r0 = "1"
 riscv = "0"
 sbi-rt = {git = "https://github.com/js2xxx/sbi-rt", branch = "multitarget"}
+scoped-tls = {git = "https://github.com/js2xxx/scoped-tls", branch = "no_std"}
 spin = "0"
 static_assertions = "1"
 virtio-drivers = "0"

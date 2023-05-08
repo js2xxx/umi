@@ -1,8 +1,10 @@
 use alloc::string::String;
-use core::{mem, slice};
 
 use bitflags::bitflags;
 use ktime_core::Instant;
+pub use umio::{
+    advance_slices, ioslice_is_empty, ioslice_len, IoSlice, IoSliceExt, IoSliceMut, SeekFrom,
+};
 
 bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -91,96 +93,4 @@ pub struct Metadata {
 pub struct DirEntry {
     pub name: String,
     pub metadata: Metadata,
-}
-
-#[derive(Copy, PartialEq, Eq, Clone, Debug)]
-pub enum SeekFrom {
-    /// Sets the offset to the provided number of bytes.
-    Start(usize),
-
-    /// Sets the offset to the size of this object plus the specified number of
-    /// bytes.
-    ///
-    /// It is possible to seek beyond the end of an object, but it's an error to
-    /// seek before byte 0.
-    End(isize),
-
-    /// Sets the offset to the current position plus the specified number of
-    /// bytes.
-    ///
-    /// It is possible to seek beyond the end of an object, but it's an error to
-    /// seek before byte 0.
-    Current(isize),
-}
-
-pub type IoSlice<'a> = &'a [u8];
-
-pub type IoSliceMut<'a> = &'a mut [u8];
-
-#[allow(clippy::len_without_is_empty)]
-pub trait IoSliceExt {
-    fn len(&self) -> usize;
-
-    fn advance(&mut self, n: usize);
-}
-
-impl IoSliceExt for IoSlice<'_> {
-    fn len(&self) -> usize {
-        (**self).len()
-    }
-
-    fn advance(&mut self, n: usize) {
-        if self.len() < n {
-            panic!("advancing IoSlice beyond its length");
-        }
-
-        *self = &self[n..];
-    }
-}
-
-impl IoSliceExt for IoSliceMut<'_> {
-    fn len(&self) -> usize {
-        (**self).len()
-    }
-
-    fn advance(&mut self, n: usize) {
-        if self.len() < n {
-            panic!("advancing IoSlice beyond its length");
-        }
-
-        *self = unsafe { slice::from_raw_parts_mut(self.as_mut_ptr().add(n), self.len() - n) };
-    }
-}
-
-pub fn ioslice_len(bufs: &&mut [impl IoSliceExt]) -> usize {
-    bufs.iter().fold(0, |sum, buf| sum + buf.len())
-}
-
-pub fn ioslice_is_empty(bufs: &&mut [impl IoSliceExt]) -> bool {
-    bufs.iter().all(|b| b.len() == 0)
-}
-
-pub fn advance_slices(bufs: &mut &mut [impl IoSliceExt], n: usize) {
-    // Number of buffers to remove.
-    let mut remove = 0;
-    // Total length of all the to be removed buffers.
-    let mut accumulated_len = 0;
-    for buf in bufs.iter() {
-        if accumulated_len + buf.len() > n {
-            break;
-        } else {
-            accumulated_len += buf.len();
-            remove += 1;
-        }
-    }
-
-    *bufs = &mut mem::take(bufs)[remove..];
-    if bufs.is_empty() {
-        assert!(
-            n == accumulated_len,
-            "advancing io slices beyond their length"
-        );
-    } else {
-        bufs[0].advance(n - accumulated_len)
-    }
 }
