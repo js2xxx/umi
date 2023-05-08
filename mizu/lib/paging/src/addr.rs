@@ -187,6 +187,26 @@ impl Add<usize> for LAddr {
     }
 }
 
+impl AddAssign<usize> for LAddr {
+    fn add_assign(&mut self, rhs: usize) {
+        *self = *self + rhs;
+    }
+}
+
+impl Sub<usize> for LAddr {
+    type Output = Self;
+
+    fn sub(self, rhs: usize) -> Self::Output {
+        LAddr::from(self.val() - rhs)
+    }
+}
+
+impl SubAssign<usize> for LAddr {
+    fn sub_assign(&mut self, rhs: usize) {
+        *self = *self - rhs;
+    }
+}
+
 impl core::fmt::Debug for LAddr {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "LAddr({:#x})", self.0)

@@ -82,26 +82,36 @@ pub async fn user_loop(mut ts: TaskState, mut tf: TrapFrame) {
 async fn handle_scause(scause: Scause, ts: &mut TaskState, tf: &mut TrapFrame) -> ScRet {
     match scause.cause() {
         Trap::Interrupt(intr) => crate::trap::handle_intr(intr, "user task"),
-        Trap::Exception(excep) => {
-            log::warn!("user exception {excep:?}");
-            match excep {
-                Exception::UserEnvCall => {
-                    let res = async {
-                        let scn = tf.scn().ok_or(ENOSYS)?;
-                        crate::syscall::SYSCALL
-                            .handle(scn, (ts, tf))
-                            .await
-                            .ok_or(ENOSYS)
-                    }
-                    .await;
-                    match res {
-                        Ok(res) => return res,
-                        Err(err) => tf.set_syscall_ret(err.into_raw()),
+        Trap::Exception(excep) => match excep {
+            Exception::UserEnvCall => {
+                let res = async {
+                    let scn = tf.scn().ok_or(ENOSYS)?;
+                    log::info!("user syscall {scn:?}");
+                    crate::syscall::SYSCALL
+                        .handle(scn, (ts, tf))
+                        .await
+                        .ok_or(ENOSYS)
+                }
+                .await;
+                match res {
+                    Ok(res) => return res,
+                    Err(err) => {
+                        log::warn!("error in syscall: {err}");
+                        tf.set_syscall_ret(err.into_raw())
                     }
                 }
-                Exception::LoadPageFault
-                | Exception::StorePageFault
-                | Exception::InstructionPageFault => {
+            }
+            Exception::InstructionPageFault
+            | Exception::LoadPageFault
+            | Exception::StorePageFault => {
+                log::info!(
+                    "user {excep:?} at {:#x}, address = {:#x}",
+                    tf.sepc,
+                    tf.stval
+                );
+                let res = ts.task.virt.commit(tf.stval.into()).await;
+                if let Err(err) = res {
+                    log::error!("failing to commit pages at address {:#x}: {err}", tf.stval);
                     return Continue(Some(SigInfo {
                         sig: Sig::SIGSEGV,
                         code: SigCode::KERNEL,
@@ -109,11 +119,11 @@ async fn handle_scause(scause: Scause, ts: &mut TaskState, tf: &mut TrapFrame) -
                             addr: tf.stval.into(),
                             num: 0,
                         },
-                    }))
+                    }));
                 }
-                _ => todo!(),
             }
-        }
+            _ => todo!(),
+        },
     }
     Continue(None)
 }

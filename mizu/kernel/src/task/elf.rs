@@ -229,6 +229,7 @@ pub async fn load(
     force_dyn: Option<bool>,
     virt: Pin<&Virt>,
 ) -> Result<LoadedElf, Error> {
+    log::trace!("elf::load");
     if !phys.is_cow() {
         return Err(Error::NotSupported("the Phys should be COW"));
     }
@@ -273,6 +274,10 @@ pub async fn load(
         })
         .unwrap_or_default();
 
+    log::debug!(
+        "elf::load: entry = {entry:?}, {}",
+        if is_dyn { "dynamic" } else { "static" }
+    );
     Ok(LoadedElf {
         is_dyn,
         range: base..(base + (max - min)),

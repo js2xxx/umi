@@ -18,6 +18,10 @@ impl Io for Null {
         Ok(0)
     }
 
+    async fn stream_len(&self) -> Result<usize, Error> {
+        Ok(isize::MAX as usize + 1)
+    }
+
     async fn read_at(&self, _: usize, _: &mut [IoSliceMut]) -> Result<usize, Error> {
         Ok(0)
     }
@@ -73,6 +77,10 @@ pub struct Zero;
 impl Io for Zero {
     async fn seek(&self, _: SeekFrom) -> Result<usize, Error> {
         Ok(0)
+    }
+
+    async fn stream_len(&self) -> Result<usize, Error> {
+        Ok(isize::MAX as usize + 1)
     }
 
     async fn read_at(&self, _: usize, buffer: &mut [IoSliceMut]) -> Result<usize, Error> {

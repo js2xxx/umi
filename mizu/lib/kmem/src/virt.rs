@@ -10,10 +10,10 @@ use core::{
 };
 
 use arsc_rs::Arsc;
-use ksc_core::Error::{self, EEXIST, EINVAL, ENOSPC, EPERM};
+use ksc_core::Error::{self, EEXIST, EINVAL, ENOENT, ENOSPC, EPERM};
 use ksync::Mutex;
 use range_map::{AslrKey, RangeMap};
-use rv39_paging::{Attr, LAddr, Table, ID_OFFSET, PAGE_LAYOUT, PAGE_MASK, PAGE_SHIFT};
+use rv39_paging::{Attr, LAddr, Table, ID_OFFSET, PAGE_LAYOUT, PAGE_MASK, PAGE_SHIFT, PAGE_SIZE};
 
 use crate::{frame::frames, Phys};
 
@@ -159,13 +159,15 @@ impl Virt {
         .ok_or(ENOSPC)
     }
 
-    pub async fn commit(&self, range: Range<LAddr>) -> Result<(), Error> {
+    pub async fn commit_range(&self, range: Range<LAddr>) -> Result<bool, Error> {
+        log::trace!("Virt::commit_range {range:?}");
         if range.start.val() & PAGE_MASK != 0 || range.end.val() & PAGE_MASK != 0 {
             return Err(EINVAL);
         }
         let mut map = self.map.lock().await;
         let mut table = self.root.lock().await;
 
+        let mut has_mapping = false;
         for (addr, mapping) in map.intersection_mut(range.clone()) {
             let start = range.start.max(*addr.start);
             let end = range.end.min(*addr.end);
@@ -176,11 +178,22 @@ impl Virt {
             mapping
                 .commit(start, offset, count, &mut table, cpu_mask)
                 .await?;
+            has_mapping = true;
         }
-        Ok(())
+        Ok(has_mapping)
     }
 
-    pub async fn decommit(&self, range: Range<LAddr>) -> Result<(), Error> {
+    pub async fn commit(&self, addr: LAddr) -> Result<(), Error> {
+        let start = addr.val() & !PAGE_MASK;
+        let end = (addr.val() + PAGE_SIZE) & !PAGE_MASK;
+        if self.commit_range(start.into()..end.into()).await? {
+            Ok(())
+        } else {
+            Err(ENOENT)
+        }
+    }
+
+    pub async fn decommit_range(&self, range: Range<LAddr>) -> Result<(), Error> {
         if range.start.val() & PAGE_MASK != 0 || range.end.val() & PAGE_MASK != 0 {
             return Err(EINVAL);
         }

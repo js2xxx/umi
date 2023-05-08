@@ -92,10 +92,12 @@ pub struct InitTask {
 
 impl InitTask {
     async fn load_stack(virt: Pin<&Virt>, stack: Option<(usize, Attr)>) -> Result<LAddr, Error> {
+        log::trace!("InitTask::load_stack {stack:x?}");
+
         let (stack_size, stack_attr) = stack
             .filter(|&(size, _)| size != 0)
             .unwrap_or((DEFAULT_STACK_SIZE, DEFAULT_STACK_ATTR));
-        let stack_size = (stack_size + PAGE_MASK) & PAGE_MASK;
+        let stack_size = (stack_size + PAGE_MASK) & !PAGE_MASK;
 
         let addr = virt
             .map(
@@ -109,10 +111,14 @@ impl InitTask {
         virt.reprotect(addr..(addr + PAGE_SIZE), stack_attr - Attr::WRITABLE)
             .await?;
 
-        Ok(addr + PAGE_SIZE + stack_size)
+        let sp = addr + PAGE_SIZE + stack_size - 8;
+        virt.commit(LAddr::from(sp.val())).await?;
+
+        Ok(sp)
     }
 
     fn trap_frame(entry: LAddr, stack: LAddr, arg: usize) -> TrapFrame {
+        log::trace!("InitStack::trap_frame: entry = {entry:?}, stack = {stack:?}, arg = {arg}");
         TrapFrame {
             gpr: co_trap::Gpr {
                 tx: co_trap::Tx {
@@ -147,6 +153,7 @@ impl InitTask {
         if loaded.tls.is_some() && !has_interp {
             return Err(ENOSYS);
         }
+        virt.commit(loaded.entry).await?;
 
         let stack = Self::load_stack(virt.as_ref(), loaded.stack).await?;
 
