@@ -153,7 +153,7 @@ impl InitTask {
             sepc: entry.val(),
             sstatus: {
                 let sstatus: usize = unsafe { mem::transmute(sstatus::read()) };
-                (sstatus | (1 << 5)) & !(1 << 8)
+                (sstatus | (1 << 5) | (1 << 18)) & !(1 << 8)
             },
             ..Default::default()
         }

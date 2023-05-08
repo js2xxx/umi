@@ -771,6 +771,7 @@ dependencies = [
  "riscv",
  "rv39-paging",
  "sbi-rt",
+ "scoped-tls",
  "spin",
  "static_assertions",
  "sygnal",

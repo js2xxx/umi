@@ -1,4 +1,4 @@
-use alloc::{boxed::Box, sync::Arc, vec::Vec};
+use alloc::{boxed::Box, sync::Arc};
 use core::sync::atomic::{AtomicI32, Ordering::SeqCst};
 
 use co_trap::UserCx;
@@ -10,14 +10,13 @@ use ksc::{
 };
 use ksync::RwLock;
 use rand_riscv::RandomState;
-use rv39_paging::{LAddr, PAddr, ID_OFFSET};
 use umifs::{
     traits::Entry,
     types::{FileType, OpenOptions},
 };
 
 use super::TaskState;
-use crate::syscall::ScRet;
+use crate::{mem::UserBuffer, syscall::ScRet};
 
 const MAX_FDS: usize = 65536;
 
@@ -113,37 +112,57 @@ pub async fn default_stdio() -> Result<[Arc<dyn Entry>; 3], Error> {
 }
 
 #[async_handler]
-pub async fn write(ts: &mut TaskState, cx: UserCx<'_, fn(i32, usize, usize) -> isize>) -> ScRet {
-    async fn write_inner(
+pub async fn read(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(i32, UserBuffer, usize) -> isize>,
+) -> ScRet {
+    async fn read_inner(
         ts: &mut TaskState,
-        fd: i32,
-        buf: usize,
-        len: usize,
+        (fd, mut buffer, len): (i32, UserBuffer, usize),
     ) -> Result<usize, Error> {
-        log::trace!("user write fd = {fd}, buf addr = {buf:?}, len = {len}");
+        log::trace!("user read fd = {fd}, buffer addr = {buffer:?}, len = {len}");
 
-        let paddrs = ts
-            .task
-            .virt
-            .commit_range(buf.into()..(buf + len).into())
-            .await?;
-        let mut bufs = paddrs
-            .into_iter()
-            .map(|range| unsafe { LAddr::as_slice(PAddr::range_to_laddr(range, ID_OFFSET)) })
-            .collect::<Vec<_>>();
+        let mut bufs = buffer.as_mut_slice(ts.task.virt.as_ref(), len).await?;
 
         let entry = ts.task.files.get(fd).await.ok_or(EBADF)?;
         let io = entry.to_io().ok_or(EBADF)?;
-        let len = io.write(&mut bufs).await?;
-        Ok(len)
+
+        io.read(&mut bufs).await
     }
 
-    let (fd, buf, len) = cx.args();
-
-    cx.ret(match write_inner(ts, fd, buf, len).await {
+    let ret = match read_inner(ts, cx.args()).await {
         Ok(len) => len as isize,
         Err(err) => err as isize,
-    });
+    };
+    cx.ret(ret);
+
+    ScRet::Continue(None)
+}
+
+#[async_handler]
+pub async fn write(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(i32, UserBuffer, usize) -> isize>,
+) -> ScRet {
+    async fn write_inner(
+        ts: &mut TaskState,
+        (fd, buffer, len): (i32, UserBuffer, usize),
+    ) -> Result<usize, Error> {
+        log::trace!("user write fd = {fd}, buffer = {buffer:?}, len = {len}");
+
+        let mut bufs = buffer.as_slice(ts.task.virt.as_ref(), len).await?;
+
+        let entry = ts.task.files.get(fd).await.ok_or(EBADF)?;
+        let io = entry.to_io().ok_or(EBADF)?;
+
+        io.write(&mut bufs).await
+    }
+
+    let ret = match write_inner(ts, cx.args()).await {
+        Ok(len) => len as isize,
+        Err(err) => err as isize,
+    };
+    cx.ret(ret);
 
     ScRet::Continue(None)
 }

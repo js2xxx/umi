@@ -5,12 +5,13 @@
 #![feature(const_trait_impl)]
 #![feature(inline_const)]
 #![feature(naked_functions)]
+#![feature(pointer_is_aligned)]
 #![feature(result_option_inspect)]
 #![feature(thread_local)]
 
 mod dev;
 pub mod fs;
-mod mem;
+pub mod mem;
 mod rxx;
 mod syscall;
 pub mod task;

@@ -1,7 +1,7 @@
 use co_trap::{fast_func, Tx};
 use riscv::register::{
     scause::{self, Exception, Interrupt, Trap},
-    sepc,
+    sepc, stval,
 };
 
 pub type KTrapFrame = Tx;
@@ -17,6 +17,14 @@ extern "C" fn ktrap_handler(_tf: &mut KTrapFrame) {
         Trap::Interrupt(intr) => handle_intr(intr, "kernel"),
         Trap::Exception(excep) => match excep {
             Exception::Breakpoint => sepc::write(sepc::read() + 2),
+            Exception::LoadPageFault | Exception::StorePageFault => {
+                if let Some(cf) = crate::mem::COPY_FAULT.try_with(|&s| s) {
+                    sepc::write(cf);
+                    _tf.a[0] = stval::read();
+                    return;
+                }
+                panic!("unhandled exception in kernel: {excep:?}")
+            }
             _ => panic!("unhandled exception in kernel: {excep:?}"),
         },
     }
