@@ -1,3 +1,6 @@
+mod dev;
+mod serial;
+
 use alloc::{collections::BTreeMap, sync::Arc};
 use core::time::Duration;
 
@@ -8,8 +11,6 @@ use kmem::Phys;
 use ksync::{Sender, TryRecvError};
 use ktime::sleep;
 use spin::RwLock;
-mod dev;
-
 use umifs::{
     path::{Path, PathBuf},
     traits::FileSystem,

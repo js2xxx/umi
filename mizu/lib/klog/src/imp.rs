@@ -22,8 +22,14 @@ pub struct Stdout<'a>(MutexGuard<'a, Console>);
 
 impl fmt::Write for Stdout<'_> {
     fn write_str(&mut self, s: &str) -> fmt::Result {
-        s.bytes().for_each(|byte| self.0.write_byte(byte));
+        self.write_bytes(s.as_bytes());
         Ok(())
+    }
+}
+
+impl Stdout<'_> {
+    pub fn write_bytes(&mut self, buffer: &[u8]) {
+        buffer.iter().for_each(|&byte| self.0.write_byte(byte));
     }
 }
 

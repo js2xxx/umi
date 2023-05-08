@@ -11,6 +11,8 @@ use umifs::{
     types::*,
 };
 
+use super::serial::Serial;
+
 pub struct DevFs;
 
 #[async_trait]
@@ -45,6 +47,10 @@ impl Entry for DevRoot {
             "zero" => {
                 let zero = Arc::new(Zero);
                 zero.open(Path::new(""), expect_ty, options, perm).await
+            }
+            "serial" => {
+                let serial = Arc::new(Serial::default());
+                serial.open(Path::new(""), expect_ty, options, perm).await
             }
             _ => {
                 let (dir, next) = {

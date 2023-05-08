@@ -78,7 +78,6 @@ impl Task {
 
     #[async_handler]
     pub async fn exit(_: &mut TaskState, cx: UserCx<'_, fn(i32)>) -> ScRet {
-        // TODO: notify waiters.
         Break(cx.args())
     }
 }
