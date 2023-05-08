@@ -262,7 +262,7 @@ mod tests {
             }
             timer_tick()
         });
-        smol::block_on(async {
+        spin_on::spin_on(async {
             let start = Instant::now();
 
             let dur = Duration::from_millis(10);

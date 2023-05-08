@@ -18,6 +18,8 @@ endif
 .PHONY: build
 
 build:
+	mkdir -p .cargo
+	cp -rf cargo-config/* .cargo
 	cargo build $(CARGO_ARGS)
 	cp $(KERNEL_RAW)  $(KERNEL_SYM)
 	rust-strip --strip-debug --strip-symbol="" \

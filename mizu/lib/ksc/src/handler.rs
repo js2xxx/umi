@@ -225,7 +225,7 @@ impl<K: Eq + Hash, P: Param, O: Param> AHandlers<K, P, O> {
     ///     .map(__TEST0, h0)
     ///     .map(__TEST1, h1)
     ///     .map(__TEST2, h2);
-    /// smol::block_on(handlers.handle(__TEST0, (&mut (), &mut Default::default())));
+    /// spin_on::spin_on(handlers.handle(__TEST0, (&mut (), &mut Default::default())));
     /// ```
     pub fn map<'a, H, Marker: 'static>(mut self, key: K, handler: H) -> Self
     where
@@ -255,7 +255,7 @@ impl<K: Eq + Hash, P: Param, O: Param> AHandlers<K, P, O> {
     /// handlers.insert(__TEST0, h0);
     /// handlers.insert(__TEST1, h1);
     /// handlers.insert(__TEST2, h2);
-    /// smol::block_on(handlers.handle(__TEST0, (&mut (), &mut Default::default())));
+    /// spin_on::spin_on(handlers.handle(__TEST0, (&mut (), &mut Default::default())));
     /// ```
     pub fn insert<H, Marker: 'static>(&mut self, key: K, handler: H)
     where
@@ -362,7 +362,7 @@ mod tests {
         static H: LazyLock<AHandlers<u8, (&mut u16, &mut TrapFrame), usize>> =
             LazyLock::new(|| AHandlers::new().map(0, handler1));
 
-        smol::block_on(async move {
+        spin_on::spin_on(async move {
             {
                 let mut state = 234;
                 let ret = H.handle(&0, (&mut state, &mut TrapFrame::default())).await;

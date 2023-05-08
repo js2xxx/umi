@@ -3,3 +3,4 @@ target
 kernel-qemu
 sbi-qemu
 /third-party/img
+.cargo

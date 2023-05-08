@@ -1,5 +1,5 @@
 export TARGET := riscv64imac-unknown-none-elf
-export MODE   ?= debug
+export MODE   ?= release
 export BOARD  ?= qemu-virt
 
 export ROOT			:= $(shell pwd)
@@ -14,6 +14,8 @@ export SBI ?= $(ROOT)/third-party/bin/rustsbi-$(BOARD).bin
 all: build
 
 build:
+	mkdir -p .cargo
+	cp -rf cargo-config/* .cargo
 	mkdir -p debug
 	cd mizu/kernel && make build
 	cp $(SBI) $(ROOT)/sbi-qemu
