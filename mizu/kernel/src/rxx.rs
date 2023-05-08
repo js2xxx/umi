@@ -134,7 +134,7 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
 
     if !GLOBAL_INIT.load(Relaxed) {
         // Init logger.
-        unsafe { klog::init_logger(log::Level::Trace) };
+        unsafe { klog::init_logger(log::Level::Warn) };
 
         // Init the kernel heap.
         unsafe { kalloc::init(&mut _sheap, &mut _eheap) };

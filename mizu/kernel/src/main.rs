@@ -29,7 +29,7 @@ pub use self::rxx::executor;
 use crate::task::InitTask;
 
 async fn main(fdt: usize) {
-    println!("Hello from executor");
+    println!("Hello from UMI");
 
     unsafe { dev::init(fdt as _).expect("failed to initialize devices") };
     fs::fs_init().await;
