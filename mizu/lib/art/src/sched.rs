@@ -134,7 +134,7 @@ impl Context {
         let stealers = &self.executor.stealers;
 
         let len = stealers.len();
-        let offset = (rand.next_u64().wrapping_mul(len as u64) >> 32) as usize;
+        let offset = (rand.next_u64() % len as u64) as usize;
 
         let mut iter = stealers.iter().cycle().skip(offset).take(len);
         let task = iter.find_map(|stealer| stealer.steal_into_and_pop(&mut worker.rq));
@@ -168,12 +168,15 @@ impl Context {
     }
 
     fn enqueue(task: Runnable, sched_info: ScheduleInfo) {
-        CX.with(|cx| {
+        let ret = CX.try_with(|cx| {
             if let Ok(mut worker) = cx.worker.try_borrow_mut() {
                 worker.push(task, &cx.executor.injector, sched_info.woken_while_running);
             } else {
                 cx.executor.injector.push(task)
             }
-        })
+        });
+        if ret.is_none() {
+            log::warn!("executor exited while scheduling");
+        }
     }
 }

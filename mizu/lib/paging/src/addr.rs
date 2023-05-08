@@ -4,6 +4,7 @@ use core::{
     num::NonZeroUsize,
     ops::{Add, AddAssign, Deref, DerefMut, Range, Sub, SubAssign},
     ptr::NonNull,
+    slice,
 };
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Default, Hash)]
@@ -32,6 +33,10 @@ impl PAddr {
     #[inline]
     pub fn val(self) -> usize {
         self.0
+    }
+
+    pub fn range_to_laddr(this: Range<Self>, id_off: usize) -> Range<LAddr> {
+        this.start.to_laddr(id_off)..this.end.to_laddr(id_off)
     }
 }
 
@@ -125,6 +130,20 @@ impl LAddr {
 
     pub fn to_range(self, layout: Layout) -> Range<Self> {
         self..Self::new(self.wrapping_add(layout.size()))
+    }
+
+    /// # Safety
+    ///
+    /// See ['slice::from_raw_parts'] for more info.
+    pub unsafe fn as_slice<'a>(this: Range<Self>) -> &'a [u8] {
+        unsafe { slice::from_raw_parts(*this.start, this.end.val() - this.start.val()) }
+    }
+
+    /// # Safety
+    ///
+    /// See ['slice::from_raw_parts_mut'] for more info.
+    pub unsafe fn as_mut_slice<'a>(this: Range<Self>) -> &'a mut [u8] {
+        unsafe { slice::from_raw_parts_mut(*this.start, this.end.val() - this.start.val()) }
     }
 }
 

@@ -51,6 +51,7 @@ dependencies = [
  "arsc-rs",
  "async-task",
  "crossbeam-queue",
+ "log",
  "rand-riscv",
  "scoped-tls",
 ]

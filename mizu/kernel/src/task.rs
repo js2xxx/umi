@@ -1,4 +1,5 @@
 mod elf;
+pub mod fd;
 mod future;
 
 use alloc::{
@@ -29,6 +30,7 @@ use spin::{Lazy, Mutex};
 use sygnal::{ActionSet, Sig, SigSet, Signals};
 use umifs::path::Path;
 
+use self::fd::Files;
 use crate::{
     executor,
     syscall::ScRet,
@@ -61,6 +63,7 @@ pub struct Task {
     sig: Signals,
     sig_actions: ActionSet,
     event: Broadcast<TaskEvent>,
+    files: Arsc<Files>,
 }
 
 impl Task {
@@ -105,6 +108,7 @@ pub struct InitTask {
     main: Weak<Task>,
     virt: Pin<Arsc<Virt>>,
     tf: TrapFrame,
+    files: Arsc<Files>,
 }
 
 impl InitTask {
@@ -180,6 +184,7 @@ impl InitTask {
             main: Weak::new(),
             virt,
             tf,
+            files: Arsc::new(Files::new(fd::default_stdio().await?)),
         })
     }
 
@@ -199,6 +204,7 @@ impl InitTask {
             main: Weak::new(),
             virt,
             tf,
+            files: task.files.clone(),
         })
     }
 
@@ -214,6 +220,7 @@ impl InitTask {
             sig: Signals::new(),
             sig_actions: ActionSet::new(),
             event: Broadcast::new(),
+            files: self.files,
         });
 
         let ts = TaskState {

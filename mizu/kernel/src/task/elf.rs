@@ -133,8 +133,8 @@ async fn map_segment(
     virt: Pin<&Virt>,
     base: LAddr,
 ) -> Result<(), Error> {
-    let msize = segment.p_memsz as usize;
-    let fsize = segment.p_filesz as usize;
+    let memory_size = segment.p_memsz as usize;
+    let file_size = segment.p_filesz as usize;
     let offset = segment.p_offset as usize;
     let address = segment.p_vaddr as usize;
 
@@ -143,42 +143,42 @@ async fn map_segment(
             "Offset of segments must be page aligned",
         ));
     }
-    let fend = (offset + fsize) & !PAGE_MASK;
-    let cend = offset + fsize;
-    let mend = (offset + msize + PAGE_MASK) & !PAGE_MASK;
-    let offset = offset & !PAGE_MASK;
-    let address = address & !PAGE_MASK;
-    let fsize = fend - offset;
-    let csize = cend - fend;
-    let asize = mend.saturating_sub(fend);
+    let file_end = (offset + file_size) & !PAGE_MASK;
+    let data_end = offset + file_size;
+    let memory_end = (offset + memory_size + PAGE_MASK) & !PAGE_MASK;
+    let aligned_offset = offset & !PAGE_MASK;
+    let aligned_address = address & !PAGE_MASK;
+    let aligned_file_size = file_end - aligned_offset;
+    let aligned_copy_size = data_end - file_end;
+    let aligned_alloc_size = memory_end.saturating_sub(file_end);
 
     let attr = parse_attr(segment.p_flags);
 
-    if fsize > 0 {
+    if aligned_file_size > 0 {
         log::trace!(
             "elf::load: Map {:#x}~{:#x} -> {:?}",
-            offset,
-            offset + fsize,
-            base + address
+            aligned_offset,
+            aligned_offset + aligned_file_size,
+            base + aligned_address
         );
         virt.map(
-            Some(base + address),
+            Some(base + aligned_address),
             phys.clone(),
-            offset >> PAGE_SHIFT,
-            fsize >> PAGE_SHIFT,
+            aligned_offset >> PAGE_SHIFT,
+            aligned_file_size >> PAGE_SHIFT,
             attr,
         )
         .await
         .map_err(Error::VirtMap)?;
     }
 
-    if asize > 0 {
-        let address = address + fsize;
+    if aligned_alloc_size > 0 {
+        let address = aligned_address + aligned_file_size;
 
         let mem = Phys::new_anon();
 
-        let mut cdata = vec![0; csize];
-        phys.read_exact_at(fend, &mut cdata)
+        let mut cdata = vec![0; aligned_copy_size];
+        phys.read_exact_at(file_end, &mut cdata)
             .await
             .map_err(Error::PhysRead)?;
         mem.write_all_at(0, &cdata)
@@ -187,15 +187,15 @@ async fn map_segment(
 
         log::trace!(
             "elf::load: Alloc {:#x}~{:#x} -> {:?}",
-            fend,
-            fend + asize,
+            file_end,
+            file_end + aligned_alloc_size,
             base + address
         );
         virt.map(
             Some(base + address),
             Arc::new(mem),
             0,
-            asize >> PAGE_SHIFT,
+            aligned_alloc_size >> PAGE_SHIFT,
             attr,
         )
         .await

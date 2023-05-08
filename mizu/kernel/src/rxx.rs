@@ -9,7 +9,7 @@ use static_assertions::const_assert_eq;
 
 const_assert_eq!(config::KERNEL_START_PHYS + ID_OFFSET, config::KERNEL_START);
 #[no_mangle]
-pub static BOOT_PAGES: Table = const {
+static BOOT_PAGES: Table = const {
     let low_start = config::KERNEL_START_PHYS.round_down(Level::max());
     let delta = Level::max().page_size();
 
@@ -20,6 +20,17 @@ pub static BOOT_PAGES: Table = const {
         low_start => low_start, Attr::KERNEL_RWX;
 
         // The temporary higher half mappings.
+        ID_OFFSET + addrs[0] => addrs[0], Attr::KERNEL_RWX;
+        ID_OFFSET + addrs[1] => addrs[1], Attr::KERNEL_RWX;
+        ID_OFFSET + addrs[2] => addrs[2], Attr::KERNEL_RWX;
+        ID_OFFSET + addrs[3] => addrs[3], Attr::KERNEL_RWX;
+    ]
+};
+
+pub const KERNEL_PAGES: Table = const {
+    let delta = Level::max().page_size();
+    let addrs = [0, delta, delta * 2, delta * 3];
+    table_1g![
         ID_OFFSET + addrs[0] => addrs[0], Attr::KERNEL_RWX;
         ID_OFFSET + addrs[1] => addrs[1], Attr::KERNEL_RWX;
         ID_OFFSET + addrs[2] => addrs[2], Attr::KERNEL_RWX;
@@ -150,6 +161,7 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
     }
 
     run_art(payload);
+    unsafe { ksync::disable() };
 
     if hart_id::is_bsp() {
         sbi_rt::system_reset(Shutdown, NoReason);

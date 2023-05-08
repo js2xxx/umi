@@ -1,19 +1,20 @@
 mod tlb;
 
-use alloc::sync::Arc;
+use alloc::{sync::Arc, vec::Vec};
 use core::{
     marker::PhantomPinned,
     mem,
+    num::NonZeroUsize,
     ops::Range,
     pin::Pin,
     sync::atomic::{AtomicUsize, Ordering::Relaxed},
 };
 
 use arsc_rs::Arsc;
-use ksc_core::Error::{self, EEXIST, EINVAL, ENOENT, ENOSPC, EPERM};
+use ksc_core::Error::{self, EEXIST, EFAULT, EINVAL, ENOSPC, EPERM};
 use ksync::Mutex;
 use range_map::{AslrKey, RangeMap};
-use rv39_paging::{Attr, LAddr, Table, ID_OFFSET, PAGE_LAYOUT, PAGE_MASK, PAGE_SHIFT, PAGE_SIZE};
+use rv39_paging::{Attr, LAddr, PAddr, Table, ID_OFFSET, PAGE_LAYOUT, PAGE_MASK, PAGE_SHIFT};
 
 use crate::{frame::frames, Phys};
 
@@ -41,22 +42,27 @@ impl Mapping {
         &mut self,
         addr: LAddr,
         offset: usize,
-        count: usize,
+        count: NonZeroUsize,
         table: &mut Table,
         cpu_mask: usize,
-    ) -> Result<(), Error> {
+    ) -> Result<PAddr, Error> {
         let writable = self.attr.contains(Attr::WRITABLE);
+        let mut p = None;
         for (index, addr) in
-            (0..count).map(|c| (c + self.start_index + offset, addr + (c << PAGE_SHIFT)))
+            (0..count.get()).map(|c| (c + self.start_index + offset, addr + (c << PAGE_SHIFT)))
         {
             let entry = table.la2pte_alloc(addr, frames(), ID_OFFSET)?;
-            if !entry.is_set() {
+            p = Some(if !entry.is_set() {
                 let frame = self.phys.commit(index, writable, true).await?;
-                *entry = rv39_paging::Entry::new(frame.base(), self.attr, rv39_paging::Level::pt());
-                tlb::flush(cpu_mask, addr, 1)
-            }
+                let base = frame.base();
+                *entry = rv39_paging::Entry::new(base, self.attr, rv39_paging::Level::pt());
+                tlb::flush(cpu_mask, addr, 1);
+                base
+            } else {
+                entry.addr(rv39_paging::Level::pt())
+            });
         }
-        Ok(())
+        Ok(p.unwrap())
     }
 
     async fn decommit(
@@ -159,38 +165,41 @@ impl Virt {
         .ok_or(ENOSPC)
     }
 
-    pub async fn commit_range(&self, range: Range<LAddr>) -> Result<bool, Error> {
-        log::trace!("Virt::commit_range {range:?}");
-        if range.start.val() & PAGE_MASK != 0 || range.end.val() & PAGE_MASK != 0 {
-            return Err(EINVAL);
-        }
+    pub async fn commit_range(&self, range: Range<LAddr>) -> Result<Vec<Range<PAddr>>, Error> {
+        let aligned_range = LAddr::from(range.start.val() & !PAGE_MASK)
+            ..LAddr::from((range.end.val() + PAGE_MASK) & !PAGE_MASK);
+
+        log::trace!("Virt::commit_range {range:?} => {aligned_range:?}");
+
         let mut map = self.map.lock().await;
         let mut table = self.root.lock().await;
 
-        let mut has_mapping = false;
-        for (addr, mapping) in map.intersection_mut(range.clone()) {
-            let start = range.start.max(*addr.start);
-            let end = range.end.min(*addr.end);
+        let mut paddr = Vec::new();
+        for (addr, mapping) in map.intersection_mut(aligned_range.clone()) {
+            let start = aligned_range.start.max(*addr.start);
+            let end = aligned_range.end.min(*addr.end);
             let offset = (start.val() - addr.start.val()) >> PAGE_SHIFT;
-            let count = (end.val() - start.val()) >> PAGE_SHIFT;
+            let len = end.val() - start.val();
+            let count = len >> PAGE_SHIFT;
 
             let cpu_mask = self.cpu_mask.load(Relaxed);
-            mapping
-                .commit(start, offset, count, &mut table, cpu_mask)
-                .await?;
-            has_mapping = true;
+            if let Some(count) = NonZeroUsize::new(count) {
+                let p = mapping
+                    .commit(start, offset, count, &mut table, cpu_mask)
+                    .await?;
+                paddr.push(
+                    (p + range.start.val().saturating_sub(start.val()))
+                        ..(p + len - end.val().saturating_sub(range.end.val())),
+                )
+            }
         }
-        Ok(has_mapping)
+        paddr.reverse();
+        Ok(paddr)
     }
 
-    pub async fn commit(&self, addr: LAddr) -> Result<(), Error> {
-        let start = addr.val() & !PAGE_MASK;
-        let end = (addr.val() + PAGE_SIZE) & !PAGE_MASK;
-        if self.commit_range(start.into()..end.into()).await? {
-            Ok(())
-        } else {
-            Err(ENOENT)
-        }
+    pub async fn commit(&self, addr: LAddr) -> Result<PAddr, Error> {
+        let paddr = self.commit_range(addr..(addr + 1)).await?;
+        paddr.first().cloned().ok_or(EFAULT).map(|r| r.start)
     }
 
     pub async fn decommit_range(&self, range: Range<LAddr>) -> Result<(), Error> {

@@ -14,4 +14,5 @@ rand-riscv = {path = "../rand-riscv"}
 arsc-rs = {git = "https://github.com/js2xxx/arsc"}
 async-task = {version = "4", default-features = false}
 crossbeam-queue = {version = "0", default-features = false, features = ["alloc", "nightly"]}
+log = "0"
 scoped-tls = {git = "https://github.com/js2xxx/scoped-tls", branch = "no_std"}

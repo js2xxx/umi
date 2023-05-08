@@ -79,8 +79,10 @@ impl Entry for Serial {
         if !path.as_str().is_empty() {
             return Err(ENOTDIR);
         }
-        if !matches!(expect_ty, None | Some(FileType::FILE)) {
-            return Err(ENOTDIR);
+        if let Some(expect) = expect_ty {
+            if expect.intersects(!(FileType::FILE | FileType::REG)) {
+                return Err(ENOTDIR);
+            }
         }
         let (read, write) = match options.intersection(OpenOptions::ACCMODE) {
             OpenOptions::RDWR => (true, true),
