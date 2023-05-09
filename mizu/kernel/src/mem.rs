@@ -42,6 +42,12 @@ pub struct UserPtr<T: Copy, D> {
     _marker: PhantomData<(T, D)>,
 }
 
+impl<T: Copy, D> UserPtr<T, D> {
+    pub fn addr(&self) -> usize {
+        self.addr
+    }
+}
+
 impl<T: Copy, D> RawReg for UserPtr<T, D> {
     fn from_raw(raw: usize) -> Self {
         UserPtr {

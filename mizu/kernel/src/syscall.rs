@@ -22,6 +22,8 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         .map(WRITE, fd::write)
         .map(CHDIR, fd::chdir)
         .map(GETCWD, fd::getcwd)
+        .map(DUP, fd::dup)
+        .map(DUP3, fd::dup3)
         .map(OPENAT, fd::openat)
         .map(MKDIRAT, fd::mkdirat)
         .map(UNLINKAT, fd::unlinkat)

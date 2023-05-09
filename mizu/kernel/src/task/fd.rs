@@ -61,14 +61,14 @@ impl Files {
         ksync::critical(|| self.cwd.read().clone())
     }
 
-    pub async fn open(&self, entry: Arc<dyn Entry>) -> Option<i32> {
+    pub async fn open(&self, entry: Arc<dyn Entry>) -> Result<i32, Error> {
         let mut map = self.map.write().await;
         if map.len() >= MAX_FDS {
-            return None;
+            return Err(ENOSPC);
         }
         let fd = self.id_alloc.fetch_add(1, SeqCst);
         map.insert_unique_unchecked(fd, entry);
-        Some(fd)
+        Ok(fd)
     }
 
     pub async fn get(&self, fd: i32) -> Result<Arc<dyn Entry>, Error> {
@@ -221,15 +221,26 @@ fssc!(
         Ok(())
     }
 
-    pub async fn getcwd(files: &Files, buf: UserPtr<u8, Out>, len: usize) -> Result<(), Error> {
+    pub async fn getcwd(files: &Files, buf: UserPtr<u8, Out>, len: usize) -> Result<usize, Error> {
         let cwd = files.cwd();
         let path = cwd.as_str().as_bytes();
         if path.len() >= len {
             Err(ERANGE)
         } else {
             buf.write_slice(path, true)?;
-            Ok(())
+            Ok(buf.addr())
         }
+    }
+
+    pub async fn dup(files: &Files, fd: i32) -> Result<i32, Error> {
+        let entry = files.get(fd).await?;
+        files.open(entry).await
+    }
+
+    pub async fn dup3(files: &Files, old: i32, new: i32, _flags: i32) -> Result<i32, Error> {
+        let entry = files.get(old).await?;
+        files.reopen(new, entry).await;
+        Ok(new)
     }
 
     pub async fn openat(
@@ -246,7 +257,7 @@ fssc!(
         let base = files.get(fd).await?;
 
         let (entry, _) = base.open(path, options, perm).await?;
-        files.open(entry).await.ok_or(ENOSPC)
+        files.open(entry).await
     }
 
     pub async fn mkdirat(
@@ -266,7 +277,7 @@ fssc!(
         if !created {
             return Err(EEXIST);
         }
-        files.open(entry).await.ok_or(ENOSPC)
+        files.open(entry).await
     }
 
     pub async fn unlinkat(
