@@ -72,17 +72,11 @@ impl Entry for Serial {
     async fn open(
         self: Arc<Self>,
         path: &Path,
-        expect_ty: Option<FileType>,
         options: OpenOptions,
         _perm: Permissions,
     ) -> Result<(Arc<dyn Entry>, bool), Error> {
-        if !path.as_str().is_empty() {
+        if !path.as_str().is_empty() || options.contains(OpenOptions::DIRECTORY) {
             return Err(ENOTDIR);
-        }
-        if let Some(expect) = expect_ty {
-            if expect.intersects(!(FileType::FILE | FileType::REG)) {
-                return Err(ENOTDIR);
-            }
         }
         let (read, write) = match options.intersection(OpenOptions::ACCMODE) {
             OpenOptions::RDWR => (true, true),

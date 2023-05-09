@@ -43,8 +43,9 @@ const DEFAULT_STACK_ATTR: Attr = Attr::USER_ACCESS
     .union(Attr::WRITABLE);
 
 pub struct TaskState {
-    task: Arc<Task>,
+    pub(crate) task: Arc<Task>,
     sig_mask: SigSet,
+    pub(crate) brk: usize,
 }
 
 #[derive(Clone)]
@@ -79,8 +80,22 @@ impl Task {
         self.event.clone()
     }
 
+    pub fn virt(&self) -> Pin<&Virt> {
+        self.virt.as_ref()
+    }
+
+    pub async fn wait(&self) -> i32 {
+        let event = self.event();
+        loop {
+            if let Ok(TaskEvent::Exited(code)) = event.recv().await {
+                break code;
+            }
+        }
+    }
+
     #[async_handler]
-    pub async fn exit(_: &mut TaskState, cx: UserCx<'_, fn(i32)>) -> ScRet {
+    pub async fn exit(ts: &mut TaskState, cx: UserCx<'_, fn(i32)>) -> ScRet {
+        let _ = ts.task.files.flush_all().await;
         Break(cx.args())
     }
 }
@@ -184,7 +199,7 @@ impl InitTask {
             main: Weak::new(),
             virt,
             tf,
-            files: Arsc::new(Files::new(fd::default_stdio().await?)),
+            files: Arsc::new(Files::new(fd::default_stdio().await?, "/".into())),
         })
     }
 
@@ -226,6 +241,7 @@ impl InitTask {
         let ts = TaskState {
             task: task.clone(),
             sig_mask: SigSet::EMPTY,
+            brk: 0,
         };
 
         let fut = TaskFut::new(task.virt.clone(), user_loop(ts, self.tf));

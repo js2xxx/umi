@@ -18,7 +18,7 @@ extern "C" fn ktrap_handler(_tf: &mut KTrapFrame) {
         Trap::Exception(excep) => match excep {
             Exception::Breakpoint => sepc::write(sepc::read() + 2),
             Exception::LoadPageFault | Exception::StorePageFault => {
-                if let Some(cf) = crate::mem::COPY_FAULT.try_with(|&s| s) {
+                if let Some(cf) = crate::mem::UA_FAULT.try_with(|&s| s) {
                     sepc::write(cf);
                     _tf.a[0] = stval::read();
                     return;

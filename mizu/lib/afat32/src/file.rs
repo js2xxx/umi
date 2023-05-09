@@ -13,8 +13,8 @@ use umifs::{
     path::Path,
     traits::{Entry, Io},
     types::{
-        advance_slices, ioslice_len, FileType, IoSlice, IoSliceMut, Metadata, OpenOptions,
-        Permissions, SeekFrom,
+        advance_slices, ioslice_len, IoSlice, IoSliceMut, Metadata, OpenOptions, Permissions,
+        SeekFrom,
     },
 };
 
@@ -101,12 +101,7 @@ impl<T: TimeProvider> FatFile<T> {
         let new_decomp = self.decomp_end(new_len);
 
         match new_decomp {
-            Some((new_cluster_index, _)) => {
-                if cluster_index == new_cluster_index {
-                    self.len.store(new_len, Relaxed);
-                    entry.set_size(new_len as u32);
-                    return Ok(());
-                }
+            Some((new_cluster_index, _)) if cluster_index != new_cluster_index => {
                 let start = clusters[new_cluster_index];
                 clusters.truncate(new_cluster_index + 1);
                 self.fs.truncate_cluster_chain(start).await?;
@@ -117,6 +112,7 @@ impl<T: TimeProvider> FatFile<T> {
                 clusters.clear();
                 self.fs.free_cluster_chain(start).await?;
             }
+            _ => {}
         }
         self.len.store(new_len, Relaxed);
         entry.set_size(new_len as u32);
@@ -162,6 +158,13 @@ impl<T: TimeProvider> FatFile<T> {
             }
         }
     }
+
+    async fn flush(&self) -> Result<(), Error> {
+        if let Some(ref entry) = self.entry {
+            entry.lock().await.flush(&**self.fs.fat.device()).await?;
+        }
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -206,6 +209,10 @@ impl<T: TimeProvider> Io for FatFile<T> {
 
         let cluster_shift = self.cluster_shift;
         let (cluster_index, offset_in_cluster) = self.decomp(offset);
+        let end_offset_in_cluster = self
+            .decomp_end(self.len.load(SeqCst))
+            .and_then(|(ci, oc)| (cluster_index == ci).then_some(oc))
+            .unwrap_or(1 << cluster_shift);
 
         let clusters = self.clusters.read().await;
 
@@ -214,7 +221,7 @@ impl<T: TimeProvider> Io for FatFile<T> {
         };
 
         let mut cluster_offset = self.fs.offset_from_cluster(cluster) as usize + offset_in_cluster;
-        let mut rest = (1 << cluster_shift) - offset_in_cluster;
+        let mut rest = end_offset_in_cluster - offset_in_cluster;
         let mut read_len = 0;
         let device = self.fs.fat.device();
         loop {
@@ -300,10 +307,7 @@ impl<T: TimeProvider> Io for FatFile<T> {
     }
 
     async fn flush(&self) -> Result<(), Error> {
-        if let Some(ref entry) = self.entry {
-            entry.lock().await.flush(&**self.fs.fat.device()).await?;
-        }
-        Ok(())
+        self.flush().await
     }
 }
 
@@ -312,14 +316,13 @@ impl<T: TimeProvider> Entry for FatFile<T> {
     async fn open(
         self: Arc<Self>,
         path: &Path,
-        expect_ty: Option<FileType>,
-        _options: OpenOptions,
+        options: OpenOptions,
         _perm: Permissions,
     ) -> Result<(Arc<dyn Entry>, bool), Error> {
         if !path.as_str().is_empty() {
             return Err(ENOTDIR);
         }
-        if !matches!(expect_ty, None | Some(FileType::FILE)) {
+        if options.contains(OpenOptions::DIRECTORY) {
             return Err(ENOTDIR);
         }
         // TODO: Check options & permissions

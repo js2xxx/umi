@@ -306,6 +306,13 @@ impl From<core::str::Utf8Error> for Error {
     }
 }
 
+impl From<core::ffi::FromBytesUntilNulError> for Error {
+    #[inline]
+    fn from(_: core::ffi::FromBytesUntilNulError) -> Self {
+        ENAMETOOLONG
+    }
+}
+
 impl From<rv39_paging::Error> for Error {
     fn from(error: rv39_paging::Error) -> Self {
         match error {

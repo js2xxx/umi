@@ -8,27 +8,34 @@ pub use umio::{
 
 bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
-    pub struct OpenOptions: u32 {
-        const ACCMODE   = 0o0000003;
-        const RDONLY    = 0o0000000;
-        const WRONLY    = 0o0000001;
-        const RDWR      = 0o0000002;
+    pub struct OpenOptions: i32 {
+        const ACCMODE =  0x0007;
+        const EXEC    =  1;
+        const RDONLY  =  2;
+        const RDWR    =  3;
+        const SEARCH  =  4;
+        const WRONLY  =  5;
 
-        const CREAT     = 0o0000100;
-        const EXCL      = 0o0000200;
-        const NOCTTY    = 0o0000400;
-        const TRUNC     = 0o0001000;
-        const APPEND    = 0o0002000;
-        const NONBLOCK  = 0o0004000;
-        const DSYNC     = 0o0010000;
-        const FASYNC    = 0o0020000;
-        const DIRECT    = 0o0040000;
-        const LARGEFILE = 0o0100000;
-        const DIRECTORY = 0o0200000;
-        const NOFOLLOW  = 0o0400000;
-        const NOATIME   = 0o1000000;
-        const CLOEXEC   = 0o2000000;
+        const APPEND    = 0x000008;
+        const CREAT     = 0x40;
+        const EXCL      = 0x000040;
+        const NOCTTY    = 0x000080;
+        const NOFOLLOW  = 0x000100;
+        const TRUNC     = 0x000200;
+        const NONBLOCK  = 0x000400;
+        const DSYNC     = 0x000800;
+        const RSYNC     = 0x001000;
+        const SYNC      = 0x002000;
+        const CLOEXEC   = 0x004000;
+        const PATH      = 0x008000;
+        const LARGEFILE = 0x010000;
+        const NOATIME   = 0x020000;
+        const ASYNC     = 0x040000;
+        const TMPFILE   = 0x080000;
+        const DIRECT    = 0x100000;
+        const DIRECTORY = 0x200000;
     }
+
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
     pub struct Permissions: u32 {
@@ -44,16 +51,17 @@ bitflags! {
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    pub struct FileType: u32 {
-        const DIR  = 0o0040000;
-        const CHR  = 0o0020000;
-        const BLK  = 0o0060000;
-        const REG  = 0o0100000;
+    pub struct FileType: u8 {
+        const UNKNOWN =	0;
+        const FIFO = 1;
+        const CHR = 2;
+        const DIR = 4;
+        const BLK = 6;
+        const REG = 8;
         const FILE = Self::REG.bits();
-        const IFO  = 0o0010000;
-        const LNK  = 0o0120000;
-        const SOCK = 0o0140000;
-        const MT   = 0o0170000;
+        const LNK = 10;
+        const SOCK = 12;
+        const WHT = 14;
     }
 }
 
@@ -74,6 +82,20 @@ impl Permissions {
         }
         if executable {
             ret |= Permissions::SELF_X | Permissions::GROUP_X | Permissions::OTHERS_X;
+        }
+        ret
+    }
+
+    pub fn me(readable: bool, writable: bool, executable: bool) -> Self {
+        let mut ret = Permissions::empty();
+        if readable {
+            ret |= Permissions::SELF_R;
+        }
+        if writable {
+            ret |= Permissions::SELF_W;
+        }
+        if executable {
+            ret |= Permissions::SELF_X;
         }
         ret
     }

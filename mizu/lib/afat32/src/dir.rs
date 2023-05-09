@@ -6,8 +6,8 @@ use futures_util::{stream, Stream, StreamExt};
 use ksc_core::Error::{self, EEXIST, EINVAL, EISDIR, ENOENT, ENOSYS, ENOTDIR, ENOTEMPTY};
 use umifs::{
     path::Path,
-    traits::{Directory, DirectoryMut, Entry, IoExt, ToIo},
-    types::{FileType, Metadata, OpenOptions, Permissions},
+    traits::{Directory, DirectoryMut, Entry, Io, IoExt},
+    types::{FileType, IoSlice, IoSliceMut, Metadata, OpenOptions, Permissions, SeekFrom},
 };
 
 use crate::{
@@ -64,6 +64,7 @@ impl<T: TimeProvider> FatDir<T> {
             }
             if self.should_skip_entry(&raw_entry, skip_volume) {
                 lfn_builder.clear();
+                offset += DIR_ENTRY_SIZE as usize;
                 begin_offset = offset;
                 continue;
             }
@@ -392,48 +393,75 @@ impl<T: TimeProvider> FatDir<T> {
     }
 }
 
-impl<T: TimeProvider> ToIo for FatDir<T> {}
+#[async_trait]
+impl<T: TimeProvider> Io for FatDir<T> {
+    async fn seek(&self, _: SeekFrom) -> Result<usize, Error> {
+        Err(EISDIR)
+    }
+
+    async fn read_at(&self, _: usize, _: &mut [IoSliceMut]) -> Result<usize, Error> {
+        Err(EISDIR)
+    }
+
+    async fn write_at(&self, _: usize, _: &mut [IoSlice]) -> Result<usize, Error> {
+        Err(EISDIR)
+    }
+
+    async fn flush(&self) -> Result<(), Error> {
+        self.file.flush().await
+    }
+}
 
 #[async_trait]
 impl<T: TimeProvider> Entry for FatDir<T> {
     async fn open(
         self: Arc<Self>,
         path: &Path,
-        expect_ty: Option<FileType>,
         options: OpenOptions,
         _perm: Permissions,
     ) -> Result<(Arc<dyn Entry>, bool), Error> {
-        // TODO: Check open options & permissions
-        match expect_ty {
-            None => {
-                if options.contains(OpenOptions::CREAT) {
-                    return Err(EINVAL);
-                }
-                let dirent = (*self).open(path).await?;
-                Ok(if dirent.is_dir() {
-                    (Arc::new(dirent.to_dir().await?), false)
-                } else {
-                    (Arc::new(dirent.to_file().await?), false)
-                })
-            }
-            Some(FileType::FILE) => Ok(if options.contains(OpenOptions::CREAT) {
-                let (file, created) = self.create_file(path).await?;
-                (Arc::new(file), created)
+        if path == "" || path == "." {
+            return if options.contains(OpenOptions::CREAT | OpenOptions::EXCL) {
+                Err(EEXIST)
             } else {
-                (Arc::new(self.open_file(path).await?), false)
-            }),
-            Some(FileType::DIR) => Ok(if options.contains(OpenOptions::CREAT) {
-                let (file, created) = self.create_dir(path).await?;
-                (Arc::new(file), created)
-            } else {
-                (Arc::new(self.open_dir(path).await?), false)
-            }),
-            Some(_) => Err(ENOSYS),
+                Ok((self, false))
+            };
         }
+        Ok(
+            match (
+                options.contains(OpenOptions::CREAT),
+                options.contains(OpenOptions::DIRECTORY),
+            ) {
+                (false, false) => (Arc::new(self.open_file(path).await?), false),
+                (false, true) => (Arc::new(self.open_dir(path).await?), false),
+                (true, false) => {
+                    let (file, created) = self.create_file(path).await?;
+                    if !created && options.contains(OpenOptions::EXCL) {
+                        return Err(EEXIST);
+                    }
+                    (Arc::new(file), created)
+                }
+                (true, true) => {
+                    let (dir, created) = self.create_dir(path).await?;
+                    if !created && options.contains(OpenOptions::EXCL) {
+                        return Err(EEXIST);
+                    }
+                    (Arc::new(dir), created)
+                }
+            },
+        )
     }
 
     fn metadata(&self) -> Metadata {
         todo!()
+    }
+
+    fn to_dir(self: Arc<Self>) -> Option<Arc<dyn Directory>> {
+        Some(self as _)
+    }
+
+    fn to_dir_mut(self: Arc<Self>) -> Option<Arc<dyn DirectoryMut>> {
+        Some(self as _)
     }
 }
 

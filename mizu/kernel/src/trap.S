@@ -59,22 +59,37 @@ ktrap_entry:
     addi sp, sp, 20*8
     sret
 
-.global checked_copy
-.type checked_copy, @function
+.global _checked_copy
+.type _checked_copy, @function
 _checked_copy:
-.Lloop:
-    beqz a2, .Lend
+.Lcopy_loop:
+    beqz a2, .Lcopy_ret
     lb t0, 0(a0)
     sb t0, 0(a1)
     addi a0, a0, 1
     addi a1, a1, 1
     addi a2, a2, -1
-    j .Lloop
-.Lend:
+    j .Lcopy_loop
+.Lcopy_ret:
     li a0, 0
     ret
 
-.global checked_copy_fault
-.type checked_copy_fault, @function
-.Lfault:
+.global _checked_zero
+.type _checked_zero, @function
+_checked_zero:
+    mv t0, a0
+.Lzero_loop:
+    beqz a2, .Lzero_ret
+    sb t0, 0(a1)
+    addi a0, a0, 1
+    addi a1, a1, 1
+    addi a2, a2, -1
+    j .Lzero_loop
+.Lzero_ret:
+    li a0, 0
+    ret
+
+.global _checked_ua_fault
+.type _checked_ua_fault, @function
+_checked_ua_fault:
     ret
