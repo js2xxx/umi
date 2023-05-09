@@ -27,6 +27,14 @@ pub trait Entry: IntoAny + Send + ToIo + Sync + 'static {
     ) -> Result<(Arc<dyn Entry>, bool), Error>;
 
     fn metadata(&self) -> Metadata;
+
+    fn to_dir(self: Arc<Self>) -> Option<Arc<dyn Directory>> {
+        None
+    }
+
+    fn to_dir_mut(self: Arc<Self>) -> Option<Arc<dyn DirectoryMut>> {
+        None
+    }
 }
 
 pub trait File: Entry + Io {}

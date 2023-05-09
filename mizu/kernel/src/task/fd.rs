@@ -6,7 +6,7 @@ use futures_util::future::join_all;
 use hashbrown::HashMap;
 use ksc::{
     async_handler,
-    Error::{self, EBADF, EEXIST, ENOSPC, EPERM, ERANGE},
+    Error::{self, EBADF, EEXIST, ENOSPC, ENOTDIR, EPERM, ERANGE},
 };
 use ksync::RwLock;
 use rand_riscv::RandomState;
@@ -86,14 +86,13 @@ impl Files {
         }
     }
 
-    pub async fn close(&self, fd: i32) -> bool {
-        if let Some(entry) = self.map.write().await.remove(&fd) {
-            if let Some(io) = entry.to_io() {
-                let _ = io.flush().await;
-            }
-            true
-        } else {
-            false
+    pub async fn close(&self, fd: i32) -> Result<(), Error> {
+        match self.map.write().await.remove(&fd) {
+            Some(entry) => match entry.to_io() {
+                Some(io) => io.flush().await,
+                None => Ok(()),
+            },
+            None => Err(EBADF),
         }
     }
 
@@ -268,5 +267,25 @@ fssc!(
             return Err(EEXIST);
         }
         files.open(entry).await.ok_or(ENOSPC)
+    }
+
+    pub async fn unlinkat(
+        files: &Files,
+        fd: i32,
+        path: UserPtr<u8, In>,
+        flags: i32,
+    ) -> Result<(), Error> {
+        let mut buf = [0; MAX_PATH_LEN];
+        let path = path.read_path(&mut buf)?;
+        let base = files.get(fd).await?;
+
+        let base = base.to_dir_mut().ok_or(ENOTDIR)?;
+        base.unlink(path, (flags != 0).then_some(true)).await?;
+
+        Ok(())
+    }
+
+    pub async fn close(files: &Files, fd: i32) -> Result<(), Error> {
+        files.close(fd).await
     }
 );

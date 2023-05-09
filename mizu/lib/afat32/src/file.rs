@@ -158,6 +158,13 @@ impl<T: TimeProvider> FatFile<T> {
             }
         }
     }
+
+    async fn flush(&self) -> Result<(), Error> {
+        if let Some(ref entry) = self.entry {
+            entry.lock().await.flush(&**self.fs.fat.device()).await?;
+        }
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -300,10 +307,7 @@ impl<T: TimeProvider> Io for FatFile<T> {
     }
 
     async fn flush(&self) -> Result<(), Error> {
-        if let Some(ref entry) = self.entry {
-            entry.lock().await.flush(&**self.fs.fat.device()).await?;
-        }
-        Ok(())
+        self.flush().await
     }
 }
 

@@ -6,8 +6,8 @@ use futures_util::{stream, Stream, StreamExt};
 use ksc_core::Error::{self, EEXIST, EINVAL, EISDIR, ENOENT, ENOSYS, ENOTDIR, ENOTEMPTY};
 use umifs::{
     path::Path,
-    traits::{Directory, DirectoryMut, Entry, IoExt, ToIo},
-    types::{FileType, Metadata, OpenOptions, Permissions},
+    traits::{Directory, DirectoryMut, Entry, Io, IoExt},
+    types::{FileType, IoSlice, IoSliceMut, Metadata, OpenOptions, Permissions, SeekFrom},
 };
 
 use crate::{
@@ -393,7 +393,24 @@ impl<T: TimeProvider> FatDir<T> {
     }
 }
 
-impl<T: TimeProvider> ToIo for FatDir<T> {}
+#[async_trait]
+impl<T: TimeProvider> Io for FatDir<T> {
+    async fn seek(&self, _: SeekFrom) -> Result<usize, Error> {
+        Err(EISDIR)
+    }
+
+    async fn read_at(&self, _: usize, _: &mut [IoSliceMut]) -> Result<usize, Error> {
+        Err(EISDIR)
+    }
+
+    async fn write_at(&self, _: usize, _: &mut [IoSlice]) -> Result<usize, Error> {
+        Err(EISDIR)
+    }
+
+    async fn flush(&self) -> Result<(), Error> {
+        self.file.flush().await
+    }
+}
 
 #[async_trait]
 impl<T: TimeProvider> Entry for FatDir<T> {
@@ -430,6 +447,14 @@ impl<T: TimeProvider> Entry for FatDir<T> {
 
     fn metadata(&self) -> Metadata {
         todo!()
+    }
+
+    fn to_dir(self: Arc<Self>) -> Option<Arc<dyn Directory>> {
+        Some(self as _)
+    }
+
+    fn to_dir_mut(self: Arc<Self>) -> Option<Arc<dyn DirectoryMut>> {
+        Some(self as _)
     }
 }
 
