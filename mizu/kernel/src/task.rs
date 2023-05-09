@@ -79,6 +79,15 @@ impl Task {
         self.event.clone()
     }
 
+    pub async fn wait(&self) -> i32 {
+        let event = self.event();
+        loop {
+            if let Ok(TaskEvent::Exited(code)) = event.recv().await {
+                break code;
+            }
+        }
+    }
+
     #[async_handler]
     pub async fn exit(_: &mut TaskState, cx: UserCx<'_, fn(i32)>) -> ScRet {
         Break(cx.args())

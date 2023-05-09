@@ -178,14 +178,35 @@ pub async fn write(
     ScRet::Continue(None)
 }
 
+macro_rules! fssc {
+    (
+        $(pub async fn $name:ident($files:ident: &Files, $($arg_name:ident : $arg_ty:ty),* $(,)?) -> $out:ty $body:block)*
+    ) => {
+        $(
+            #[async_handler]
+            pub async fn $name(
+                ts: &mut TaskState,
+                cx: UserCx<'_, fn($($arg_ty),*) -> $out>,
+            ) -> ScRet {
+                #[allow(unused_mut, unused_parens)]
+                async fn inner(
+                    $files: &Files,
+                    ($(mut $arg_name),*): ($($arg_ty),*),
+                ) -> $out $body
+
+                let ret = inner(&ts.task.files, cx.args()).await;
+                cx.ret(ret);
+
+                ScRet::Continue(None)
+            }
+        )*
+    };
+}
+
 const MAX_PATH_LEN: usize = 256;
 
-#[async_handler]
-pub async fn chdir(
-    ts: &mut TaskState,
-    cx: UserCx<'_, fn(UserPtr<u8, In>) -> Result<(), Error>>,
-) -> ScRet {
-    async fn chdir_inner(files: &Files, path: UserPtr<u8, In>) -> Result<(), Error> {
+fssc!(
+    pub async fn chdir(files: &Files, path: UserPtr<u8, In>) -> Result<(), Error> {
         let mut buf = [0; MAX_PATH_LEN];
         let path = path.read_path(&mut buf)?;
 
@@ -195,21 +216,7 @@ pub async fn chdir(
         Ok(())
     }
 
-    let ret = chdir_inner(&ts.task.files, cx.args()).await;
-    cx.ret(ret);
-
-    ScRet::Continue(None)
-}
-
-#[async_handler]
-pub async fn getcwd(
-    ts: &mut TaskState,
-    cx: UserCx<'_, fn(UserPtr<u8, Out>, usize) -> Result<(), Error>>,
-) -> ScRet {
-    async fn getcwd_inner(
-        files: &Files,
-        (mut buf, len): (UserPtr<u8, Out>, usize),
-    ) -> Result<(), Error> {
+    pub async fn getcwd(files: &Files, buf: UserPtr<u8, Out>, len: usize) -> Result<(), Error> {
         let cwd = files.cwd();
         let path = cwd.as_str().as_bytes();
         if path.len() >= len {
@@ -219,20 +226,12 @@ pub async fn getcwd(
             Ok(())
         }
     }
-    let ret = getcwd_inner(&ts.task.files, cx.args()).await;
-    cx.ret(ret);
 
-    ScRet::Continue(None)
-}
-
-#[async_handler]
-pub async fn mkdirat(
-    ts: &mut TaskState,
-    cx: UserCx<'_, fn(i32, UserPtr<u8, In>, u32) -> Result<i32, Error>>,
-) -> ScRet {
-    async fn mkdir_inner(
+    pub async fn mkdirat(
         files: &Files,
-        (fd, path, perm): (i32, UserPtr<u8, In>, u32),
+        fd: i32,
+        path: UserPtr<u8, In>,
+        perm: u32,
     ) -> Result<i32, Error> {
         let mut buf = [0; MAX_PATH_LEN];
         let path = path.read_path(&mut buf)?;
@@ -252,9 +251,4 @@ pub async fn mkdirat(
         }
         files.open(entry).await.ok_or(ENOSPC)
     }
-
-    let ret = mkdir_inner(&ts.task.files, cx.args()).await;
-    cx.ret(ret);
-
-    ScRet::Continue(None)
-}
+);

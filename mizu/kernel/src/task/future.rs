@@ -9,7 +9,7 @@ use core::{
 use arsc_rs::Arsc;
 use co_trap::{FastResult, TrapFrame};
 use kmem::Virt;
-use ksc::ENOSYS;
+use ksc::{Scn, ENOSYS};
 use ktime::Instant;
 use pin_project::pin_project;
 use riscv::register::scause::{Exception, Scause, Trap};
@@ -94,7 +94,9 @@ async fn handle_scause(scause: Scause, ts: &mut TaskState, tf: &mut TrapFrame) -
             Exception::UserEnvCall => {
                 let res = async {
                     let scn = tf.scn().ok_or(ENOSYS)?;
-                    log::info!("user syscall {scn:?}");
+                    if scn != Scn::WRITE {
+                        log::info!("user syscall {scn:?}");
+                    }
                     crate::syscall::SYSCALL
                         .handle(scn, (ts, tf))
                         .await
