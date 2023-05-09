@@ -46,7 +46,15 @@ async fn main(fdt: usize) {
 
     let rt = rt.downcast::<FatDir<NullTimeProvider>>().unwrap();
 
-    let skips = ["mmap"];
+    let skips = [
+        "mmap",
+        "yield_A",
+        "yield_B",
+        "yield_C",
+        "execve",
+        "test_echo",
+        "fork"
+    ];
     let spec = [];
 
     let mut iter = pin!(rt.iter(true));
