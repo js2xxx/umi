@@ -16,6 +16,9 @@ pub type ScRet = ControlFlow<i32, Option<SigInfo>>;
 // TODO: Add handlers to the static.
 pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
     AHandlers::new()
+        // Memory management
+        .map(BRK, crate::mem::brk)
+        // Tasks
         .map(EXIT, Task::exit)
         // FS operations
         .map(READ, fd::read)

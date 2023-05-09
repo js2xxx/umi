@@ -43,8 +43,9 @@ const DEFAULT_STACK_ATTR: Attr = Attr::USER_ACCESS
     .union(Attr::WRITABLE);
 
 pub struct TaskState {
-    task: Arc<Task>,
+    pub(crate) task: Arc<Task>,
     sig_mask: SigSet,
+    pub(crate) brk: usize,
 }
 
 #[derive(Clone)]
@@ -77,6 +78,10 @@ impl Task {
 
     pub fn event(&self) -> Broadcast<TaskEvent> {
         self.event.clone()
+    }
+
+    pub fn virt(&self) -> Pin<&Virt> {
+        self.virt.as_ref()
     }
 
     pub async fn wait(&self) -> i32 {
@@ -236,6 +241,7 @@ impl InitTask {
         let ts = TaskState {
             task: task.clone(),
             sig_mask: SigSet::EMPTY,
+            brk: 0,
         };
 
         let fut = TaskFut::new(task.virt.clone(), user_loop(ts, self.tf));

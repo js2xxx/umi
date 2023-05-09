@@ -203,7 +203,7 @@ macro_rules! fssc {
     };
 }
 
-const MAX_PATH_LEN: usize = 256;
+pub const MAX_PATH_LEN: usize = 256;
 
 fssc!(
     pub async fn chdir(files: &Files, path: UserPtr<u8, In>) -> Result<(), Error> {

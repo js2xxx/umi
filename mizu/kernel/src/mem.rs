@@ -1,4 +1,4 @@
-use alloc::vec::Vec;
+use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use core::{
     ffi::CStr,
     marker::PhantomData,
@@ -8,21 +8,61 @@ use core::{
 };
 
 use arsc_rs::Arsc;
-use kmem::Virt;
+use co_trap::UserCx;
+use kmem::{Phys, Virt};
 use ksc::{
+    async_handler,
     Error::{self, EFAULT},
     RawReg,
 };
-use rv39_paging::{LAddr, PAddr, CANONICAL_PREFIX, ID_OFFSET};
+use rv39_paging::{
+    Attr, LAddr, PAddr, CANONICAL_PREFIX, ID_OFFSET, PAGE_MASK, PAGE_SHIFT, PAGE_SIZE,
+};
 use scoped_tls::scoped_thread_local;
 use umifs::path::Path;
 
-use crate::rxx::KERNEL_PAGES;
+use crate::{rxx::KERNEL_PAGES, syscall::ScRet, task::TaskState};
 
 const USER_RANGE: Range<usize> = 0x1000..((!CANONICAL_PREFIX) + 1);
 
 pub fn new_virt() -> Pin<Arsc<Virt>> {
     Virt::new(USER_RANGE.start.into()..USER_RANGE.end.into(), KERNEL_PAGES)
+}
+
+#[async_handler]
+pub async fn brk(ts: &mut TaskState, cx: UserCx<'_, fn(usize) -> Result<usize, Error>>) -> ScRet {
+    async fn inner(virt: Pin<&Virt>, brk: &mut usize, addr: usize) -> Result<(), Error> {
+        if addr == 0 {
+            if (*brk) == 0 {
+                let laddr = virt
+                    .map(None, Arc::new(Phys::new_anon()), 0, 1, Attr::USER_RW)
+                    .await?;
+                *brk = laddr.val();
+            }
+        } else {
+            let old_page = *brk & PAGE_MASK;
+            let new_page = addr & PAGE_MASK;
+            let count = (new_page - old_page) >> PAGE_SHIFT;
+            if count > 0 {
+                virt.map(
+                    Some((old_page + PAGE_SIZE).into()),
+                    Arc::new(Phys::new_anon()),
+                    0,
+                    count,
+                    Attr::USER_RW,
+                )
+                .await?;
+            }
+            *brk = addr;
+        }
+        Ok(())
+    }
+
+    let addr = cx.args();
+    let res = inner(ts.task.virt(), &mut ts.brk, addr).await;
+    cx.ret(res.map(|_| ts.brk));
+
+    ScRet::Continue(None)
 }
 
 pub trait InPtr {}
@@ -92,9 +132,14 @@ impl<T: Copy, D: InPtr> UserPtr<T, D> {
 }
 
 impl<D: InPtr> UserPtr<u8, D> {
-    pub fn read_path<'a>(&self, buf: &'a mut [u8]) -> Result<&'a Path, Error> {
+    pub fn read_str<'a>(&self, buf: &'a mut [u8]) -> Result<&'a str, Error> {
         self.read_slice(buf)?;
-        let path = CStr::from_bytes_until_nul(buf)?.to_str()?;
+        let ret = CStr::from_bytes_until_nul(buf)?.to_str()?;
+        Ok(ret)
+    }
+
+    pub fn read_path<'a>(&self, buf: &'a mut [u8]) -> Result<&'a Path, Error> {
+        let path = self.read_str(buf)?;
         let path = path.strip_prefix('/').unwrap_or(path);
         let path = path.strip_prefix('.').unwrap_or(path);
         Ok(Path::new(path))
