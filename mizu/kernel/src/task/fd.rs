@@ -1,5 +1,9 @@
 use alloc::{boxed::Box, sync::Arc};
-use core::sync::atomic::{AtomicI32, Ordering::SeqCst};
+use core::{
+    alloc::Layout,
+    mem::{self, MaybeUninit},
+    sync::atomic::{AtomicI32, Ordering::SeqCst},
+};
 
 use co_trap::UserCx;
 use futures_util::future::join_all;
@@ -13,7 +17,7 @@ use rand_riscv::RandomState;
 use umifs::{
     path::{Path, PathBuf},
     traits::Entry,
-    types::{OpenOptions, Permissions},
+    types::{FileType, OpenOptions, Permissions},
 };
 
 use super::TaskState;
@@ -278,6 +282,57 @@ fssc!(
             return Err(EEXIST);
         }
         files.open(entry).await
+    }
+
+    pub async fn getdents64(
+        files: &Files,
+        fd: i32,
+        ptr: UserPtr<u8, Out>,
+        len: usize,
+    ) -> Result<usize, Error> {
+        #[repr(C, packed)]
+        struct D {
+            inode: u64,
+            offset: u64,
+            reclen: u16,
+            ty: FileType,
+        }
+        let entry = files.get(fd).await?;
+        let dir = entry.to_dir().ok_or(ENOTDIR)?;
+
+        let mut d = dir.next_dirent(None).await?;
+        let mut count = 0;
+        loop {
+            let Some(entry) = d else { break Ok(count) };
+
+            let layout = Layout::new::<D>()
+                .extend_packed(Layout::for_value(&*entry.name))?
+                .extend_packed(Layout::new::<u8>())?
+                .pad_to_align();
+            if layout.size() > len {
+                break Ok(count);
+            }
+            let Ok(reclen) = layout.size().try_into() else {
+                break Ok(count);
+            };
+
+            let mut out = MaybeUninit::<D>::uninit();
+            out.write(D {
+                inode: rand_riscv::seed64(),
+                offset: entry.metadata.offset,
+                reclen,
+                ty: entry.metadata.ty,
+            });
+            ptr.write_slice(unsafe { mem::transmute(out.as_bytes()) }, false)?;
+            ptr.advance(mem::size_of::<D>());
+            ptr.write_slice(entry.name.as_bytes(), true)?;
+
+            ptr.advance(layout.size() - mem::size_of::<D>());
+            len -= layout.size();
+
+            d = dir.next_dirent(Some(&entry)).await?;
+            count += 1;
+        }
     }
 
     pub async fn unlinkat(

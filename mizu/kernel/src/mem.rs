@@ -86,6 +86,17 @@ impl<T: Copy, D> UserPtr<T, D> {
     pub fn addr(&self) -> usize {
         self.addr
     }
+
+    pub fn advance(&mut self, offset: usize) {
+        self.addr += offset
+    }
+
+    pub fn cast<U: Copy>(self) -> UserPtr<U, D> {
+        UserPtr {
+            addr: self.addr,
+            _marker: PhantomData,
+        }
+    }
 }
 
 impl<T: Copy, D> RawReg for UserPtr<T, D> {

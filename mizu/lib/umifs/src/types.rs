@@ -51,16 +51,17 @@ bitflags! {
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    pub struct FileType: u32 {
-        const DIR  = 0o0040000;
-        const CHR  = 0o0020000;
-        const BLK  = 0o0060000;
-        const REG  = 0o0100000;
+    pub struct FileType: u8 {
+        const UNKNOWN =	0;
+        const FIFO = 1;
+        const CHR = 2;
+        const DIR = 4;
+        const BLK = 6;
+        const REG = 8;
         const FILE = Self::REG.bits();
-        const IFO  = 0o0010000;
-        const LNK  = 0o0120000;
-        const SOCK = 0o0140000;
-        const MT   = 0o0170000;
+        const LNK = 10;
+        const SOCK = 12;
+        const WHT = 14;
     }
 }
 

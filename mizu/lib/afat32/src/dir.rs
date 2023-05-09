@@ -420,6 +420,13 @@ impl<T: TimeProvider> Entry for FatDir<T> {
         options: OpenOptions,
         _perm: Permissions,
     ) -> Result<(Arc<dyn Entry>, bool), Error> {
+        if path == "" || path == "." {
+            return if options.contains(OpenOptions::CREAT | OpenOptions::EXCL) {
+                Err(EEXIST)
+            } else {
+                Ok((self, false))
+            };
+        }
         Ok(
             match (
                 options.contains(OpenOptions::CREAT),

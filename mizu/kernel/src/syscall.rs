@@ -29,6 +29,7 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         .map(DUP3, fd::dup3)
         .map(OPENAT, fd::openat)
         .map(MKDIRAT, fd::mkdirat)
+        .map(GETDENTS64, fd::getdents64)
         .map(UNLINKAT, fd::unlinkat)
         .map(CLOSE, fd::close)
 });
