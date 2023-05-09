@@ -8,12 +8,14 @@ use afat32::NullTimeProvider;
 use arsc_rs::Arsc;
 use crossbeam_queue::ArrayQueue;
 use kmem::Phys;
+use ksc::Error::{self, ENOENT};
 use ksync::{Sender, TryRecvError};
 use ktime::sleep;
 use spin::RwLock;
 use umifs::{
     path::{Path, PathBuf},
-    traits::FileSystem,
+    traits::{Entry, FileSystem},
+    types::{FileType, OpenOptions, Permissions},
 };
 
 use crate::{dev::blocks, executor};
@@ -63,6 +65,36 @@ pub fn get(path: &Path) -> Option<(Arsc<dyn FileSystem>, &Path)> {
         Ok(path) => Some((handle.fs.clone(), path)),
         Err(_) => None,
     })
+}
+
+#[inline]
+pub async fn open(
+    path: &Path,
+    expect_ty: Option<FileType>,
+    options: OpenOptions,
+    perm: Permissions,
+) -> Result<(Arc<dyn Entry>, bool), Error> {
+    let (fs, path) = get(path).ok_or(ENOENT)?;
+    fs.root_dir()
+        .await?
+        .open(path, expect_ty, options, perm)
+        .await
+}
+
+#[inline]
+pub async fn open_dir(
+    path: &Path,
+    options: OpenOptions,
+    perm: Permissions,
+) -> Result<Arc<dyn Entry>, Error> {
+    let (entry, _) = open(
+        path,
+        Some(FileType::DIR),
+        options | OpenOptions::DIRECTORY,
+        perm,
+    )
+    .await?;
+    Ok(entry)
 }
 
 pub async fn fs_init() {

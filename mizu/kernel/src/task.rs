@@ -184,7 +184,7 @@ impl InitTask {
             main: Weak::new(),
             virt,
             tf,
-            files: Arsc::new(Files::new(fd::default_stdio().await?)),
+            files: Arsc::new(Files::new(fd::default_stdio().await?, "".into())),
         })
     }
 

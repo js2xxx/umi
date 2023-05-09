@@ -77,6 +77,20 @@ impl Permissions {
         }
         ret
     }
+
+    pub fn me(readable: bool, writable: bool, executable: bool) -> Self {
+        let mut ret = Permissions::empty();
+        if readable {
+            ret |= Permissions::SELF_R;
+        }
+        if writable {
+            ret |= Permissions::SELF_W;
+        }
+        if executable {
+            ret |= Permissions::SELF_X;
+        }
+        ret
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

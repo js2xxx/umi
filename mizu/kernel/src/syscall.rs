@@ -19,4 +19,7 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         .map(EXIT, Task::exit)
         .map(READ, fd::read)
         .map(WRITE, fd::write)
+        .map(CHDIR, fd::chdir)
+        .map(GETCWD, fd::getcwd)
+        .map(MKDIRAT, fd::mkdirat)
 });

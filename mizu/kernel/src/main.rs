@@ -23,25 +23,25 @@ extern crate klog;
 extern crate alloc;
 
 use kmem::Phys;
-use umifs::types::FileType;
+use umifs::types::{FileType, Permissions};
 
 pub use self::rxx::executor;
 use crate::task::InitTask;
 
 async fn main(fdt: usize) {
-    println!("Hello from UMI");
+    println!("Hello from UMI ^_^");
 
     unsafe { dev::init(fdt as _).expect("failed to initialize devices") };
     fs::fs_init().await;
 
-    let (fs, path) = fs::get("write".as_ref()).unwrap();
+    let (fs, path) = fs::get("chdir".as_ref()).unwrap();
     let rt = fs.root_dir().await.unwrap();
     let (entry, _) = rt
         .open(
             path,
             Some(FileType::FILE),
             Default::default(),
-            Default::default(),
+            Permissions::me(true, true, true),
         )
         .await
         .unwrap();

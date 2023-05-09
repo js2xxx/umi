@@ -1,5 +1,6 @@
 use alloc::vec::Vec;
 use core::{
+    ffi::CStr,
     marker::PhantomData,
     mem::{self, MaybeUninit},
     ops::Range,
@@ -14,6 +15,7 @@ use ksc::{
 };
 use rv39_paging::{LAddr, PAddr, CANONICAL_PREFIX, ID_OFFSET};
 use scoped_tls::scoped_thread_local;
+use umifs::path::Path;
 
 use crate::rxx::KERNEL_PAGES;
 
@@ -65,8 +67,29 @@ impl<T: Copy, D: InPtr> UserPtr<T, D> {
         }
     }
 
+    pub fn read_slice(&self, data: &mut [T]) -> Result<(), Error> {
+        if !(self.addr as *const T).is_aligned() {
+            return Err(EFAULT);
+        }
+        unsafe {
+            checked_copy(
+                self.addr as _,
+                data.as_mut_ptr().cast(),
+                mem::size_of_val(data),
+            )
+        }
+    }
+
     pub fn reborrow(&self) -> &UserPtr<T, In> {
         unsafe { mem::transmute(self) }
+    }
+}
+
+impl<D: InPtr> UserPtr<u8, D> {
+    pub fn read_path<'a>(&self, buf: &'a mut [u8]) -> Result<&'a Path, Error> {
+        self.read_slice(buf)?;
+        let path = CStr::from_bytes_until_nul(buf)?.to_str()?;
+        Ok(Path::new(path))
     }
 }
 
@@ -80,7 +103,20 @@ impl<T: Copy, D: OutPtr> UserPtr<T, D> {
                 (&data as *const T).cast(),
                 self.addr as _,
                 mem::size_of::<T>(),
-            )?;
+            )
+        }
+    }
+
+    pub fn write_slice(&mut self, data: &[T], add_tail_zero: bool) -> Result<(), Error> {
+        if !(self.addr as *const T).is_aligned() {
+            return Err(EFAULT);
+        }
+        unsafe {
+            let count = mem::size_of_val(data);
+            checked_copy(data.as_ptr().cast(), self.addr as _, count)?;
+            if add_tail_zero {
+                checked_zero(0, (self.addr + count) as _, mem::size_of::<T>())?;
+            }
             Ok(())
         }
     }
@@ -130,12 +166,12 @@ impl UserBuffer {
 unsafe fn checked_copy(src: *const u8, dst: *const u8, count: usize) -> Result<(), Error> {
     extern "C" {
         fn _checked_copy(src: *const u8, dst: *const u8, count: usize) -> usize;
-        fn _checked_copy_fault();
+        fn _checked_ua_fault();
     }
     if src.is_null() || dst.is_null() {
         return Err(EFAULT);
     }
-    let ret = COPY_FAULT.set(&(_checked_copy_fault as _), || unsafe {
+    let ret = UA_FAULT.set(&(_checked_ua_fault as _), || unsafe {
         _checked_copy(src, dst, count)
     });
     if ret == 0 {
@@ -146,4 +182,23 @@ unsafe fn checked_copy(src: *const u8, dst: *const u8, count: usize) -> Result<(
     }
 }
 
-scoped_thread_local!(pub static COPY_FAULT: usize);
+unsafe fn checked_zero(src: u8, dst: *const u8, count: usize) -> Result<(), Error> {
+    extern "C" {
+        fn _checked_zero(src: u8, dst: *const u8, count: usize) -> usize;
+        fn _checked_ua_fault();
+    }
+    if dst.is_null() {
+        return Err(EFAULT);
+    }
+    let ret = UA_FAULT.set(&(_checked_ua_fault as _), || unsafe {
+        _checked_zero(src, dst, count)
+    });
+    if ret == 0 {
+        Ok(())
+    } else {
+        log::info!("checked copy fault at {ret:?}");
+        Err(EFAULT)
+    }
+}
+
+scoped_thread_local!(pub static UA_FAULT: usize);
