@@ -32,10 +32,17 @@ pub fn new_virt() -> Pin<Arsc<Virt>> {
 #[async_handler]
 pub async fn brk(ts: &mut TaskState, cx: UserCx<'_, fn(usize) -> Result<usize, Error>>) -> ScRet {
     async fn inner(virt: Pin<&Virt>, brk: &mut usize, addr: usize) -> Result<(), Error> {
+        const BRK_START: usize = 0x1234567000;
         if addr == 0 {
             if (*brk) == 0 {
                 let laddr = virt
-                    .map(None, Arc::new(Phys::new_anon()), 0, 1, Attr::USER_RW)
+                    .map(
+                        Some(BRK_START.into()),
+                        Arc::new(Phys::new_anon()),
+                        0,
+                        1,
+                        Attr::USER_RW,
+                    )
                     .await?;
                 *brk = laddr.val();
             }
