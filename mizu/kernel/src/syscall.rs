@@ -17,9 +17,11 @@ pub type ScRet = ControlFlow<i32, Option<SigInfo>>;
 pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
     AHandlers::new()
         .map(EXIT, Task::exit)
+        // FS operations
         .map(READ, fd::read)
         .map(WRITE, fd::write)
         .map(CHDIR, fd::chdir)
         .map(GETCWD, fd::getcwd)
+        .map(OPENAT, fd::openat)
         .map(MKDIRAT, fd::mkdirat)
 });

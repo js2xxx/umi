@@ -40,14 +40,10 @@ impl Entry for Null {
     async fn open(
         self: Arc<Self>,
         path: &Path,
-        expect_ty: Option<FileType>,
         options: OpenOptions,
         perm: Permissions,
     ) -> Result<(Arc<dyn Entry>, bool), Error> {
-        if !path.as_str().is_empty() {
-            return Err(ENOTDIR);
-        }
-        if !matches!(expect_ty, None | Some(FileType::FILE)) {
+        if !path.as_str().is_empty() || options.contains(OpenOptions::DIRECTORY) {
             return Err(ENOTDIR);
         }
         if options.contains(OpenOptions::CREAT) {
@@ -104,14 +100,10 @@ impl Entry for Zero {
     async fn open(
         self: Arc<Self>,
         path: &Path,
-        expect_ty: Option<FileType>,
         options: OpenOptions,
         perm: Permissions,
     ) -> Result<(Arc<dyn Entry>, bool), Error> {
-        if !path.as_str().is_empty() {
-            return Err(ENOTDIR);
-        }
-        if !matches!(expect_ty, None | Some(FileType::FILE)) {
+        if !path.as_str().is_empty() || options.contains(OpenOptions::DIRECTORY) {
             return Err(ENOTDIR);
         }
         if options.contains(OpenOptions::CREAT) {

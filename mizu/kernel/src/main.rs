@@ -45,6 +45,7 @@ async fn main(fdt: usize) {
     let rt = rt.downcast::<FatDir<NullTimeProvider>>().unwrap();
 
     let skips = ["mmap"];
+    let spec = [];
 
     let mut iter = pin!(rt.iter(true));
     while let Some(entry) = iter.next().await {
@@ -58,11 +59,14 @@ async fn main(fdt: usize) {
             ),
             _ => continue,
         };
-        log::info!("Found test case {case:?}");
-        if skips.contains(&&*case) {
-            log::info!("Skipping");
+        if !spec.is_empty() && !spec.contains(&&*case) {
             continue;
         }
+        if skips.contains(&&*case) {
+            log::info!("Skipping test case {case:?}");
+            continue;
+        }
+        log::info!("Found test case {case:?}");
 
         let task = InitTask::from_elf(Phys::new(Arc::new(file), 0, true), Default::default())
             .await

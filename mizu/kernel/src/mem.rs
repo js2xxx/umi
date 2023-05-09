@@ -89,6 +89,8 @@ impl<D: InPtr> UserPtr<u8, D> {
     pub fn read_path<'a>(&self, buf: &'a mut [u8]) -> Result<&'a Path, Error> {
         self.read_slice(buf)?;
         let path = CStr::from_bytes_until_nul(buf)?.to_str()?;
+        let path = path.strip_prefix('/').unwrap_or(path);
+        let path = path.strip_prefix('.').unwrap_or(path);
         Ok(Path::new(path))
     }
 }

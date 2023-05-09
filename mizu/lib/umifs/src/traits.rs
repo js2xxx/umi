@@ -7,7 +7,7 @@ pub use umio::{IntoAny, IntoAnyExt, Io, IoExt, ToIo};
 
 use crate::{
     path::Path,
-    types::{DirEntry, FileType, Metadata, OpenOptions, Permissions},
+    types::{DirEntry, Metadata, OpenOptions, Permissions},
 };
 
 #[async_trait]
@@ -22,7 +22,6 @@ pub trait Entry: IntoAny + Send + ToIo + Sync + 'static {
     async fn open(
         self: Arc<Self>,
         path: &Path,
-        expect_ty: Option<FileType>,
         options: OpenOptions,
         perm: Permissions,
     ) -> Result<(Arc<dyn Entry>, bool), Error>;

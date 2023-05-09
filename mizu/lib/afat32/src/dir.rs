@@ -64,6 +64,7 @@ impl<T: TimeProvider> FatDir<T> {
             }
             if self.should_skip_entry(&raw_entry, skip_volume) {
                 lfn_builder.clear();
+                offset += DIR_ENTRY_SIZE as usize;
                 begin_offset = offset;
                 continue;
             }
@@ -399,37 +400,32 @@ impl<T: TimeProvider> Entry for FatDir<T> {
     async fn open(
         self: Arc<Self>,
         path: &Path,
-        expect_ty: Option<FileType>,
         options: OpenOptions,
         _perm: Permissions,
     ) -> Result<(Arc<dyn Entry>, bool), Error> {
-        // TODO: Check open options & permissions
-        match expect_ty {
-            None => {
-                if options.contains(OpenOptions::CREAT) {
-                    return Err(EINVAL);
+        Ok(
+            match (
+                options.contains(OpenOptions::CREAT),
+                options.contains(OpenOptions::DIRECTORY),
+            ) {
+                (false, false) => (Arc::new(self.open_file(path).await?), false),
+                (false, true) => (Arc::new(self.open_dir(path).await?), false),
+                (true, false) => {
+                    let (file, created) = self.create_file(path).await?;
+                    if !created && options.contains(OpenOptions::EXCL) {
+                        return Err(EEXIST);
+                    }
+                    (Arc::new(file), created)
                 }
-                let dirent = (*self).open(path).await?;
-                Ok(if dirent.is_dir() {
-                    (Arc::new(dirent.to_dir().await?), false)
-                } else {
-                    (Arc::new(dirent.to_file().await?), false)
-                })
-            }
-            Some(FileType::FILE) => Ok(if options.contains(OpenOptions::CREAT) {
-                let (file, created) = self.create_file(path).await?;
-                (Arc::new(file), created)
-            } else {
-                (Arc::new(self.open_file(path).await?), false)
-            }),
-            Some(FileType::DIR) => Ok(if options.contains(OpenOptions::CREAT) {
-                let (file, created) = self.create_dir(path).await?;
-                (Arc::new(file), created)
-            } else {
-                (Arc::new(self.open_dir(path).await?), false)
-            }),
-            Some(_) => Err(ENOSYS),
-        }
+                (true, true) => {
+                    let (dir, created) = self.create_dir(path).await?;
+                    if !created && options.contains(OpenOptions::EXCL) {
+                        return Err(EEXIST);
+                    }
+                    (Arc::new(dir), created)
+                }
+            },
+        )
     }
 
     fn metadata(&self) -> Metadata {

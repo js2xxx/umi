@@ -15,7 +15,7 @@ use spin::RwLock;
 use umifs::{
     path::{Path, PathBuf},
     traits::{Entry, FileSystem},
-    types::{FileType, OpenOptions, Permissions},
+    types::{OpenOptions, Permissions},
 };
 
 use crate::{dev::blocks, executor};
@@ -70,15 +70,16 @@ pub fn get(path: &Path) -> Option<(Arsc<dyn FileSystem>, &Path)> {
 #[inline]
 pub async fn open(
     path: &Path,
-    expect_ty: Option<FileType>,
     options: OpenOptions,
     perm: Permissions,
 ) -> Result<(Arc<dyn Entry>, bool), Error> {
     let (fs, path) = get(path).ok_or(ENOENT)?;
-    fs.root_dir()
-        .await?
-        .open(path, expect_ty, options, perm)
-        .await
+    let root_dir = fs.root_dir().await?;
+    if path == "" || path == "." {
+        Ok((root_dir, false))
+    } else {
+        root_dir.open(path, options, perm).await
+    }
 }
 
 #[inline]
@@ -87,13 +88,7 @@ pub async fn open_dir(
     options: OpenOptions,
     perm: Permissions,
 ) -> Result<Arc<dyn Entry>, Error> {
-    let (entry, _) = open(
-        path,
-        Some(FileType::DIR),
-        options | OpenOptions::DIRECTORY,
-        perm,
-    )
-    .await?;
+    let (entry, _) = open(path, options | OpenOptions::DIRECTORY, perm).await?;
     Ok(entry)
 }
 

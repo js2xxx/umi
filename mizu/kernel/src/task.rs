@@ -89,7 +89,8 @@ impl Task {
     }
 
     #[async_handler]
-    pub async fn exit(_: &mut TaskState, cx: UserCx<'_, fn(i32)>) -> ScRet {
+    pub async fn exit(ts: &mut TaskState, cx: UserCx<'_, fn(i32)>) -> ScRet {
+        let _ = ts.task.files.flush_all().await;
         Break(cx.args())
     }
 }

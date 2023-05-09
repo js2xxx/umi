@@ -35,22 +35,21 @@ impl Entry for DevRoot {
     async fn open(
         self: Arc<Self>,
         path: &Path,
-        expect_ty: Option<FileType>,
         options: OpenOptions,
         perm: Permissions,
     ) -> Result<(Arc<dyn Entry>, bool), Error> {
         match path.as_str() {
             "null" => {
                 let null = Arc::new(Null);
-                null.open(Path::new(""), expect_ty, options, perm).await
+                null.open(Path::new(""), options, perm).await
             }
             "zero" => {
                 let zero = Arc::new(Zero);
-                zero.open(Path::new(""), expect_ty, options, perm).await
+                zero.open(Path::new(""), options, perm).await
             }
             "serial" => {
                 let serial = Arc::new(Serial::default());
-                serial.open(Path::new(""), expect_ty, options, perm).await
+                serial.open(Path::new(""), options, perm).await
             }
             _ => {
                 let (dir, next) = {
@@ -60,7 +59,7 @@ impl Entry for DevRoot {
                 match dir {
                     "block" => {
                         let dev_blocks = Arc::new(DevBlocks);
-                        dev_blocks.open(next, expect_ty, options, perm).await
+                        dev_blocks.open(next, options, perm).await
                     }
                     _ => Err(ENOENT),
                 }
@@ -82,7 +81,6 @@ impl Entry for DevBlocks {
     async fn open(
         self: Arc<Self>,
         path: &Path,
-        _expect_ty: Option<FileType>,
         _options: OpenOptions,
         _perm: Permissions,
     ) -> Result<(Arc<dyn Entry>, bool), Error> {

@@ -13,7 +13,7 @@ use rand_riscv::RandomState;
 use umifs::{
     path::{Path, PathBuf},
     traits::Entry,
-    types::{FileType, OpenOptions, Permissions},
+    types::{OpenOptions, Permissions},
 };
 
 use super::TaskState;
@@ -41,7 +41,7 @@ impl Files {
                     .collect(),
             ),
             cwd: spin::RwLock::new(cwd),
-            id_alloc: AtomicI32::new(0),
+            id_alloc: AtomicI32::new(3),
         }
     }
 
@@ -71,8 +71,19 @@ impl Files {
         Some(fd)
     }
 
-    pub async fn get(&self, fd: i32) -> Option<Arc<dyn Entry>> {
-        self.map.read().await.get(&fd).cloned()
+    pub async fn get(&self, fd: i32) -> Result<Arc<dyn Entry>, Error> {
+        const CWD: i32 = -100;
+        match fd {
+            CWD => {
+                crate::fs::open_dir(
+                    &self.cwd(),
+                    OpenOptions::RDONLY | OpenOptions::DIRECTORY,
+                    Permissions::SELF_R,
+                )
+                .await
+            }
+            _ => self.map.read().await.get(&fd).cloned().ok_or(EBADF),
+        }
     }
 
     pub async fn close(&self, fd: i32) -> bool {
@@ -102,24 +113,14 @@ pub async fn default_stdio() -> Result<[Arc<dyn Entry>; 3], Error> {
         let (fs, path) = crate::fs::get("dev/serial".as_ref()).unwrap();
         let root_dir = fs.root_dir().await?;
         root_dir
-            .open(
-                path,
-                Some(FileType::FILE),
-                OpenOptions::WRONLY,
-                Permissions::SELF_W,
-            )
+            .open(path, OpenOptions::WRONLY, Permissions::SELF_W)
             .await?
             .0
     };
     let stdout = stderr.clone();
     let stdin = stderr
         .clone()
-        .open(
-            "".as_ref(),
-            Some(FileType::FILE),
-            OpenOptions::RDONLY,
-            Permissions::SELF_R,
-        )
+        .open("".as_ref(), OpenOptions::RDONLY, Permissions::SELF_R)
         .await?
         .0;
     Ok([stderr, stdout, stdin])
@@ -138,7 +139,7 @@ pub async fn read(
 
         let mut bufs = buffer.as_mut_slice(ts.task.virt.as_ref(), len).await?;
 
-        let entry = ts.task.files.get(fd).await.ok_or(EBADF)?;
+        let entry = ts.task.files.get(fd).await?;
         let io = entry.to_io().ok_or(EBADF)?;
 
         io.read(&mut bufs).await
@@ -166,7 +167,7 @@ pub async fn write(
 
         let mut bufs = buffer.as_slice(ts.task.virt.as_ref(), len).await?;
 
-        let entry = ts.task.files.get(fd).await.ok_or(EBADF)?;
+        let entry = ts.task.files.get(fd).await?;
         let io = entry.to_io().ok_or(EBADF)?;
 
         io.write(&mut bufs).await
@@ -210,7 +211,12 @@ fssc!(
         let mut buf = [0; MAX_PATH_LEN];
         let path = path.read_path(&mut buf)?;
 
-        crate::fs::open_dir(path, OpenOptions::RDONLY, Permissions::SELF_R).await?;
+        crate::fs::open_dir(
+            path,
+            OpenOptions::RDONLY | OpenOptions::DIRECTORY,
+            Permissions::SELF_R,
+        )
+        .await?;
 
         files.chdir(path).await;
         Ok(())
@@ -227,6 +233,23 @@ fssc!(
         }
     }
 
+    pub async fn openat(
+        files: &Files,
+        fd: i32,
+        path: UserPtr<u8, In>,
+        options: i32,
+        perm: u32,
+    ) -> Result<i32, Error> {
+        let mut buf = [0; MAX_PATH_LEN];
+        let path = path.read_path(&mut buf)?;
+        let options = OpenOptions::from_bits_truncate(options);
+        let perm = Permissions::from_bits(perm).ok_or(EPERM)?;
+        let base = files.get(fd).await?;
+
+        let (entry, _) = base.open(path, options, perm).await?;
+        files.open(entry).await.ok_or(ENOSPC)
+    }
+
     pub async fn mkdirat(
         files: &Files,
         fd: i32,
@@ -235,16 +258,11 @@ fssc!(
     ) -> Result<i32, Error> {
         let mut buf = [0; MAX_PATH_LEN];
         let path = path.read_path(&mut buf)?;
-
         let perm = Permissions::from_bits(perm).ok_or(EPERM)?;
-        let base = files.get(fd).await.ok_or(EBADF)?;
+        let base = files.get(fd).await?;
+
         let (entry, created) = base
-            .open(
-                path,
-                Some(FileType::DIR),
-                OpenOptions::DIRECTORY | OpenOptions::CREAT,
-                perm,
-            )
+            .open(path, OpenOptions::DIRECTORY | OpenOptions::CREAT, perm)
             .await?;
         if !created {
             return Err(EEXIST);
