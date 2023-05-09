@@ -1,0 +1,13 @@
+error[E0282]: type annotations needed for `[u32; _]`
+ --> $DIR/infer-length.rs:6:13
+  |
+6 |     let _ = concat_arrays!(x, y);
+  |         -   ^^^^^^^^^^^^^^^^^^^^ cannot infer the value of const parameter `INFERRED_LENGTH_OF_CONCATENATED_ARRAY` declared on the function `infer_length_of_concatenated_array`
+  |         |
+  |         consider giving this pattern the explicit type `[u32; _]`, where the type parameter `INFERRED_LENGTH_OF_CONCATENATED_ARRAY` is specified
+  |
+  = note: this error originates in a macro (in Nightly builds, run with -Z macro-backtrace for more info)
+help: consider specifying the const argument
+  |
+6 |     let _ = infer_length_of_concatenated_array::<INFERRED_LENGTH_OF_CONCATENATED_ARRAY>;
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

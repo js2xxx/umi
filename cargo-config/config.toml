@@ -1,3 +1,26 @@
+[source.crates-io]
+replace-with = "vendored-sources"
+
+[source."git+https://github.com/js2xxx/arsc"]
+git = "https://github.com/js2xxx/arsc"
+replace-with = "vendored-sources"
+
+[source."git+https://github.com/js2xxx/event-listener"]
+git = "https://github.com/js2xxx/event-listener"
+replace-with = "vendored-sources"
+
+[source."git+https://github.com/js2xxx/sbi-rt?branch=multitarget"]
+git = "https://github.com/js2xxx/sbi-rt"
+branch = "multitarget"
+replace-with = "vendored-sources"
+
+[source."git+https://github.com/js2xxx/scoped-tls?branch=no_std"]
+git = "https://github.com/js2xxx/scoped-tls"
+branch = "no_std"
+replace-with = "vendored-sources"
+
+[source.vendored-sources]
+directory = "third-party/vendor"
 [profile.dev]
 incremental = true
 

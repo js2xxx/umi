@@ -1,0 +1,38 @@
+on: [push, pull_request]
+
+name: CI
+
+env:
+  MSRV: 1.59
+
+jobs:
+  test:
+    name: Run tests
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v3
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test
+
+  miri:
+    name: Verify tests pass under miri
+    runs-on: ubuntu-latest
+    env:
+      MIRIFLAGS: "-Zmiri-strict-provenance"
+    steps:
+      - uses: actions/checkout@v3
+      - uses: dtolnay/rust-toolchain@nightly
+        with: { components: miri }
+      - run: cargo +nightly miri test
+
+  msrv:
+    name: Run tests on msrv
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: dtolnay/rust-toolchain@master
+        with: { toolchain: "${{ env.MSRV }}" }
+      - run: cargo test

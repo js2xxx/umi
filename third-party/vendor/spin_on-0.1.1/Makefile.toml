@@ -1,0 +1,17 @@
+[tasks.build-arm]
+command = "cargo"
+args = ["build", "--target", "thumbv7m-none-eabi"]
+
+[tasks.readme]
+install_crate = "readme"
+command = "cargo"
+args = ["readme", "-o", "README.md"]
+
+[tasks.all]
+dependencies = [
+    "build-arm",
+    "test",
+    "clippy",
+    "format",
+    "readme",
+]
