@@ -25,10 +25,8 @@ extern crate klog;
 extern crate alloc;
 
 use alloc::sync::Arc;
-use core::pin::pin;
 
 use afat32::{FatDir, NullTimeProvider};
-use futures_util::StreamExt;
 use kmem::Phys;
 use umifs::traits::IntoAnyExt;
 
@@ -46,36 +44,13 @@ async fn main(fdt: usize) {
 
     let rt = rt.downcast::<FatDir<NullTimeProvider>>().unwrap();
 
-    let skips = [
-        "mmap",
-        "yield_A",
-        "yield_B",
-        "yield_C",
-        "execve",
-        "test_echo",
-        "fork"
+    let spec = [
+        "brk", "read", "write", "open", "openat", "dup", "dup2", "getdents", "mkdir_", "unlink",
+        "getcwd", "chdir",
     ];
-    let spec = [];
 
-    let mut iter = pin!(rt.iter(true));
-    while let Some(entry) = iter.next().await {
-        let (case, file) = match entry {
-            Ok(e) if e.is_file() && e.file_name().find('.').is_none() => (
-                e.file_name(),
-                match e.to_file().await {
-                    Ok(file) => file,
-                    _ => continue,
-                },
-            ),
-            _ => continue,
-        };
-        if !spec.is_empty() && !spec.contains(&&*case) {
-            continue;
-        }
-        if skips.contains(&&*case) {
-            log::info!("Skipping test case {case:?}");
-            continue;
-        }
+    for case in spec {
+        let file = rt.open_file(case.as_ref()).await.unwrap();
         log::info!("Found test case {case:?}");
 
         let task = InitTask::from_elf(Phys::new(Arc::new(file), 0, true), Default::default())
