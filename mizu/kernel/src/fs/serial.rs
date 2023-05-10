@@ -87,14 +87,17 @@ impl Entry for Serial {
         Ok((Arc::new(Serial { read, write }), false))
     }
 
-    fn metadata(&self) -> Metadata {
+    async fn metadata(&self) -> Metadata {
         Metadata {
             ty: FileType::FILE | FileType::REG,
             len: 0,
             offset: 0,
+            block_size: 1,
+            block_count: isize::MAX as usize,
             perm: Permissions::all_same(self.read, self.write, false),
             last_access: None,
             last_modified: None,
+            last_created: None,
         }
     }
 }

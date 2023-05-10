@@ -323,6 +323,56 @@ fssc!(
         files.open(entry).await
     }
 
+    pub async fn fstat(
+        virt: Pin<&Virt>,
+        files: &Files,
+        fd: i32,
+        out: UserPtr<u8, Out>,
+    ) -> Result<(), Error> {
+        #[derive(Debug, Clone, Copy, Default)]
+        #[repr(C, packed)]
+        struct Kstat {
+            dev: u64,
+            inode: u64,
+            perm: Permissions,
+            link_count: u32,
+            uid: u32,
+            gid: u32,
+            rdev: u32,
+            __pad: u64,
+            size: usize,
+            blksize: u32,
+            __pad2: u32,
+            blocks: u64,
+            atime_sec: u64,
+            atime_nsec: u64,
+            mtime_sec: u64,
+            mtime_nsec: u64,
+            ctime_sec: u64,
+            ctime_nsec: u64,
+            __pad3: [u32; 2],
+        }
+        let mut out = out.cast::<Kstat>();
+
+        let file = files.get(fd).await?;
+        let metadata = file.metadata().await;
+
+        out.write(
+            virt,
+            Kstat {
+                dev: 1,
+                inode: metadata.offset,
+                perm: metadata.perm,
+                link_count: 1,
+                size: metadata.len,
+                blksize: metadata.block_size as u32,
+                blocks: metadata.block_count as u64,
+                ..Default::default()
+            },
+        )
+        .await
+    }
+
     pub async fn getdents64(
         virt: Pin<&Virt>,
         files: &Files,

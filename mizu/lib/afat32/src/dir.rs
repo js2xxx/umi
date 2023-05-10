@@ -452,7 +452,7 @@ impl<T: TimeProvider> Entry for FatDir<T> {
         )
     }
 
-    fn metadata(&self) -> Metadata {
+    async fn metadata(&self) -> Metadata {
         todo!()
     }
 
@@ -474,6 +474,7 @@ impl<T: TimeProvider> Directory for FatDir<T> {
         let last = last.map(|last| last.metadata.offset);
         let dirent = self.next_dirent(last, true).await?;
 
+        let fm = self.file.metadata().await;
         Ok(dirent.map(|d| umifs::types::DirEntry {
             name: d.file_name(),
             metadata: Metadata {
@@ -485,8 +486,11 @@ impl<T: TimeProvider> Directory for FatDir<T> {
                 len: d.len() as usize,
                 offset: d.entry_pos,
                 perm: Permissions::all(),
+                block_size: fm.block_size,
+                block_count: fm.block_count,
                 last_access: None,
                 last_modified: None,
+                last_created: None,
             },
         }))
     }

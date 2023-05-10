@@ -13,8 +13,8 @@ use umifs::{
     path::Path,
     traits::{Entry, Io},
     types::{
-        advance_slices, ioslice_len, IoSlice, IoSliceMut, Metadata, OpenOptions, Permissions,
-        SeekFrom,
+        advance_slices, ioslice_len, FileType, IoSlice, IoSliceMut, Metadata, OpenOptions,
+        Permissions, SeekFrom,
     },
 };
 
@@ -329,7 +329,17 @@ impl<T: TimeProvider> Entry for FatFile<T> {
         Ok((self, false))
     }
 
-    fn metadata(&self) -> Metadata {
-        todo!()
+    async fn metadata(&self) -> Metadata {
+        Metadata {
+            ty: FileType::FILE,
+            len: self.len.load(SeqCst),
+            offset: self.abs_start_pos().await.unwrap_or(u64::MAX),
+            perm: Permissions::all(),
+            block_size: 1 << self.cluster_shift,
+            block_count: self.clusters.read().await.len(),
+            last_access: None,
+            last_modified: None,
+            last_created: None,
+        }
     }
 }

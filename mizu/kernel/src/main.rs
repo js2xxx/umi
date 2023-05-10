@@ -45,8 +45,25 @@ async fn main(fdt: usize) {
     let rt = rt.downcast::<FatDir<NullTimeProvider>>().unwrap();
 
     let spec = [
-        "brk", "read", "write", "open", "openat", "dup", "dup2", "getdents", "mkdir_", "unlink",
-        "getcwd", "chdir",
+        "brk",
+        "read",
+        "write",
+        "open",
+        "openat",
+        "dup",
+        "dup2",
+        "getdents",
+        "mkdir_",
+        "unlink",
+        "getcwd",
+        "chdir",
+        "close",
+        "fstat",
+        "getpid",
+        "getppid",
+        "gettimeofday",
+        "sleep",
+        "times",
     ];
 
     for case in spec {

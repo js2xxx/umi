@@ -26,7 +26,7 @@ pub trait Entry: IntoAny + Send + ToIo + Sync + 'static {
         perm: Permissions,
     ) -> Result<(Arc<dyn Entry>, bool), Error>;
 
-    fn metadata(&self) -> Metadata;
+    async fn metadata(&self) -> Metadata;
 
     fn to_dir(self: Arc<Self>) -> Option<Arc<dyn Directory>> {
         None

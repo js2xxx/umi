@@ -259,13 +259,8 @@ impl<T: Copy, D: OutPtr> UserPtr<T, D> {
             return Err(EFAULT);
         }
         unsafe {
-            checked_copy(
-                virt,
-                (&data as *const T).into(),
-                self.addr.into(),
-                mem::size_of::<T>(),
-            )
-            .await
+            let src = (&data as *const T).into();
+            checked_copy(virt, src, self.addr.into(), mem::size_of::<T>()).await
         }
     }
 
