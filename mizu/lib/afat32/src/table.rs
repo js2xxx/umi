@@ -185,14 +185,18 @@ impl Fat {
             Bound::Unbounded => allocable_range.end,
         };
 
-        let iter = (start..end).map(|cluster| async move {
-            match self.get(cluster).await {
-                Ok(entry) if entry == FatEntry::Free => Err(Ok(cluster)),
-                Ok(_) => Ok(()),
-                Err(err) => Err(Err(err)),
-            }
-        });
-        match try_join_all(iter).await {
+        // The range may be massive so that `try_join_all` will allocate huge amount of
+        // memory, reaulting in a potential memory exhaustion.
+        let fut = stream::iter(start..end)
+            .map(Ok)
+            .try_for_each(|cluster| async move {
+                match self.get(cluster).await {
+                    Ok(entry) if entry == FatEntry::Free => Err(Ok(cluster)),
+                    Ok(_) => Ok(()),
+                    Err(err) => Err(Err(err)),
+                }
+            });
+        match fut.await {
             Ok(_) => Err(ENOSPC),
             Err(res) => res,
         }

@@ -2,12 +2,14 @@ use alloc::{boxed::Box, sync::Arc};
 use core::{
     alloc::Layout,
     mem::{self, MaybeUninit},
+    pin::Pin,
     sync::atomic::{AtomicI32, Ordering::SeqCst},
 };
 
 use co_trap::UserCx;
 use futures_util::future::join_all;
 use hashbrown::HashMap;
+use kmem::Virt;
 use ksc::{
     async_handler,
     Error::{self, EBADF, EEXIST, ENOSPC, ENOTDIR, EPERM, ERANGE},
@@ -138,7 +140,7 @@ pub async fn read(
         ts: &mut TaskState,
         (fd, mut buffer, len): (i32, UserBuffer, usize),
     ) -> Result<usize, Error> {
-        log::trace!("user read fd = {fd}, buffer addr = {buffer:?}, len = {len}");
+        log::trace!("user read fd = {fd}, buffer = {buffer:?}, len = {len}");
 
         let mut bufs = buffer.as_mut_slice(ts.task.virt.as_ref(), len).await?;
 
@@ -184,7 +186,11 @@ pub async fn write(
 
 macro_rules! fssc {
     (
-        $(pub async fn $name:ident($files:ident: &Files, $($arg_name:ident : $arg_ty:ty),* $(,)?) -> $out:ty $body:block)*
+        $(pub async fn $name:ident(
+            $virt:ident: Pin<&Virt>,
+            $files:ident: &Files,
+            $($arg_name:ident : $arg_ty:ty),* $(,)?
+        ) -> $out:ty $body:block)*
     ) => {
         $(
             #[async_handler]
@@ -194,11 +200,12 @@ macro_rules! fssc {
             ) -> ScRet {
                 #[allow(unused_mut, unused_parens)]
                 async fn inner(
+                    $virt: Pin<&Virt>,
                     $files: &Files,
                     ($(mut $arg_name),*): ($($arg_ty),*),
                 ) -> $out $body
 
-                let ret = inner(&ts.task.files, cx.args()).await;
+                let ret = inner(ts.task.virt.as_ref(), &ts.task.files, cx.args()).await;
                 cx.ret(ret);
 
                 ScRet::Continue(None)
@@ -210,9 +217,15 @@ macro_rules! fssc {
 pub const MAX_PATH_LEN: usize = 256;
 
 fssc!(
-    pub async fn chdir(files: &Files, path: UserPtr<u8, In>) -> Result<(), Error> {
+    pub async fn chdir(
+        virt: Pin<&Virt>,
+        files: &Files,
+        path: UserPtr<u8, In>,
+    ) -> Result<(), Error> {
         let mut buf = [0; MAX_PATH_LEN];
-        let path = path.read_path(&mut buf)?;
+        let path = path.read_path(virt, &mut buf).await?;
+
+        log::trace!("user chdir path = {path:?}");
 
         crate::fs::open_dir(
             path,
@@ -225,29 +238,47 @@ fssc!(
         Ok(())
     }
 
-    pub async fn getcwd(files: &Files, buf: UserPtr<u8, Out>, len: usize) -> Result<usize, Error> {
+    pub async fn getcwd(
+        virt: Pin<&Virt>,
+        files: &Files,
+        buf: UserPtr<u8, Out>,
+        len: usize,
+    ) -> Result<usize, Error> {
+        log::trace!("user getcwd buf = {buf:?}, len = {len}");
+
         let cwd = files.cwd();
         let path = cwd.as_str().as_bytes();
         if path.len() >= len {
             Err(ERANGE)
         } else {
-            buf.write_slice(path, true)?;
+            buf.write_slice(virt, path, true).await?;
             Ok(buf.addr())
         }
     }
 
-    pub async fn dup(files: &Files, fd: i32) -> Result<i32, Error> {
+    pub async fn dup(_v: Pin<&Virt>, files: &Files, fd: i32) -> Result<i32, Error> {
+        log::trace!("user dup fd = {fd}");
+
         let entry = files.get(fd).await?;
         files.open(entry).await
     }
 
-    pub async fn dup3(files: &Files, old: i32, new: i32, _flags: i32) -> Result<i32, Error> {
+    pub async fn dup3(
+        _v: Pin<&Virt>,
+        files: &Files,
+        old: i32,
+        new: i32,
+        _flags: i32,
+    ) -> Result<i32, Error> {
+        log::trace!("user dup old = {old}, new = {new}, flags = {_flags}");
+
         let entry = files.get(old).await?;
         files.reopen(new, entry).await;
         Ok(new)
     }
 
     pub async fn openat(
+        virt: Pin<&Virt>,
         files: &Files,
         fd: i32,
         path: UserPtr<u8, In>,
@@ -255,25 +286,33 @@ fssc!(
         perm: u32,
     ) -> Result<i32, Error> {
         let mut buf = [0; MAX_PATH_LEN];
-        let path = path.read_path(&mut buf)?;
+        let path = path.read_path(virt, &mut buf).await?;
+
         let options = OpenOptions::from_bits_truncate(options);
         let perm = Permissions::from_bits(perm).ok_or(EPERM)?;
-        let base = files.get(fd).await?;
 
+        log::trace!(
+            "user openat fd = {fd}, path = {path:?}, options = {options:?}, perm = {perm:?}"
+        );
+
+        let base = files.get(fd).await?;
         let (entry, _) = base.open(path, options, perm).await?;
         files.open(entry).await
     }
 
     pub async fn mkdirat(
+        virt: Pin<&Virt>,
         files: &Files,
         fd: i32,
         path: UserPtr<u8, In>,
         perm: u32,
     ) -> Result<i32, Error> {
         let mut buf = [0; MAX_PATH_LEN];
-        let path = path.read_path(&mut buf)?;
+        let path = path.read_path(virt, &mut buf).await?;
         let perm = Permissions::from_bits(perm).ok_or(EPERM)?;
         let base = files.get(fd).await?;
+
+        log::trace!("user mkdir fd = {fd}, path = {path:?}, perm = {perm:?}");
 
         let (entry, created) = base
             .open(path, OpenOptions::DIRECTORY | OpenOptions::CREAT, perm)
@@ -285,11 +324,14 @@ fssc!(
     }
 
     pub async fn getdents64(
+        virt: Pin<&Virt>,
         files: &Files,
         fd: i32,
         ptr: UserPtr<u8, Out>,
         len: usize,
     ) -> Result<usize, Error> {
+        log::trace!("user getdents64 fd = {fd}, ptr = {ptr:?}, len = {len}");
+
         #[repr(C, packed)]
         struct D {
             inode: u64,
@@ -323,9 +365,10 @@ fssc!(
                 reclen,
                 ty: entry.metadata.ty,
             });
-            ptr.write_slice(unsafe { mem::transmute(out.as_bytes()) }, false)?;
+            ptr.write_slice(virt, unsafe { mem::transmute(out.as_bytes()) }, false)
+                .await?;
             ptr.advance(mem::size_of::<D>());
-            ptr.write_slice(entry.name.as_bytes(), true)?;
+            ptr.write_slice(virt, entry.name.as_bytes(), true).await?;
 
             ptr.advance(layout.size() - mem::size_of::<D>());
             len -= layout.size();
@@ -336,22 +379,27 @@ fssc!(
     }
 
     pub async fn unlinkat(
+        virt: Pin<&Virt>,
         files: &Files,
         fd: i32,
         path: UserPtr<u8, In>,
         flags: i32,
     ) -> Result<(), Error> {
         let mut buf = [0; MAX_PATH_LEN];
-        let path = path.read_path(&mut buf)?;
-        let base = files.get(fd).await?;
+        let path = path.read_path(virt, &mut buf).await?;
 
+        log::trace!("user mkdir fd = {fd}, path = {path:?}, flags = {flags}");
+
+        let base = files.get(fd).await?;
         let base = base.to_dir_mut().ok_or(ENOTDIR)?;
         base.unlink(path, (flags != 0).then_some(true)).await?;
 
         Ok(())
     }
 
-    pub async fn close(files: &Files, fd: i32) -> Result<(), Error> {
+    pub async fn close(_v: Pin<&Virt>, files: &Files, fd: i32) -> Result<(), Error> {
+        log::trace!("user close fd = {fd}");
+
         files.close(fd).await
     }
 );

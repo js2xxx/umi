@@ -31,7 +31,7 @@ ktrap_entry:
     call preempt_disable
 
     mv a0, sp
-    addi a0, a0, 4
+    addi a0, a0, 8
     call ktrap_handler
 
     call preempt_enable
