@@ -34,10 +34,6 @@ impl Instant {
         Some(Duration::new(secs, micros))
     }
 
-    pub fn to_su(&self) -> (u64, u64) {
-        ((self.0 / 1_000_000) as u64, (self.0 % 1_000_000) as u64)
-    }
-
     #[must_use]
     pub fn duration_since(&self, earlier: Self) -> Duration {
         self.checked_duration_since(earlier).unwrap_or_default()
@@ -100,5 +96,11 @@ impl fmt::Debug for Instant {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let display = self.0 as f64 / 1_000_000.0;
         write!(f, "{display:.6}")
+    }
+}
+
+impl super::InstantExt for Instant {
+    fn to_su(&self) -> (u64, u64) {
+        ((self.0 / 1_000_000) as u64, (self.0 % 1_000_000) as u64)
     }
 }

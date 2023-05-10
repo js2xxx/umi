@@ -7,7 +7,7 @@ use ksc::{
     async_handler, AHandlers, Error,
     Scn::{self, *},
 };
-use ktime::Instant;
+use ktime::{Instant, InstantExt};
 use spin::Lazy;
 use sygnal::SigInfo;
 
@@ -63,7 +63,8 @@ async fn gettimeofday(
 ) -> ScRet {
     let (mut out, _) = cx.args();
 
-    let (sec, usec) = Instant::now().to_su();
+    let now = Instant::now();
+    let (sec, usec) = now.to_su();
     let ret = out.write(ts.task.virt(), Tv { sec, usec }).await;
     cx.ret(ret);
 

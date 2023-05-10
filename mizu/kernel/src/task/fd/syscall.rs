@@ -431,7 +431,7 @@ fssc!(
         addr: usize,
         len: usize,
     ) -> Result<(), Error> {
-        let len = (len + PAGE_MASK) & ! PAGE_MASK;
+        let len = (len + PAGE_MASK) & !PAGE_MASK;
         virt.unmap(addr.into()..(addr + len).into()).await
     }
 );
