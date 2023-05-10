@@ -67,7 +67,7 @@ impl Entry for DevRoot {
         }
     }
 
-    fn metadata(&self) -> Metadata {
+    async fn metadata(&self) -> Metadata {
         todo!()
     }
 }
@@ -92,7 +92,7 @@ impl Entry for DevBlocks {
         Err(ENOENT)
     }
 
-    fn metadata(&self) -> Metadata {
+    async fn metadata(&self) -> Metadata {
         todo!()
     }
 }

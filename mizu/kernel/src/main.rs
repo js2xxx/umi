@@ -24,7 +24,7 @@ extern crate klog;
 
 extern crate alloc;
 
-use alloc::sync::Arc;
+use alloc::sync::{Arc, Weak};
 
 use afat32::{FatDir, NullTimeProvider};
 use kmem::Phys;
@@ -45,17 +45,42 @@ async fn main(fdt: usize) {
     let rt = rt.downcast::<FatDir<NullTimeProvider>>().unwrap();
 
     let spec = [
-        "brk", "read", "write", "open", "openat", "dup", "dup2", "getdents", "mkdir_", "unlink",
-        "getcwd", "chdir",
+        "brk",
+        "read",
+        "write",
+        "open",
+        "openat",
+        "dup",
+        "dup2",
+        "getdents",
+        "mkdir_",
+        "unlink",
+        "getcwd",
+        "chdir",
+        "close",
+        "fstat",
+        "getpid",
+        "getppid",
+        "gettimeofday",
+        "sleep",
+        "times",
+        "mmap",
+        "munmap",
     ];
+
+    sbi_rt::set_timer(0);
 
     for case in spec {
         let file = rt.open_file(case.as_ref()).await.unwrap();
         log::info!("Found test case {case:?}");
 
-        let task = InitTask::from_elf(Phys::new(Arc::new(file), 0, true), Default::default())
-            .await
-            .unwrap();
+        let task = InitTask::from_elf(
+            Weak::new(),
+            Phys::new(Arc::new(file), 0, true),
+            Default::default(),
+        )
+        .await
+        .unwrap();
         let task = task.spawn().unwrap();
         let code = task.wait().await;
         log::info!("test case {case:?} returned with {code}\n");

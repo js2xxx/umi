@@ -114,13 +114,20 @@ impl Virt {
         count: usize,
         attr: Attr,
     ) -> Result<LAddr, Error> {
+        log::trace!(
+            "Virt::map at {addr:?}, start_index = {start_index}, count = {count}, attr = {attr:?}"
+        );
+
         let mut map = self.map.lock().await;
         match addr {
             Some(start) => {
                 if start.val() & PAGE_MASK != 0 {
                     return Err(EINVAL);
                 }
-                let len = count.checked_shl(PAGE_SHIFT).ok_or(EINVAL)?;
+                let len = count
+                    .checked_shl(PAGE_SHIFT)
+                    .filter(|&l| l != 0)
+                    .ok_or(EINVAL)?;
                 let end = LAddr::from(start.val().checked_add(len).ok_or(EINVAL)?);
                 let mapping = Mapping {
                     phys,

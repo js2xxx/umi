@@ -104,8 +104,8 @@ impl Phys {
 }
 
 impl Phys {
-    pub fn new_anon() -> Phys {
-        Phys::new(Arc::new(Zero), 0, true)
+    pub fn new_anon(cow: bool) -> Phys {
+        Phys::new(Arc::new(Zero), 0, cow)
     }
 }
 
@@ -282,12 +282,6 @@ impl Drop for Phys {
 Use `spare(NonZeroUsize::MAX)` to explicit flush all the data."
             );
         }
-    }
-}
-
-impl Default for Phys {
-    fn default() -> Self {
-        Self::new_anon()
     }
 }
 

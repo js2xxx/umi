@@ -107,8 +107,11 @@ pub struct Metadata {
     pub len: usize,
     pub offset: u64,
     pub perm: Permissions,
+    pub block_size: usize,
+    pub block_count: usize,
     pub last_access: Option<Instant>,
     pub last_modified: Option<Instant>,
+    pub last_created: Option<Instant>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]

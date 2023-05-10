@@ -98,3 +98,9 @@ impl fmt::Debug for Instant {
         write!(f, "{display:.6}")
     }
 }
+
+impl super::InstantExt for Instant {
+    fn to_su(&self) -> (u64, u64) {
+        ((self.0 / 1_000_000) as u64, (self.0 % 1_000_000) as u64)
+    }
+}

@@ -55,14 +55,17 @@ impl Entry for Null {
         Ok((self, false))
     }
 
-    fn metadata(&self) -> Metadata {
+    async fn metadata(&self) -> Metadata {
         Metadata {
             ty: FileType::FILE,
             len: 0,
             offset: 0,
             perm: Permissions::all_same(true, true, false),
+            block_size: 0,
+            block_count: 0,
             last_access: None,
             last_modified: None,
+            last_created: None,
         }
     }
 }
@@ -115,14 +118,17 @@ impl Entry for Zero {
         Ok((self, false))
     }
 
-    fn metadata(&self) -> Metadata {
+    async fn metadata(&self) -> Metadata {
         Metadata {
             ty: FileType::FILE,
             len: 0,
             offset: 0,
             perm: Permissions::all_same(true, true, false),
+            block_size: 0,
+            block_count: 0,
             last_access: None,
             last_modified: None,
+            last_created: None,
         }
     }
 }

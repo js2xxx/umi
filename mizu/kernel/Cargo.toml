@@ -35,6 +35,7 @@ umifs = {path = "../lib/umifs"}
 # External crates
 arsc-rs = {git = "https://github.com/js2xxx/arsc"}
 async-trait = "0"
+bitflags = "2"
 crossbeam-queue = {version = "0", default-features = false, features = ["alloc", "nightly"]}
 fdt = "0"
 futures-util = {version = "0", default-features = false, features = ["alloc"]}

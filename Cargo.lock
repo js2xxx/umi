@@ -538,6 +538,7 @@ dependencies = [
  "arsc-rs",
  "art",
  "async-trait",
+ "bitflags 2.2.1",
  "co-trap",
  "config",
  "crossbeam-queue",
