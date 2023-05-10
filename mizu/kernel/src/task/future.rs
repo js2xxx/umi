@@ -12,7 +12,10 @@ use kmem::Virt;
 use ksc::{Scn, ENOSYS};
 use ktime::Instant;
 use pin_project::pin_project;
-use riscv::register::{scause::{Exception, Scause, Trap}, time};
+use riscv::register::{
+    scause::{Exception, Scause, Trap},
+    time,
+};
 use sygnal::{ActionType, Sig, SigCode, SigInfo};
 
 use super::{TaskEvent, TaskState};
