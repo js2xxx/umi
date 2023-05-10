@@ -34,6 +34,10 @@ impl Instant {
         Some(Duration::new(secs, micros))
     }
 
+    pub fn to_su(&self) -> (u64, u64) {
+        ((self.0 / 1_000_000) as u64, (self.0 % 1_000_000) as u64)
+    }
+
     #[must_use]
     pub fn duration_since(&self, earlier: Self) -> Duration {
         self.checked_duration_since(earlier).unwrap_or_default()

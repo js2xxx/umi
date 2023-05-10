@@ -9,7 +9,7 @@ use alloc::{
 };
 use core::{
     mem,
-    ops::ControlFlow::Break,
+    ops::ControlFlow::{Break, Continue},
     pin::Pin,
     sync::atomic::{AtomicUsize, Ordering::SeqCst},
 };
@@ -31,8 +31,10 @@ use sygnal::{ActionSet, Sig, SigSet, Signals};
 use umifs::path::Path;
 
 use self::fd::Files;
+pub use self::future::yield_now;
 use crate::{
     executor,
+    mem::{Out, UserPtr},
     syscall::ScRet,
     task::future::{user_loop, TaskFut},
 };
@@ -46,6 +48,9 @@ pub struct TaskState {
     pub(crate) task: Arc<Task>,
     sig_mask: SigSet,
     pub(crate) brk: usize,
+
+    system_times: u64,
+    user_times: u64,
 }
 
 #[derive(Clone)]
@@ -58,6 +63,7 @@ pub enum TaskEvent {
 
 pub struct Task {
     main: Weak<Task>,
+    parent: Weak<Task>,
     tid: usize,
     virt: Pin<Arsc<Virt>>,
 
@@ -94,6 +100,31 @@ impl Task {
     }
 
     #[async_handler]
+    pub async fn pid(ts: &mut TaskState, cx: UserCx<'_, fn() -> usize>) -> ScRet {
+        let task = &ts.task;
+        cx.ret(task.main.upgrade().map_or(task.tid, |main| main.tid));
+        Continue(None)
+    }
+
+    #[async_handler]
+    pub async fn ppid(ts: &mut TaskState, cx: UserCx<'_, fn() -> usize>) -> ScRet {
+        let task = &ts.task;
+        cx.ret(task.parent.upgrade().map_or(1, |parent| parent.tid));
+        Continue(None)
+    }
+
+    #[async_handler]
+    pub async fn times(
+        ts: &mut TaskState,
+        cx: UserCx<'_, fn(UserPtr<u64, Out>) -> Result<(), Error>>,
+    ) -> ScRet {
+        let mut out = cx.args();
+        let data = [ts.user_times, ts.system_times, 0, 0];
+        cx.ret(out.write_slice(ts.task.virt(), &data, false).await);
+        Continue(None)
+    }
+
+    #[async_handler]
     pub async fn exit(ts: &mut TaskState, cx: UserCx<'_, fn(i32)>) -> ScRet {
         let _ = ts.task.files.flush_all().await;
         Break(cx.args())
@@ -121,6 +152,7 @@ pub fn process(id: usize) -> Option<Arc<Task>> {
 
 pub struct InitTask {
     main: Weak<Task>,
+    parent: Weak<Task>,
     virt: Pin<Arsc<Virt>>,
     tf: TrapFrame,
     files: Arsc<Files>,
@@ -174,7 +206,11 @@ impl InitTask {
         }
     }
 
-    pub async fn from_elf(file: Phys, lib_path: Vec<&Path>) -> Result<Self, Error> {
+    pub async fn from_elf(
+        parent: Weak<Task>,
+        file: Phys,
+        lib_path: Vec<&Path>,
+    ) -> Result<Self, Error> {
         let phys = Arc::new(file);
         let virt = crate::mem::new_virt();
 
@@ -197,6 +233,7 @@ impl InitTask {
 
         Ok(InitTask {
             main: Weak::new(),
+            parent,
             virt,
             tf,
             files: Arsc::new(Files::new(fd::default_stdio().await?, "/".into())),
@@ -216,7 +253,8 @@ impl InitTask {
         let tf = Self::trap_frame(entry, stack, arg);
 
         Ok(InitTask {
-            main: Weak::new(),
+            main: Arc::downgrade(&task),
+            parent: task.parent.clone(),
             virt,
             tf,
             files: task.files.clone(),
@@ -224,11 +262,12 @@ impl InitTask {
     }
 
     pub fn spawn(self) -> Result<Arc<Task>, ksc::Error> {
-        static TID: AtomicUsize = AtomicUsize::new(0);
+        static TID: AtomicUsize = AtomicUsize::new(2);
 
         let tid = TID.fetch_add(1, SeqCst);
         let task = Arc::new(Task {
             main: self.main,
+            parent: self.parent,
             tid,
             virt: self.virt,
 
@@ -242,6 +281,8 @@ impl InitTask {
             task: task.clone(),
             sig_mask: SigSet::EMPTY,
             brk: 0,
+            system_times: 0,
+            user_times: 0,
         };
 
         let fut = TaskFut::new(task.virt.clone(), user_loop(ts, self.tf));

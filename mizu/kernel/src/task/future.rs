@@ -43,7 +43,8 @@ impl<F: Future> Future for TaskFut<F> {
 const TASK_GRAN: Duration = Duration::from_millis(1);
 
 pub async fn user_loop(mut ts: TaskState, mut tf: TrapFrame) {
-    let mut time = Instant::now();
+    let mut stat_time = Instant::now_raw();
+    let mut sched_time = unsafe { Instant::from_raw(stat_time) };
     'life: loop {
         while let Some(si) = ts.task.sig.pop(ts.sig_mask) {
             let _ = ts.task.event.send(&TaskEvent::Signaled(si.sig)).await;
@@ -62,7 +63,16 @@ pub async fn user_loop(mut ts: TaskState, mut tf: TrapFrame) {
             }
         }
 
+        let sys = Instant::now_raw();
+        ts.system_times += sys - stat_time;
+        stat_time = sys;
+
         let (scause, fr) = co_trap::yield_to_user(&mut tf);
+
+        let usr = Instant::now_raw();
+        ts.user_times += usr - stat_time;
+        stat_time = usr;
+
         match fr {
             FastResult::Continue => {}
             FastResult::Pending => continue,
@@ -80,8 +90,8 @@ pub async fn user_loop(mut ts: TaskState, mut tf: TrapFrame) {
         }
 
         let new_time = Instant::now();
-        if new_time - time >= TASK_GRAN {
-            time = new_time;
+        if new_time - sched_time >= TASK_GRAN {
+            sched_time = new_time;
             yield_now().await
         }
     }
