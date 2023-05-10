@@ -1,4 +1,4 @@
-use alloc::boxed::Box;
+use alloc::{boxed::Box, sync::Arc};
 use core::{
     alloc::Layout,
     mem::{self, MaybeUninit},
@@ -6,12 +6,16 @@ use core::{
 };
 
 use co_trap::UserCx;
-use kmem::Virt;
+use kmem::{Phys, Virt};
 use ksc::{
     async_handler,
-    Error::{self, EBADF, EEXIST, ENOTDIR, EPERM, ERANGE},
+    Error::{self, EBADF, EEXIST, EINVAL, EISDIR, ENOSYS, ENOTDIR, EPERM, ERANGE},
 };
-use umifs::types::{FileType, OpenOptions, Permissions};
+use rv39_paging::{Attr, LAddr, PAGE_MASK, PAGE_SHIFT};
+use umifs::{
+    traits::IntoAnyExt,
+    types::{FileType, OpenOptions, Permissions},
+};
 
 use super::Files;
 use crate::{
@@ -30,7 +34,9 @@ pub async fn read(
         (fd, mut buffer, len): (i32, UserBuffer, usize),
     ) -> Result<usize, Error> {
         log::trace!("user read fd = {fd}, buffer = {buffer:?}, len = {len}");
-
+        if len == 0 {
+            return Ok(0);
+        }
         let mut bufs = buffer.as_mut_slice(ts.task.virt.as_ref(), len).await?;
 
         let entry = ts.task.files.get(fd).await?;
@@ -58,7 +64,9 @@ pub async fn write(
         (fd, buffer, len): (i32, UserBuffer, usize),
     ) -> Result<usize, Error> {
         log::trace!("user write fd = {fd}, buffer = {buffer:?}, len = {len}");
-
+        if len == 0 {
+            return Ok(0);
+        }
         let mut bufs = buffer.as_slice(ts.task.virt.as_ref(), len).await?;
 
         let entry = ts.task.files.get(fd).await?;
@@ -227,7 +235,7 @@ fssc!(
             link_count: u32,
             uid: u32,
             gid: u32,
-            rdev: u32,
+            rdev: u64,
             __pad: u64,
             size: usize,
             blksize: u32,
@@ -340,5 +348,90 @@ fssc!(
         log::trace!("user close fd = {fd}");
 
         files.close(fd).await
+    }
+
+    pub async fn mmap(
+        virt: Pin<&Virt>,
+        files: &Files,
+        addr: usize,
+        len: usize,
+        prot: i32,
+        flags: i32,
+        fd: i32,
+        offset: usize,
+    ) -> Result<usize, Error> {
+        bitflags::bitflags! {
+            #[derive(Default, Debug, Clone, Copy)]
+            struct Prot: i32 {
+                const READ     = 0x1;
+                const WRITE    = 0x2;
+                const EXEC     = 0x4;
+            }
+
+            struct Flags: i32 {
+                const SHARED	= 0x01;		/* Share changes */
+                const PRIVATE	= 0x02;		/* Changes are private */
+
+                const FIXED     = 0x100;  /* Interpret addr exactly */
+                const ANONYMOUS = 0x10;  /* don't use a file */
+
+                const POPULATE          = 0x20000;  /* populate (prefault) pagetables */
+            }
+        }
+
+        let prot = Prot::from_bits(prot).ok_or(ENOSYS)?;
+        let flags = Flags::from_bits_truncate(flags);
+
+        let cow = flags.contains(Flags::PRIVATE);
+        let phys = if flags.contains(Flags::ANONYMOUS) {
+            Phys::new_anon(cow)
+        } else {
+            let entry = files.get(fd).await?;
+            match entry.clone().downcast::<Phys>() {
+                Some(phys) => phys.clone_as(cow)?,
+                None => Phys::new(entry.to_io().ok_or(EISDIR)?, 0, cow),
+            }
+        };
+
+        let addr = flags.contains(Flags::FIXED).then(|| LAddr::from(addr));
+
+        let offset = if offset & PAGE_MASK != 0 {
+            return Err(EINVAL);
+        } else {
+            offset >> PAGE_SHIFT
+        };
+
+        let attr = {
+            let mut attr = Attr::USER_ACCESS;
+            if prot.contains(Prot::READ) {
+                attr |= Attr::READABLE;
+            }
+            if prot.contains(Prot::WRITE) {
+                attr |= Attr::WRITABLE;
+            }
+            if prot.contains(Prot::EXEC) {
+                attr |= Attr::EXECUTABLE;
+            }
+            attr
+        };
+
+        let count = (len + PAGE_MASK) >> PAGE_SHIFT;
+        let addr = virt.map(addr, Arc::new(phys), offset, count, attr).await?;
+
+        if flags.contains(Flags::POPULATE) {
+            virt.commit_range(addr..(addr + len)).await?;
+        }
+
+        Ok(addr.val())
+    }
+
+    pub async fn munmap(
+        virt: Pin<&Virt>,
+        _f: &Files,
+        addr: usize,
+        len: usize,
+    ) -> Result<(), Error> {
+        let len = (len + PAGE_MASK) & ! PAGE_MASK;
+        virt.unmap(addr.into()..(addr + len).into()).await
     }
 );

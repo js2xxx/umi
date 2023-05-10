@@ -64,6 +64,8 @@ async fn main(fdt: usize) {
         "gettimeofday",
         "sleep",
         "times",
+        "mmap",
+        "munmap",
     ];
 
     sbi_rt::set_timer(0);

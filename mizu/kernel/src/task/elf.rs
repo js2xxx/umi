@@ -175,7 +175,7 @@ async fn map_segment(
     if aligned_alloc_size > 0 {
         let address = aligned_address + aligned_file_size;
 
-        let mem = Phys::new_anon();
+        let mem = Phys::new_anon(true);
 
         let mut cdata = vec![0; aligned_copy_size];
         phys.read_exact_at(file_end, &mut cdata)

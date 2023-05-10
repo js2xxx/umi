@@ -24,6 +24,8 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
     AHandlers::new()
         // Memory management
         .map(BRK, crate::mem::brk)
+        .map(MMAP, fd::mmap)
+        .map(MUNMAP, fd::munmap)
         // Tasks
         .map(GETPID, Task::pid)
         .map(GETPPID, Task::ppid)

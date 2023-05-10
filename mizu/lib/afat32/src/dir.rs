@@ -436,16 +436,16 @@ impl<T: TimeProvider> Entry for FatDir<T> {
                 (false, true) => (Arc::new(self.open_dir(path).await?), false),
                 (true, false) => {
                     let (file, created) = self.create_file(path).await?;
-                    if !created && options.contains(OpenOptions::EXCL) {
-                        return Err(EEXIST);
-                    }
+                    // if !created && options.contains(OpenOptions::EXCL) {
+                    //     return Err(EEXIST);
+                    // }
                     (Arc::new(file), created)
                 }
                 (true, true) => {
                     let (dir, created) = self.create_dir(path).await?;
-                    if !created && options.contains(OpenOptions::EXCL) {
-                        return Err(EEXIST);
-                    }
+                    // if !created && options.contains(OpenOptions::EXCL) {
+                    //     return Err(EEXIST);
+                    // }
                     (Arc::new(dir), created)
                 }
             },

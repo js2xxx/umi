@@ -147,7 +147,7 @@ impl<T: TimeProvider> FatFile<T> {
     }
 
     async fn update_write(&self, offset: u32) {
-        self.len.fetch_max(offset as _, Relaxed);
+        self.len.fetch_max(offset as _, SeqCst);
         if let Some(ref entry) = self.entry {
             let now = self.fs.time_provider.get_current_date_time();
             let mut e = entry.lock().await;
