@@ -37,8 +37,11 @@ pub struct InitTask {
 }
 
 impl InitTask {
-    async fn load_stack(virt: Pin<&Virt>, stack: Option<(usize, Attr)>) -> Result<LAddr, Error> {
-        log::trace!("InitTask::load_stack {stack:x?}");
+    pub(super) async fn load_stack(
+        virt: Pin<&Virt>,
+        stack: Option<(usize, Attr)>,
+    ) -> Result<LAddr, Error> {
+        log::trace!("InitTask::load_stack {stack:?}");
 
         let (stack_size, stack_attr) = stack
             .filter(|&(size, _)| size != 0)
@@ -60,6 +63,7 @@ impl InitTask {
         let sp = addr + PAGE_SIZE + stack_size - 8;
         virt.commit(LAddr::from(sp.val())).await?;
 
+        log::trace!("InitTask::load_stack finish {sp:?}");
         Ok(sp)
     }
 
@@ -123,7 +127,7 @@ impl InitTask {
         let task = Arc::new(Task {
             main: self.main,
             parent: self.parent,
-            children: spin::Mutex::new(Vec::new()),
+            children: spin::Mutex::new(Default::default()),
             tid,
 
             sig: Signals::new(),
@@ -143,9 +147,9 @@ impl InitTask {
             exit_signal: None,
         };
 
+        ksync::critical(|| TASKS.lock().insert(tid, task.clone()));
         let fut = TaskFut::new(ts.virt.clone(), user_loop(ts, self.tf));
         executor().spawn(fut).detach();
-        ksync::critical(|| TASKS.lock().insert(tid, task.clone()));
 
         Ok(task)
     }

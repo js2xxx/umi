@@ -138,7 +138,9 @@ impl Arena {
     pub fn allocate(&self, count: NonZeroUsize) -> Option<LAddr> {
         self.allocate_list(count)
             .or_else(|| self.allocate_fresh(count))
-            .inspect(|_| {
+            .inspect(|addr| {
+                log::trace!("frame allocation at {addr:?}, count = {count}");
+                unsafe { addr.write_bytes(0, PAGE_SIZE) };
                 self.count.fetch_add(count.get(), SeqCst);
             })
     }
@@ -148,6 +150,7 @@ impl Arena {
     /// `addr` must contains `count` valid pages which is no longer used and was
     /// previous allocated by this arena.
     pub unsafe fn deallocate(&self, addr: LAddr, count: NonZeroUsize) {
+        log::trace!("frame deallocation at {addr:?}, count = {count}");
         self.deallocate_list(addr, count);
         self.count.fetch_sub(count.get(), SeqCst);
     }

@@ -11,7 +11,7 @@ use core::{
 };
 
 use arsc_rs::Arsc;
-use ksc_core::Error::{self, EEXIST, EFAULT, EINVAL, ENOSPC, EPERM};
+use ksc_core::Error::{self, EFAULT, EINVAL, ENOSPC, EPERM};
 use ksync::Mutex;
 use range_map::{AslrKey, RangeMap};
 use rv39_paging::{Attr, LAddr, PAddr, Table, ID_OFFSET, PAGE_LAYOUT, PAGE_MASK, PAGE_SHIFT};
@@ -110,7 +110,7 @@ impl Virt {
     /// The caller must ensure that the current executing address is mapped
     /// correctly.
     #[inline]
-    pub unsafe fn load(self: Pin<Arsc<Self>>) {
+    pub unsafe fn load(self: Pin<Arsc<Self>>) -> Option<Arsc<Virt>> {
         tlb::set_virt(self)
     }
 
@@ -142,7 +142,7 @@ impl Virt {
                     start_index,
                     attr: attr | Attr::VALID,
                 };
-                map.try_insert(start..end, mapping).map_err(|_| EEXIST)?;
+                map.try_insert(start..end, mapping).map_err(|_| ENOSPC)?;
                 Ok(start)
             }
             None => {
@@ -239,6 +239,8 @@ impl Virt {
     }
 
     pub async fn reprotect(&self, range: Range<LAddr>, attr: Attr) -> Result<(), Error> {
+        log::trace!("Virt::reprotect {range:?}");
+
         if range.start.val() & PAGE_MASK != 0 || range.end.val() & PAGE_MASK != 0 {
             return Err(EINVAL);
         }

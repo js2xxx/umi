@@ -9,13 +9,14 @@ use alloc::{
     vec::Vec,
 };
 use core::{
+    num::NonZeroUsize,
     ops::ControlFlow::{Break, Continue},
     pin::Pin,
 };
 
 use arsc_rs::Arsc;
 use co_trap::{TrapFrame, UserCx};
-use futures_util::future::select_all;
+use futures_util::future::{select, select_all, Either};
 use hashbrown::HashMap;
 use kmem::Virt;
 use ksc::{
@@ -64,10 +65,11 @@ pub enum TaskEvent {
     Continued,
 }
 
+#[derive(Debug)]
 pub struct Task {
     main: Weak<Task>,
     parent: Weak<Task>,
-    children: spin::Mutex<Vec<Arc<Task>>>,
+    children: spin::Mutex<Vec<(Arc<Task>, Broadcast<TaskEvent>)>>,
     tid: usize,
 
     sig: Signals,
@@ -106,6 +108,13 @@ pub fn process(id: usize) -> Option<Arc<Task>> {
         Some(main) => main,
         None => task,
     })
+}
+
+#[async_handler]
+pub async fn uyield(_: &mut TaskState, cx: UserCx<'_, fn()>) -> ScRet {
+    yield_now().await;
+    cx.ret(());
+    ScRet::Continue(None)
 }
 
 #[async_handler]
@@ -154,10 +163,6 @@ pub async fn exit(ts: &mut TaskState, cx: UserCx<'_, fn(i32)>) -> ScRet {
         })
     }
 
-    if ts.task.main.upgrade().is_none() {
-        ts.virt.clear().await;
-    }
-
     ksync::critical(|| TASKS.lock().remove(&ts.task.tid));
     let _ = ts.files.flush_all().await;
 
@@ -168,7 +173,7 @@ async fn clone_task(
     ts: &mut TaskState,
     tf: &TrapFrame,
     flags: u64,
-    stack: usize,
+    stack: Option<NonZeroUsize>,
     mut ptid: UserPtr<usize, Out>,
     tls: usize,
     mut ctid: UserPtr<usize, Out>,
@@ -230,13 +235,27 @@ async fn clone_task(
         ctid.write(ts.virt.as_ref(), new_tid).await?;
     }
 
+    log::trace!("clone_task: cloning virt");
+
+    let virt = if flags.contains(Flags::VM) {
+        ts.virt.clone()
+    } else {
+        ts.virt.as_ref().deep_fork().await?
+    };
+
     let mut new_tf = *tf;
 
+    log::trace!("clone_task: setting up TrapFrame");
+
     new_tf.set_syscall_ret(0);
-    new_tf.gpr.tx.sp = stack;
+    new_tf.gpr.tx.sp = match stack {
+        Some(stack) => stack.get(),
+        None => InitTask::load_stack(virt.as_ref(), None).await?.val(),
+    };
     if flags.contains(Flags::SETTLS) {
         new_tf.gpr.tx.tp = tls;
     }
+    log::trace!("clone_task: setting up TaskState");
 
     let task = Arc::new(task);
     let new_ts = TaskState {
@@ -245,11 +264,7 @@ async fn clone_task(
         brk: ts.brk,
         system_times: 0,
         user_times: 0,
-        virt: if flags.contains(Flags::VM) {
-            ts.virt.clone()
-        } else {
-            ts.virt.as_ref().deep_fork().await?
-        },
+        virt,
         files: ts
             .files
             .deep_fork(flags.contains(Flags::FS), flags.contains(Flags::FILES))
@@ -263,13 +278,25 @@ async fn clone_task(
         exit_signal,
     };
 
+    log::trace!(
+        "clone_task: push into parent: {:?}",
+        new_ts.task.parent.upgrade()
+    );
+
     if let Some(parent) = new_ts.task.parent.upgrade() {
-        ksync::critical(|| parent.children.lock().push(new_ts.task.clone()))
+        ksync::critical(|| {
+            parent
+                .children
+                .lock()
+                .push((new_ts.task.clone(), new_ts.task.event()))
+        });
+
+        ksync::critical(|| log::debug!("now have {} child(ren)", parent.children.lock().len()));
     }
 
+    ksync::critical(|| TASKS.lock().insert(new_tid, task.clone()));
     let fut = TaskFut::new(new_ts.virt.clone(), user_loop(new_ts, new_tf));
     executor().spawn(fut).detach();
-    ksync::critical(|| TASKS.lock().insert(new_tid, task.clone()));
 
     Ok(new_tid)
 }
@@ -283,7 +310,16 @@ pub async fn clone(
     >,
 ) -> ScRet {
     let (flags, stack, parent_tidptr, tls, child_tidptr) = cx.args();
-    let ret = clone_task(ts, &cx, flags, stack, parent_tidptr, tls, child_tidptr).await;
+    let ret = clone_task(
+        ts,
+        &cx,
+        flags,
+        NonZeroUsize::new(stack),
+        parent_tidptr,
+        tls,
+        child_tidptr,
+    )
+    .await;
     cx.ret(ret);
     Continue(None)
 }
@@ -303,25 +339,47 @@ pub async fn waitpid(
         let (res, tid) = if pid <= 0 {
             let children = ksync::critical(|| ts.task.children.lock().clone());
             log::trace!("task::wait found {} child(ren)", children.len());
-            let events = children.iter().map(|c| c.event());
-            let select_all = select_all(events.map(|event| event.recv_once())).await;
-            (select_all.0, children[select_all.1].tid)
+
+            match &children[..] {
+                [] => return Err(ECHILD),
+                [(a, ea)] => (ea.recv().await, a.tid),
+                [(a, ea), (b, eb)] => match select(ea.recv(), eb.recv()).await {
+                    Either::Left((te, _)) => (te, a.tid),
+                    Either::Right((te, _)) => (te, b.tid),
+                },
+                _ => {
+                    let events = children.iter().map(|(_, event)| event);
+                    let select_all = select_all(events.map(|event| event.recv())).await;
+                    (select_all.0, children[select_all.1].0.tid)
+                }
+            }
         } else {
-            let child = ksync::critical(|| ts.task.children.lock().get(pid as usize).cloned());
-            (child.ok_or(ECHILD)?.event().recv().await, pid as usize)
+            let child = ksync::critical(|| {
+                let children = ts.task.children.lock();
+                children
+                    .iter()
+                    .find(|(s, _)| s.tid == pid as usize)
+                    .cloned()
+            });
+            (child.ok_or(ECHILD)?.1.recv().await, pid as usize)
         };
-        log::trace!("task::wait event = {res:?}");
+        log::trace!("task::wait tid = {tid}, event = {res:?}");
         let event = match res {
             Ok(w) => w,
             Err(e) => e.data().ok_or(ECHILD)?,
         };
+        if matches!(event, TaskEvent::Exited(..)) {
+            ksync::critical(|| ts.task.children.lock().retain(|(c, _)| c.tid != tid));
+        }
 
-        let ws = match event {
-            TaskEvent::Exited(code, sig) => ((code & 0xff) << 8) | sig.map_or(0, Sig::raw),
-            TaskEvent::Suspended(sig) => (sig.raw() << 8) | 0x7f,
-            TaskEvent::Continued => 0xffff,
-        };
-        wstatus.write(ts.virt.as_ref(), ws).await?;
+        if !wstatus.is_null() {
+            let ws = match event {
+                TaskEvent::Exited(code, sig) => ((code & 0xff) << 8) | sig.map_or(0, Sig::raw),
+                TaskEvent::Suspended(sig) => (sig.raw() << 8) | 0x7f,
+                TaskEvent::Continued => 0xffff,
+            };
+            wstatus.write(ts.virt.as_ref(), ws).await?;
+        }
         Ok(tid)
     }
     let (pid, wstatus, options) = cx.args();

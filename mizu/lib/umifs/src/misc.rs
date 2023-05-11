@@ -2,7 +2,7 @@ use alloc::{boxed::Box, sync::Arc};
 
 use async_trait::async_trait;
 use ksc_core::Error::{self, EEXIST, ENOTDIR, EPERM};
-use umio::Io;
+use umio::{ioslice_len, Io};
 
 use crate::{
     path::Path,
@@ -90,7 +90,7 @@ impl Io for Zero {
     }
 
     async fn write_at(&self, _: usize, buffer: &mut [IoSlice]) -> Result<usize, Error> {
-        Ok(buffer.iter_mut().fold(0, |len, buf| len + buf.len()))
+        Ok(ioslice_len(&buffer))
     }
 
     async fn flush(&self) -> Result<(), Error> {

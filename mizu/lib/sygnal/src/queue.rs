@@ -16,11 +16,13 @@ use crate::{Sig, SigCode, SigSet, NR_SIGNALS};
 
 const CAP_PER_SIG: usize = 8;
 
+#[derive(Debug)]
 struct SigPending {
     queue: ArrayQueue<SigInfo>,
     event: Event,
 }
 
+#[derive(Debug)]
 pub struct Signals {
     set: AtomicU64,
     pending: [SigPending; NR_SIGNALS],

@@ -12,7 +12,7 @@ use crate::Virt;
 #[thread_local]
 static mut CUR_VIRT: *const Virt = ptr::null();
 
-pub fn set_virt(virt: Pin<Arsc<Virt>>) {
+pub fn set_virt(virt: Pin<Arsc<Virt>>) -> Option<Arsc<Virt>> {
     let addr = unsafe { ptr::addr_of_mut!(**virt.root.as_ptr()) };
 
     virt.cpu_mask.fetch_or(1 << hart_id::hart_id(), SeqCst);
@@ -21,6 +21,7 @@ pub fn set_virt(virt: Pin<Arsc<Virt>>) {
 
     if old != new {
         let paddr = *LAddr::from(addr).to_paddr(ID_OFFSET);
+        log::debug!("tlb::set_virt: {old:p} => {new:p}");
         unsafe {
             satp::set(Sv39, 0, paddr >> PAGE_SHIFT);
             sfence_vma_all()
@@ -28,8 +29,10 @@ pub fn set_virt(virt: Pin<Arsc<Virt>>) {
         if !old.is_null() {
             let old = unsafe { Arsc::from_raw(old) };
             old.cpu_mask.fetch_and(!(1 << hart_id::hart_id()), SeqCst);
+            return Some(old);
         }
     }
+    None
 }
 
 pub fn flush(cpu_mask: usize, addr: LAddr, count: usize) {

@@ -126,8 +126,8 @@ impl Phys {
         let frame = frames.get_mut(&index).map(|fi| {
             if writable {
                 fi.dirty = !self.cow;
-                fi.pin_count += pin as usize;
             }
+            fi.pin_count += pin as usize;
             fi.frame.clone()
         });
         if let Some(frame) = frame {

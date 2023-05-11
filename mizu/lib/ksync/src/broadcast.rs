@@ -1,4 +1,5 @@
 use core::{
+    fmt,
     pin::Pin,
     sync::atomic::{AtomicUsize, Ordering::SeqCst},
     task::{Context, Poll},
@@ -18,6 +19,12 @@ pub struct Broadcast<T: Clone> {
     inner: Arsc<Inner<T>>,
     receiver: Receiver<SegQueue<T>>,
     id: usize,
+}
+
+impl<T: Clone> fmt::Debug for Broadcast<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Broadcast").finish_non_exhaustive()
+    }
 }
 
 struct Inner<T: Clone> {

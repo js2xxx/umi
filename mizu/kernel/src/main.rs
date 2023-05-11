@@ -67,6 +67,11 @@ async fn main(fdt: usize) {
         "mmap",
         "munmap",
         "clone",
+        "exit",
+        "fork",
+        "wait",
+        "waitpid",
+        "yield",
     ];
 
     sbi_rt::set_timer(0);

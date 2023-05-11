@@ -22,6 +22,7 @@ impl PAddr {
     }
 
     #[inline]
+    #[track_caller]
     pub fn to_laddr(self, id_off: usize) -> LAddr {
         LAddr::from(self.0 + id_off)
     }
