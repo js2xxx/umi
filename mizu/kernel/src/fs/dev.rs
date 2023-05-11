@@ -3,11 +3,11 @@ use alloc::{boxed::Box, sync::Arc};
 use arsc_rs::Arsc;
 use async_trait::async_trait;
 use kmem::Phys;
-use ksc::Error::{self, ENOENT};
+use ksc::Error::{self, EEXIST, ENOENT, ENOTDIR, EPERM};
 use umifs::{
     misc::{Null, Zero},
     path::Path,
-    traits::{Entry, FileSystem, ToIo},
+    traits::{Entry, FileSystem, Io, ToIo},
     types::*,
 };
 
@@ -84,15 +84,71 @@ impl Entry for DevBlocks {
         _options: OpenOptions,
         _perm: Permissions,
     ) -> Result<(Arc<dyn Entry>, bool), Error> {
-        if let Ok(n) = path.as_str().parse() {
-            let block = crate::dev::block(n).ok_or(ENOENT)?;
-            let _phys = Arc::new(Phys::new(block.to_io().unwrap(), 0, false));
-            todo!("implement Entry for Phys using phys' backend")
-        }
-        Err(ENOENT)
+        let Ok(n) = path.as_str().parse() else {
+            return Err(ENOENT)
+        };
+        let block = crate::dev::block(n).ok_or(ENOENT)?;
+        let block_shift = block.block_shift();
+        let block_count = block.capacity_blocks();
+        let phys = Arc::new(Phys::new(block.to_io().unwrap(), 0, false));
+        Ok((
+            Arc::new(BlockEntry {
+                io: phys,
+                block_shift,
+                block_count,
+            }),
+            false,
+        ))
     }
 
     async fn metadata(&self) -> Metadata {
         todo!()
+    }
+}
+
+pub struct BlockEntry {
+    io: Arc<Phys>,
+    block_shift: u32,
+    block_count: usize,
+}
+
+#[async_trait]
+impl Entry for BlockEntry {
+    async fn open(
+        self: Arc<Self>,
+        path: &Path,
+        options: OpenOptions,
+        perm: Permissions,
+    ) -> Result<(Arc<dyn Entry>, bool), Error> {
+        if !path.as_str().is_empty() || options.contains(OpenOptions::DIRECTORY) {
+            return Err(ENOTDIR);
+        }
+        if options.contains(OpenOptions::CREAT) {
+            return Err(EEXIST);
+        }
+        if !Permissions::all_same(true, true, true).contains(perm) {
+            return Err(EPERM);
+        }
+        Ok((self, false))
+    }
+
+    async fn metadata(&self) -> Metadata {
+        Metadata {
+            ty: FileType::BLK,
+            len: 0,
+            offset: 0xdeadbeef,
+            perm: Permissions::all_same(true, true, true),
+            block_size: 1 << self.block_shift,
+            block_count: self.block_count,
+            last_access: None,
+            last_modified: None,
+            last_created: None,
+        }
+    }
+}
+
+impl ToIo for BlockEntry {
+    fn to_io(self: Arc<Self>) -> Option<Arc<dyn Io>> {
+        Some(self.io.clone())
     }
 }

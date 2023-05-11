@@ -48,6 +48,8 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         .map(UNLINKAT, fd::unlinkat)
         .map(CLOSE, fd::close)
         .map(PIPE2, fd::pipe)
+        .map(MOUNT, fd::mount)
+        .map(UMOUNT2, fd::umount)
         // Time
         .map(GETTIMEOFDAY, gettimeofday)
         .map(NANOSLEEP, sleep)

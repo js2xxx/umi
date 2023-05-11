@@ -259,7 +259,9 @@ async fn clone_task(
     new_tf.set_syscall_ret(0);
     new_tf.gpr.tx.sp = match stack {
         Some(stack) => stack.get(),
-        None => InitTask::load_stack(virt.as_ref(), None).await?.val(),
+        None => InitTask::load_stack(virt.as_ref(), None, Default::default())
+            .await?
+            .val(),
     };
     if flags.contains(Flags::SETTLS) {
         new_tf.gpr.tx.tp = tls;
