@@ -5,11 +5,12 @@ use core::{
     pin::Pin,
 };
 
+use afat32::NullTimeProvider;
 use co_trap::UserCx;
 use kmem::{Phys, Virt};
 use ksc::{
     async_handler,
-    Error::{self, EBADF, EEXIST, EINVAL, EISDIR, ENOSYS, ENOTDIR, EPERM, ERANGE},
+    Error::{self, EBADF, EEXIST, EINVAL, EISDIR, ENODEV, ENOSYS, ENOTBLK, ENOTDIR, EPERM, ERANGE},
 };
 use rv39_paging::{Attr, LAddr, PAGE_MASK, PAGE_SHIFT};
 use umifs::{
@@ -433,5 +434,67 @@ fssc!(
     ) -> Result<(), Error> {
         let len = (len + PAGE_MASK) & !PAGE_MASK;
         virt.unmap(addr.into()..(addr + len).into()).await
+    }
+
+    pub async fn pipe(virt: Pin<&Virt>, files: &Files, fd: UserPtr<i32, Out>) -> Result<(), Error> {
+        let (tx, rx) = crate::fs::pipe();
+        let tx = files.open(tx).await?;
+        let rx = files.open(rx).await?;
+        fd.write_slice(virt, &[rx, tx], false).await
+    }
+
+    pub async fn mount(
+        virt: Pin<&Virt>,
+        _f: &Files,
+        src: UserPtr<u8, In>,
+        dst: UserPtr<u8, In>,
+        ty: UserPtr<u8, In>,
+        _flags: usize,
+        _data: UserPtr<u8, In>,
+    ) -> Result<(), Error> {
+        let mut src_buf = [0; MAX_PATH_LEN];
+        let mut dst_buf = [0; MAX_PATH_LEN];
+        let mut ty_buf = [0; 64];
+        let src = src.read_path(virt, &mut src_buf).await?;
+        let dst = dst.read_path(virt, &mut dst_buf).await?;
+        let ty = ty.read_str(virt, &mut ty_buf).await?;
+
+        let (src, _) = crate::fs::open(
+            src,
+            Default::default(),
+            Permissions::all_same(true, true, true),
+        )
+        .await?;
+        crate::fs::open_dir(dst, Default::default(), Default::default()).await?;
+
+        let metadata = src.metadata().await;
+        if metadata.ty != FileType::BLK {
+            return Err(ENOTBLK);
+        }
+        let Some(io) = src.to_io() else {
+            return Err(ENOTBLK)
+        };
+
+        if ty == "vfat" {
+            let fatfs =
+                afat32::FatFileSystem::new(io, metadata.block_size.ilog2(), NullTimeProvider)
+                    .await?;
+            crate::fs::mount(dst.to_path_buf(), fatfs);
+        } else {
+            return Err(ENODEV);
+        }
+
+        Ok(())
+    }
+
+    pub async fn umount(
+        virt: Pin<&Virt>,
+        _f: &Files,
+        target: UserPtr<u8, In>,
+    ) -> Result<(), Error> {
+        let mut buf = [9; MAX_PATH_LEN];
+        let target = target.read_path(virt, &mut buf).await?;
+        crate::fs::unmount(target);
+        Ok(())
     }
 );

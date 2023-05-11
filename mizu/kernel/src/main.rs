@@ -24,7 +24,10 @@ extern crate klog;
 
 extern crate alloc;
 
-use alloc::sync::{Arc, Weak};
+use alloc::{
+    sync::{Arc, Weak},
+    vec,
+};
 
 use afat32::{FatDir, NullTimeProvider};
 use kmem::Phys;
@@ -72,6 +75,11 @@ async fn main(fdt: usize) {
         "wait",
         "waitpid",
         "yield",
+        "pipe",
+        "uname",
+        "mount",
+        "umount",
+        "execve",
     ];
 
     sbi_rt::set_timer(0);
@@ -83,7 +91,13 @@ async fn main(fdt: usize) {
         let task = InitTask::from_elf(
             Weak::new(),
             Phys::new(Arc::new(file), 0, true),
+            crate::mem::new_virt(),
             Default::default(),
+            if case.ends_with("mount") {
+                vec![case.into(), "dev/block/0".into()]
+            } else {
+                vec![case.into()]
+            },
         )
         .await
         .unwrap();

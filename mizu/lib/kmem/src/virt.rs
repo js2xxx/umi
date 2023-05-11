@@ -14,7 +14,9 @@ use arsc_rs::Arsc;
 use ksc_core::Error::{self, EFAULT, EINVAL, ENOSPC, EPERM};
 use ksync::Mutex;
 use range_map::{AslrKey, RangeMap};
-use rv39_paging::{Attr, LAddr, PAddr, Table, ID_OFFSET, PAGE_LAYOUT, PAGE_MASK, PAGE_SHIFT};
+use rv39_paging::{
+    Attr, LAddr, PAddr, Table, ID_OFFSET, PAGE_LAYOUT, PAGE_MASK, PAGE_SHIFT, PAGE_SIZE,
+};
 
 use crate::{frame::frames, Phys};
 
@@ -45,24 +47,26 @@ impl Mapping {
         count: NonZeroUsize,
         table: &mut Table,
         cpu_mask: usize,
-    ) -> Result<PAddr, Error> {
+    ) -> Result<Vec<Range<PAddr>>, Error> {
         let writable = self.attr.contains(Attr::WRITABLE);
-        let mut p = None;
+        let mut p = Vec::new();
         for (index, addr) in
             (0..count.get()).map(|c| (c + self.start_index + offset, addr + (c << PAGE_SHIFT)))
         {
             let entry = table.la2pte_alloc(addr, frames(), ID_OFFSET)?;
-            p = Some(if !entry.is_set() {
-                let frame = self.phys.commit(index, writable, true).await?;
+            let base = if !entry.is_set() {
+                let writable = writable.then_some(PAGE_SIZE);
+                let (frame, _) = self.phys.commit(index, writable, true).await?;
                 let base = frame.base();
                 *entry = rv39_paging::Entry::new(base, self.attr, rv39_paging::Level::pt());
                 tlb::flush(cpu_mask, addr, 1);
                 base
             } else {
                 entry.addr(rv39_paging::Level::pt())
-            });
+            };
+            p.push(base..base + PAGE_SIZE);
         }
-        Ok(p.unwrap())
+        Ok(p)
     }
 
     async fn decommit(
@@ -191,6 +195,7 @@ impl Virt {
 
         let mut paddr = Vec::new();
         for (addr, mapping) in map.intersection_mut(aligned_range.clone()) {
+            log::trace!("Virt::commit found {addr:?}");
             let start = aligned_range.start.max(*addr.start);
             let end = aligned_range.end.min(*addr.end);
             let offset = (start.val() - addr.start.val()) >> PAGE_SHIFT;
@@ -199,16 +204,20 @@ impl Virt {
 
             let cpu_mask = self.cpu_mask.load(Relaxed);
             if let Some(count) = NonZeroUsize::new(count) {
-                let p = mapping
+                let mut p = mapping
                     .commit(start, offset, count, &mut table, cpu_mask)
                     .await?;
-                paddr.push(
-                    (p + range.start.val().saturating_sub(start.val()))
-                        ..(p + len - end.val().saturating_sub(range.end.val())),
-                )
+                if let Some(first) = p.first_mut() {
+                    first.start += range.start.val().saturating_sub(start.val())
+                }
+                if let Some(last) = p.last_mut() {
+                    last.end -= end.val().saturating_sub(range.end.val())
+                }
+                paddr.extend(p.into_iter().rev())
             }
         }
         paddr.reverse();
+        log::trace!("Virt::commit_range result: {paddr:?}");
         Ok(paddr)
     }
 
