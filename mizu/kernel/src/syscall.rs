@@ -51,6 +51,8 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         // Time
         .map(GETTIMEOFDAY, gettimeofday)
         .map(NANOSLEEP, sleep)
+        // Miscellaneous
+        .map(UNAME, uname)
 });
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -103,5 +105,23 @@ async fn sleep(
     let (input, output) = cx.args();
     cx.ret(sleep_inner(ts.virt.as_ref(), input, output).await);
 
+    ScRet::Continue(None)
+}
+
+#[async_handler]
+async fn uname(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(UserPtr<u8, Out>) -> Result<(), Error>>,
+) -> ScRet {
+    async fn inner(virt: Pin<&Virt>, mut out: UserPtr<u8, Out>) -> Result<(), Error> {
+        let names: [&str; 6] = ["mizu", "umi", "alpha", "0.1.0", "riscv qemu", ""];
+        for name in names {
+            out.write_slice(virt, name.as_bytes(), true).await?;
+            out.advance(65);
+        }
+        Ok(())
+    }
+    let ret = inner(ts.virt.as_ref(), cx.args());
+    cx.ret(ret.await);
     ScRet::Continue(None)
 }
