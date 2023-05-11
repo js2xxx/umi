@@ -5,6 +5,7 @@ mod init;
 
 use alloc::{
     boxed::Box,
+    string::ToString,
     sync::{Arc, Weak},
     vec::Vec,
 };
@@ -19,24 +20,29 @@ use co_trap::{TrapFrame, UserCx};
 use crossbeam_queue::SegQueue;
 use futures_util::future::{select, select_all, Either};
 use hashbrown::HashMap;
-use kmem::Virt;
+use kmem::{Phys, Virt};
 use ksc::{
     async_handler,
-    Error::{self, ECHILD, EINVAL},
+    Error::{self, ECHILD, EINVAL, ENOTDIR},
+    RawReg,
 };
 use ksync::{unbounded, Broadcast, Receiver};
 use rand_riscv::RandomState;
 use rv39_paging::{Attr, PAGE_SIZE};
 use spin::{Lazy, Mutex};
 use sygnal::{ActionSet, Sig, SigInfo, SigSet, Signals};
+use umifs::types::Permissions;
 
 use self::fd::Files;
 pub use self::{future::yield_now, init::InitTask};
 use crate::{
     executor,
-    mem::{Out, UserPtr},
+    mem::{In, Out, UserPtr},
     syscall::ScRet,
-    task::future::{user_loop, TaskFut},
+    task::{
+        fd::MAX_PATH_LEN,
+        future::{user_loop, TaskFut},
+    },
 };
 
 const DEFAULT_STACK_SIZE: usize = PAGE_SIZE * 32;
@@ -397,5 +403,73 @@ pub async fn waitpid(
     let (pid, wstatus, options) = cx.args();
 
     cx.ret(inner(ts, pid, wstatus, options).await);
+    Continue(None)
+}
+
+#[async_handler]
+pub async fn execve(
+    ts: &mut TaskState,
+    mut cx: UserCx<
+        '_,
+        fn(UserPtr<u8, In>, UserPtr<usize, In>, UserPtr<usize, In>) -> Result<(), Error>,
+    >,
+) -> ScRet {
+    async fn inner(
+        ts: &mut TaskState,
+        tf: &mut TrapFrame,
+        name: UserPtr<u8, In>,
+        args: UserPtr<usize, In>,
+        envs: UserPtr<usize, In>,
+    ) -> Result<(), Error> {
+        let mut ptrs = [0; 64];
+        let mut data = [0; MAX_PATH_LEN];
+
+        let name = name
+            .read_path(ts.virt.as_ref(), &mut data)
+            .await?
+            .to_path_buf();
+
+        let argc = args
+            .read_slice_with_zero(ts.virt.as_ref(), &mut ptrs)
+            .await?;
+        let mut args = Vec::new();
+        for &ptr in argc {
+            let arg = UserPtr::<_, In>::from_raw(ptr);
+            let arg = arg.read_str(ts.virt.as_ref(), &mut data).await?;
+            args.push(arg.to_string());
+        }
+
+        let envc = envs
+            .read_slice_with_zero(ts.virt.as_ref(), &mut ptrs)
+            .await?;
+        let mut envs = Vec::new();
+        for &ptr in envc {
+            let env = UserPtr::<_, In>::from_raw(ptr);
+            let env = env.read_str(ts.virt.as_ref(), &mut data).await?;
+            envs.push(env.to_string());
+        }
+
+        log::trace!("task::execve: name = {name:?}, args = {args:?}, envs = {envs:?}");
+
+        let (file, _) = crate::fs::open(&name, Default::default(), Permissions::all()).await?;
+
+        ts.virt.clear().await;
+        let init = init::InitTask::from_elf(
+            ts.task.parent.clone(),
+            Phys::new(file.to_io().ok_or(ENOTDIR)?, 0, true),
+            ts.virt.clone(),
+            Default::default(),
+            args,
+        )
+        .await?;
+        init.reset(ts, tf);
+
+        Ok(())
+    }
+    let (name, args, env) = cx.args();
+    let ret = inner(ts, &mut cx, name, args, env).await;
+    if ret.is_err() {
+        cx.ret(ret)
+    }
     Continue(None)
 }

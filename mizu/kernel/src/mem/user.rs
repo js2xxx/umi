@@ -78,10 +78,10 @@ impl<T: Copy, D> UserPtr<T, D> {
         mut f: G,
         mut len: usize,
         mut arg: U,
-    ) -> Result<(), Error>
+    ) -> Result<U, Error>
     where
         G: FnMut(Pin<&'a Virt>, Range<LAddr>, U) -> F,
-        F: Future<Output = Result<Option<U>, Error>> + Send + 'a,
+        F: Future<Output = Result<(U, bool), Error>> + Send + 'a,
         U: 'a,
     {
         let mut start = self.addr;
@@ -91,9 +91,9 @@ impl<T: Copy, D> UserPtr<T, D> {
 
         if end >= start.checked_add(len).ok_or(EINVAL)? {
             log::trace!("UserPtr::op direct call");
-            let ret = f(virt, start.into()..(start + len).into(), arg).await?;
-            if ret.is_none() {
-                Ok(())
+            let (ret, cont) = f(virt, start.into()..(start + len).into(), arg).await?;
+            if !cont {
+                Ok(ret)
             } else {
                 Err(ERANGE)
             }
@@ -101,8 +101,8 @@ impl<T: Copy, D> UserPtr<T, D> {
             loop {
                 log::trace!("UserPtr::op part at {start:#x}..{end:#x}");
                 arg = match f(virt, start.into()..end.into(), arg).await? {
-                    Some(arg) => arg,
-                    None => break Ok(()),
+                    (arg, true) => arg,
+                    (arg, false) => break Ok(arg),
                 };
 
                 len -= end - start;
@@ -158,6 +158,36 @@ impl<T: Copy, D: InPtr> UserPtr<T, D> {
         }
     }
 
+    pub async fn read_slice_with_zero<'a>(
+        &self,
+        virt: Pin<&Virt>,
+        buf: &'a mut [T],
+    ) -> Result<&'a [T], Error>
+    where
+        T: Default + PartialEq + Send + fmt::Debug,
+    {
+        async fn inner<'a, T: Copy + Default + PartialEq + fmt::Debug>(
+            virt: Pin<&'a Virt>,
+            range: Range<LAddr>,
+            buf: &'a mut [T],
+        ) -> Result<(&'a mut [T], bool), Error> {
+            let count = range.end.val() - range.start.val();
+            unsafe {
+                let dst = buf.as_mut_ptr().into();
+                checked_copy(virt, range.start, dst, count).await?;
+            }
+            let has_zero = buf[..count].contains(&Default::default());
+            Ok((&mut buf[count..], !has_zero))
+        }
+
+        let rest_len = self.op(virt, inner, buf.len(), &mut *buf).await?.len();
+        let pos = buf[..(buf.len() - rest_len)]
+            .iter()
+            .position(|&s| s == Default::default())
+            .unwrap();
+        Ok(&buf[..pos])
+    }
+
     pub fn reborrow(&self) -> &UserPtr<T, In> {
         unsafe { mem::transmute(self) }
     }
@@ -173,14 +203,14 @@ impl<D: InPtr> UserPtr<u8, D> {
             virt: Pin<&'a Virt>,
             range: Range<LAddr>,
             buf: &'a mut [u8],
-        ) -> Result<Option<&'a mut [u8]>, Error> {
+        ) -> Result<(&'a mut [u8], bool), Error> {
             let count = range.end.val() - range.start.val();
             unsafe {
                 let dst = buf.as_mut_ptr().into();
                 checked_copy(virt, range.start, dst, count).await?;
             }
             let has_zero = buf[..count].contains(&0);
-            Ok((!has_zero).then_some(&mut buf[count..]))
+            Ok((&mut buf[count..], !has_zero))
         }
 
         self.op(virt, inner, buf.len(), &mut *buf).await?;

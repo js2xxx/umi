@@ -121,11 +121,11 @@ impl InitTask {
     pub async fn from_elf(
         parent: Weak<Task>,
         file: Phys,
+        virt: Pin<Arsc<Virt>>,
         lib_path: Vec<&Path>,
         args: Vec<String>,
     ) -> Result<Self, Error> {
         let phys = Arc::new(file);
-        let virt = crate::mem::new_virt();
 
         let has_interp = if let Some(interp) = elf::get_interp(&phys).await? {
             let _ = (lib_path, interp);
@@ -142,7 +142,7 @@ impl InitTask {
 
         let stack = Self::load_stack(virt.as_ref(), loaded.stack, args).await?;
 
-        let tf = Self::trap_frame(loaded.entry, stack, Default::default());
+        let tf = Self::trap_frame(loaded.entry, stack, 0);
 
         Ok(InitTask {
             main: Weak::new(),
@@ -183,6 +183,12 @@ impl InitTask {
         executor().spawn(fut).detach();
 
         Ok(task)
+    }
+
+    pub fn reset(self, ts: &mut TaskState, tf: &mut TrapFrame) {
+        ts.virt = self.virt;
+        // TODO: ts.files.append_afterlife(self.files);
+        *tf = self.tf;
     }
 }
 

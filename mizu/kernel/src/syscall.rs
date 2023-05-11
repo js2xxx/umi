@@ -34,6 +34,7 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         .map(CLONE, task::clone)
         .map(WAIT4, task::waitpid)
         .map(EXIT, task::exit)
+        .map(EXECVE, task::execve)
         // FS operations
         .map(READ, fd::read)
         .map(WRITE, fd::write)
