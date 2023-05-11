@@ -69,7 +69,7 @@ impl<T: Copy, D> UserPtr<T, D> {
     }
 
     pub fn is_null(&self) -> bool {
-        self.addr != 0
+        self.addr == 0
     }
 
     async fn op<'a, U, G, F>(

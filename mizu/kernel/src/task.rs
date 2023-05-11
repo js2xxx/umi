@@ -378,6 +378,7 @@ pub async fn waitpid(
                 TaskEvent::Suspended(sig) => (sig.raw() << 8) | 0x7f,
                 TaskEvent::Continued => 0xffff,
             };
+            log::trace!("Generated ws = {ws:#x}");
             wstatus.write(ts.virt.as_ref(), ws).await?;
         }
         Ok(tid)
