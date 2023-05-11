@@ -3,6 +3,8 @@ use core::{
     ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Not},
 };
 
+use ksc_core::handler::Param;
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash)]
 #[repr(transparent)]
 pub struct Sig(i32);
@@ -109,6 +111,10 @@ impl Sig {
 
     pub const fn mask(&self) -> u64 {
         1 << (self.0 - 1)
+    }
+
+    pub const fn raw(self) -> i32 {
+        self.0
     }
 
     pub const fn index(&self) -> usize {
@@ -247,6 +253,10 @@ impl const Not for Sig {
     fn not(self) -> Self::Output {
         !SigSet::from(self)
     }
+}
+
+impl Param for Sig {
+    type Item<'a> = Sig;
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash)]

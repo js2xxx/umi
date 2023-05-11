@@ -37,9 +37,9 @@ pub async fn read(
         if len == 0 {
             return Ok(0);
         }
-        let mut bufs = buffer.as_mut_slice(ts.task.virt.as_ref(), len).await?;
+        let mut bufs = buffer.as_mut_slice(ts.virt.as_ref(), len).await?;
 
-        let entry = ts.task.files.get(fd).await?;
+        let entry = ts.files.get(fd).await?;
         let io = entry.to_io().ok_or(EBADF)?;
 
         io.read(&mut bufs).await
@@ -67,9 +67,9 @@ pub async fn write(
         if len == 0 {
             return Ok(0);
         }
-        let mut bufs = buffer.as_slice(ts.task.virt.as_ref(), len).await?;
+        let mut bufs = buffer.as_slice(ts.virt.as_ref(), len).await?;
 
-        let entry = ts.task.files.get(fd).await?;
+        let entry = ts.files.get(fd).await?;
         let io = entry.to_io().ok_or(EBADF)?;
 
         io.write(&mut bufs).await
@@ -102,7 +102,7 @@ macro_rules! fssc {
                     ($(mut $arg_name),*): ($($arg_ty),*),
                 ) -> $out $body
 
-                let ret = inner(ts.task.virt.as_ref(), &ts.task.files, cx.args()).await;
+                let ret = inner(ts.virt.as_ref(), &ts.files, cx.args()).await;
                 cx.ret(ret);
 
                 ScRet::Continue(None)

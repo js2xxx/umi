@@ -55,7 +55,7 @@ pub async fn brk(ts: &mut TaskState, cx: UserCx<'_, fn(usize) -> Result<usize, E
     }
 
     let addr = cx.args();
-    let res = inner(ts.task.virt(), &mut ts.brk, addr).await;
+    let res = inner(ts.virt.as_ref(), &mut ts.brk, addr).await;
     cx.ret(res.map(|_| ts.brk));
 
     ScRet::Continue(None)

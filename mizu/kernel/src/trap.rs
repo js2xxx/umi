@@ -23,9 +23,15 @@ extern "C" fn ktrap_handler(_tf: &mut KTrapFrame) {
                     _tf.a[0] = stval::read();
                     return;
                 }
-                panic!("unhandled exception in kernel: {excep:?}")
+                panic!(
+                    "unhandled exception in kernel: {excep:?} at {:#x?}",
+                    sepc::read()
+                )
             }
-            _ => panic!("unhandled exception in kernel: {excep:?}"),
+            _ => panic!(
+                "unhandled exception in kernel: {excep:?} at {:#x}",
+                sepc::read()
+            ),
         },
     }
 }

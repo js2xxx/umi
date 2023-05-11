@@ -126,8 +126,8 @@ impl Phys {
         let frame = frames.get_mut(&index).map(|fi| {
             if writable {
                 fi.dirty = !self.cow;
-                fi.pin_count += pin as usize;
             }
+            fi.pin_count += pin as usize;
             fi.frame.clone()
         });
         if let Some(frame) = frame {
@@ -183,7 +183,7 @@ impl Phys {
 
             let fi = frames.get_mut(&index);
             fi.and_then(|fi| {
-                fi.pin_count -= unpin as usize;
+                fi.pin_count = fi.pin_count.saturating_sub(unpin as _);
                 force_dirty
                     .map(|d| d & !self.cow)
                     .unwrap_or_else(|| mem::replace(&mut fi.dirty, false))

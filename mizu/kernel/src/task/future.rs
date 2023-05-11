@@ -38,7 +38,14 @@ impl<F: Future> Future for TaskFut<F> {
     type Output = F::Output;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        unsafe { self.virt.clone().load() };
+        let old = unsafe { self.virt.clone().load() };
+        if let Some(old) = old {
+            if Arsc::count(&old) == 1 {
+                crate::executor()
+                    .spawn(async move { old.clear().await })
+                    .detach();
+            }
+        }
         self.project().fut.poll(cx)
     }
 }
@@ -46,18 +53,24 @@ impl<F: Future> Future for TaskFut<F> {
 const TASK_GRAN: Duration = Duration::from_millis(1);
 
 pub async fn user_loop(mut ts: TaskState, mut tf: TrapFrame) {
+    log::debug!("task {} startup, tf.a0 = {}", ts.task.tid, tf.gpr.tx.a[0]);
+
     let mut stat_time = time::read64();
     let mut sched_time = Instant::now();
     'life: loop {
         while let Some(si) = ts.task.sig.pop(ts.sig_mask) {
-            let _ = ts.task.event.send(&TaskEvent::Signaled(si.sig)).await;
-            let action = ts.task.sig_actions.get(si.sig);
+            let action = ts.sig_actions.get(si.sig);
             match action.ty {
                 ActionType::Ignore => {}
                 ActionType::Resume => {
                     let _ = ts.task.event.send(&TaskEvent::Continued).await;
                 }
-                ActionType::Kill => break 'life,
+                ActionType::Kill => {
+                    let exited = TaskEvent::Exited(-1, Some(si.sig));
+                    let _ = ts.task.event.send(&exited).await;
+
+                    break 'life;
+                }
                 ActionType::Suspend => {
                     let _ = ts.task.event.send(&TaskEvent::Suspended(si.sig)).await;
                     ts.task.sig.wait_one(Sig::SIGCONT).await;
@@ -86,8 +99,8 @@ pub async fn user_loop(mut ts: TaskState, mut tf: TrapFrame) {
         match handle_scause(scause, &mut ts, &mut tf).await {
             Continue(Some(sig)) => ts.task.sig.push(sig),
             Continue(None) => {}
-            Break(code) => {
-                let _ = ts.task.event.send(&TaskEvent::Exited(code)).await;
+            Break((code, sig)) => {
+                let _ = ts.task.event.send(&TaskEvent::Exited(code, sig)).await;
                 break 'life;
             }
         }
@@ -108,7 +121,7 @@ async fn handle_scause(scause: Scause, ts: &mut TaskState, tf: &mut TrapFrame) -
                 let res = async {
                     let scn = tf.scn().ok_or(ENOSYS)?;
                     if scn != Scn::WRITE {
-                        log::info!("user syscall {scn:?}");
+                        log::info!("task {} syscall {scn:?}", ts.task.tid);
                     }
                     crate::syscall::SYSCALL
                         .handle(scn, (ts, tf))
@@ -128,11 +141,12 @@ async fn handle_scause(scause: Scause, ts: &mut TaskState, tf: &mut TrapFrame) -
             | Exception::LoadPageFault
             | Exception::StorePageFault => {
                 log::info!(
-                    "user {excep:?} at {:#x}, address = {:#x}",
+                    "task {} {excep:?} at {:#x}, address = {:#x}",
+                    ts.task.tid,
                     tf.sepc,
                     tf.stval
                 );
-                let res = ts.task.virt.commit(tf.stval.into()).await;
+                let res = ts.virt.commit(tf.stval.into()).await;
                 if let Err(err) = res {
                     log::error!("failing to commit pages at address {:#x}: {err}", tf.stval);
                     return Continue(Some(SigInfo {
@@ -145,7 +159,10 @@ async fn handle_scause(scause: Scause, ts: &mut TaskState, tf: &mut TrapFrame) -
                     }));
                 }
             }
-            _ => todo!(),
+            _ => panic!(
+                "task {} unhandled excep {excep:?} at {:#x}",
+                ts.task.tid, tf.sepc
+            ),
         },
     }
     Continue(None)
