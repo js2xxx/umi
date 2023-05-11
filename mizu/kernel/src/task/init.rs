@@ -33,7 +33,7 @@ pub struct InitTask {
     parent: Weak<Task>,
     virt: Pin<Arsc<Virt>>,
     tf: TrapFrame,
-    files: Arsc<Files>,
+    files: Files,
 }
 
 impl InitTask {
@@ -114,45 +114,20 @@ impl InitTask {
             parent,
             virt,
             tf,
-            files: Arsc::new(Files::new(fd::default_stdio().await?, "/".into())),
-        })
-    }
-
-    pub async fn thread(
-        task: Arc<Task>,
-        entry: LAddr,
-        arg: usize,
-        stack: Option<(usize, Attr)>,
-    ) -> Result<Self, Error> {
-        let virt = task.virt.clone();
-
-        let stack = Self::load_stack(virt.as_ref(), stack).await?;
-
-        let tf = Self::trap_frame(entry, stack, arg);
-
-        Ok(InitTask {
-            main: Arc::downgrade(&task),
-            parent: task.parent.clone(),
-            virt,
-            tf,
-            files: task.files.clone(),
+            files: Files::new(fd::default_stdio().await?, "/".into()),
         })
     }
 
     pub fn spawn(self) -> Result<Arc<Task>, ksc::Error> {
-        static TID: AtomicUsize = AtomicUsize::new(2);
-
-        let tid = TID.fetch_add(1, SeqCst);
+        let tid = alloc_tid();
         let task = Arc::new(Task {
             main: self.main,
             parent: self.parent,
+            children: spin::Mutex::new(Vec::new()),
             tid,
-            virt: self.virt,
 
             sig: Signals::new(),
-            sig_actions: ActionSet::new(),
             event: Broadcast::new(),
-            files: self.files,
         });
 
         let ts = TaskState {
@@ -161,12 +136,22 @@ impl InitTask {
             brk: 0,
             system_times: 0,
             user_times: 0,
+            virt: self.virt,
+            files: self.files,
+            sig_actions: Arsc::new(ActionSet::new()),
+            tid_clear: None,
+            exit_signal: None,
         };
 
-        let fut = TaskFut::new(task.virt.clone(), user_loop(ts, self.tf));
+        let fut = TaskFut::new(ts.virt.clone(), user_loop(ts, self.tf));
         executor().spawn(fut).detach();
         ksync::critical(|| TASKS.lock().insert(tid, task.clone()));
 
         Ok(task)
     }
+}
+
+pub(super) fn alloc_tid() -> usize {
+    static TID: AtomicUsize = AtomicUsize::new(2);
+    TID.fetch_add(1, SeqCst)
 }

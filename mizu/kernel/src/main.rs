@@ -66,6 +66,7 @@ async fn main(fdt: usize) {
         "times",
         "mmap",
         "munmap",
+        "clone",
     ];
 
     sbi_rt::set_timer(0);

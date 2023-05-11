@@ -85,6 +85,14 @@ impl Mapping {
         }
         Ok(())
     }
+
+    async fn deep_fork(&self) -> Result<Mapping, Error> {
+        Ok(Mapping {
+            phys: Arc::new(self.phys.clone_as(true)?),
+            start_index: self.start_index,
+            attr: self.attr,
+        })
+    }
 }
 
 impl Virt {
@@ -368,6 +376,27 @@ impl Virt {
                 let _ = mapping.phys.flush(index, Some(dirty), true).await;
             }
         }
+    }
+
+    pub async fn deep_fork(self: Pin<&Self>) -> Result<Pin<Arsc<Virt>>, Error> {
+        let map = self.map.lock().await;
+        let table = self.root.lock().await;
+
+        let range = map.root_range();
+        let mut new_map = RangeMap::new(*range.start..*range.end);
+
+        for (addr, mapping) in map.iter() {
+            let new_mapping = mapping.deep_fork().await?;
+            let _ = new_map.try_insert(*addr.start..*addr.end, new_mapping);
+        }
+
+        let new_table = *table;
+        Ok(Arsc::pin(Virt {
+            root: Mutex::new(new_table),
+            map: Mutex::new(new_map),
+            cpu_mask: AtomicUsize::new(0),
+            _marker: PhantomPinned,
+        }))
     }
 }
 

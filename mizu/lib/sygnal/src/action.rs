@@ -77,6 +77,15 @@ impl ActionSet {
             old
         })
     }
+
+    pub fn deep_fork(&self) -> Self {
+        ActionSet {
+            data: array![
+                index => Mutex::new(ksync::critical(|| *self.data[index].lock()));
+                NR_SIGNALS
+            ],
+        }
+    }
 }
 
 impl const Default for ActionSet {

@@ -9,7 +9,7 @@ use ksc::{
 };
 use ktime::{Instant, InstantExt};
 use spin::Lazy;
-use sygnal::SigInfo;
+use sygnal::{Sig, SigInfo};
 
 use crate::{
     mem::{In, Out, UserPtr},
@@ -17,7 +17,7 @@ use crate::{
 };
 
 pub type ScParams<'a> = (&'a mut TaskState, &'a mut TrapFrame);
-pub type ScRet = ControlFlow<i32, Option<SigInfo>>;
+pub type ScRet = ControlFlow<(i32, Option<Sig>), Option<SigInfo>>;
 
 // TODO: Add handlers to the static.
 pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
@@ -30,6 +30,8 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         .map(GETPID, task::pid)
         .map(GETPPID, task::ppid)
         .map(TIMES, task::times)
+        .map(CLONE, task::clone)
+        .map(WAIT4, task::waitpid)
         .map(EXIT, task::exit)
         // FS operations
         .map(READ, fd::read)
@@ -65,7 +67,7 @@ async fn gettimeofday(
 
     let now = Instant::now();
     let (sec, usec) = now.to_su();
-    let ret = out.write(ts.task.virt(), Tv { sec, usec }).await;
+    let ret = out.write(ts.virt.as_ref(), Tv { sec, usec }).await;
     cx.ret(ret);
 
     ScRet::Continue(None)
@@ -97,7 +99,7 @@ async fn sleep(
         Ok(())
     }
     let (input, output) = cx.args();
-    cx.ret(sleep_inner(ts.task.virt(), input, output).await);
+    cx.ret(sleep_inner(ts.virt.as_ref(), input, output).await);
 
     ScRet::Continue(None)
 }

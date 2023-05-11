@@ -46,18 +46,24 @@ impl<F: Future> Future for TaskFut<F> {
 const TASK_GRAN: Duration = Duration::from_millis(1);
 
 pub async fn user_loop(mut ts: TaskState, mut tf: TrapFrame) {
+    log::trace!("task startup, tf.a0 = {}", tf.gpr.tx.a[0]);
+
     let mut stat_time = time::read64();
     let mut sched_time = Instant::now();
     'life: loop {
         while let Some(si) = ts.task.sig.pop(ts.sig_mask) {
-            let _ = ts.task.event.send(&TaskEvent::Signaled(si.sig)).await;
-            let action = ts.task.sig_actions.get(si.sig);
+            let action = ts.sig_actions.get(si.sig);
             match action.ty {
                 ActionType::Ignore => {}
                 ActionType::Resume => {
                     let _ = ts.task.event.send(&TaskEvent::Continued).await;
                 }
-                ActionType::Kill => break 'life,
+                ActionType::Kill => {
+                    let exited = TaskEvent::Exited(-1, Some(si.sig));
+                    let _ = ts.task.event.send(&exited).await;
+
+                    break 'life;
+                }
                 ActionType::Suspend => {
                     let _ = ts.task.event.send(&TaskEvent::Suspended(si.sig)).await;
                     ts.task.sig.wait_one(Sig::SIGCONT).await;
@@ -86,8 +92,8 @@ pub async fn user_loop(mut ts: TaskState, mut tf: TrapFrame) {
         match handle_scause(scause, &mut ts, &mut tf).await {
             Continue(Some(sig)) => ts.task.sig.push(sig),
             Continue(None) => {}
-            Break(code) => {
-                let _ = ts.task.event.send(&TaskEvent::Exited(code)).await;
+            Break((code, sig)) => {
+                let _ = ts.task.event.send(&TaskEvent::Exited(code, sig)).await;
                 break 'life;
             }
         }
@@ -132,7 +138,7 @@ async fn handle_scause(scause: Scause, ts: &mut TaskState, tf: &mut TrapFrame) -
                     tf.sepc,
                     tf.stval
                 );
-                let res = ts.task.virt.commit(tf.stval.into()).await;
+                let res = ts.virt.commit(tf.stval.into()).await;
                 if let Err(err) = res {
                     log::error!("failing to commit pages at address {:#x}: {err}", tf.stval);
                     return Continue(Some(SigInfo {

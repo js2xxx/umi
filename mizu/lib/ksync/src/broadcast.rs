@@ -1,13 +1,18 @@
-use core::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+use core::{
+    pin::Pin,
+    sync::atomic::{AtomicUsize, Ordering::SeqCst},
+    task::{Context, Poll},
+};
 
 use arsc_rs::Arsc;
 use crossbeam_queue::SegQueue;
+use futures_lite::{Future, FutureExt};
 use futures_util::future::try_join_all;
 use hashbrown::HashMap;
 use rand_riscv::RandomState;
 use spin::RwLock;
 
-use crate::{unbounded, Receiver, Recv, SendError, Sender};
+use crate::{unbounded, Receiver, Recv, RecvError, RecvOnce, SendError, Sender};
 
 pub struct Broadcast<T: Clone> {
     inner: Arsc<Inner<T>>,
@@ -66,6 +71,11 @@ impl<T: Clone> Broadcast<T> {
     pub fn recv(&self) -> Recv<SegQueue<T>> {
         self.receiver.recv()
     }
+
+    pub fn recv_once(self) -> BroadcastRecvOnce<T> {
+        let fut = self.receiver.clone().recv_once();
+        BroadcastRecvOnce { _b: self, fut }
+    }
 }
 
 impl<T: Clone> Drop for Broadcast<T> {
@@ -77,5 +87,19 @@ impl<T: Clone> Drop for Broadcast<T> {
 impl<T: Clone> Default for Broadcast<T> {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[must_use = "futures do nothing unless polled"]
+pub struct BroadcastRecvOnce<T: Clone> {
+    _b: Broadcast<T>,
+    fut: RecvOnce<SegQueue<T>>,
+}
+
+impl<T: Clone> Future for BroadcastRecvOnce<T> {
+    type Output = Result<T, RecvError<T>>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.fut.poll(cx)
     }
 }

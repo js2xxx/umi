@@ -244,6 +244,13 @@ impl<F: Flavor> Receiver<F> {
         }
     }
 
+    pub fn recv_once(self) -> RecvOnce<F> {
+        RecvOnce {
+            receiver: self,
+            listener: None,
+        }
+    }
+
     pub fn streamed(self) -> impl Stream<Item = F::Item> {
         stream::unfold(self, |this| async move {
             match this.recv().await {
@@ -293,6 +300,32 @@ pub struct Recv<'a, F: Flavor> {
 }
 
 impl<F: Flavor> Future for Recv<'_, F> {
+    type Output = Result<F::Item, RecvError<F::Item>>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        loop {
+            match self.receiver.try_recv() {
+                Ok(data) => break Poll::Ready(Ok(data)),
+                Err(TryRecvError::Closed(data)) => break Poll::Ready(Err(RecvError { data })),
+                Err(TryRecvError::Empty) => match self.listener.as_mut() {
+                    Some(listener) => {
+                        ready!(listener.poll(cx));
+                        self.listener = None;
+                    }
+                    None => self.listener = Some(self.receiver.channel.recv.listen()),
+                },
+            }
+        }
+    }
+}
+
+#[must_use = "futures do nothing unless polled"]
+pub struct RecvOnce<F: Flavor> {
+    receiver: Receiver<F>,
+    listener: Option<EventListener>,
+}
+
+impl<F: Flavor> Future for RecvOnce<F> {
     type Output = Result<F::Item, RecvError<F::Item>>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
