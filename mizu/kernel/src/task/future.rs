@@ -101,6 +101,7 @@ pub async fn user_loop(mut ts: TaskState, mut tf: TrapFrame) {
             Continue(None) => {}
             Break((code, sig)) => {
                 let _ = ts.task.event.send(&TaskEvent::Exited(code, sig)).await;
+                log::trace!("Sent exited event {code} {sig:?}");
                 break 'life;
             }
         }

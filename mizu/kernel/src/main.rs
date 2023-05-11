@@ -72,6 +72,7 @@ async fn main(fdt: usize) {
         "wait",
         "waitpid",
         "yield",
+        "pipe",
     ];
 
     sbi_rt::set_timer(0);

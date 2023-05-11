@@ -1,4 +1,5 @@
 mod dev;
+mod pipe;
 mod serial;
 
 use alloc::{collections::BTreeMap, sync::Arc};
@@ -18,6 +19,7 @@ use umifs::{
     types::{OpenOptions, Permissions},
 };
 
+pub use self::pipe::pipe;
 use crate::{dev::blocks, executor};
 
 type FsCollection = BTreeMap<PathBuf, FsHandle>;

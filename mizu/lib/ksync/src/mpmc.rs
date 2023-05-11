@@ -113,6 +113,14 @@ pub struct Sender<F: Flavor> {
     channel: Arsc<Channel<F>>,
 }
 
+impl<F: Flavor> fmt::Debug for Sender<F> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Sender")
+            .field("len", &self.channel.queue.len())
+            .finish()
+    }
+}
+
 impl<F: Flavor> Sender<F> {
     pub fn try_send(&self, data: F::Item) -> Result<(), TrySendError<F::Item>> {
         if self.channel.is_closed() {
@@ -223,6 +231,14 @@ impl<F: Flavor> Drop for Sender<F> {
 
 pub struct Receiver<F: Flavor> {
     channel: Arsc<Channel<F>>,
+}
+
+impl<F: Flavor> fmt::Debug for Receiver<F> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Receiver")
+            .field("len", &self.channel.queue.len())
+            .finish()
+    }
 }
 
 impl<F: Flavor> Receiver<F> {

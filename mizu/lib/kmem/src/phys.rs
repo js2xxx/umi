@@ -69,6 +69,7 @@ impl Borrow<PAddr> for Frame {
 
 pub struct FrameInfo {
     frame: Arc<Frame>,
+    len: usize,
     dirty: bool,
     pin_count: usize,
 }
@@ -113,31 +114,35 @@ impl Phys {
     pub async fn commit(
         &self,
         index: usize,
-        writable: bool,
+        writable: Option<usize>,
         pin: bool,
-    ) -> Result<Arc<Frame>, Error> {
+    ) -> Result<(Arc<Frame>, usize), Error> {
         log::trace!(
-            "Phys::commit index = {index} {} {}",
-            if writable { "writable" } else { "" },
+            "Phys::commit index = {index} {writable:?} {}",
             if pin { "pin" } else { "" }
         );
         let mut frames = self.frames.lock().await;
 
-        let frame = frames.get_mut(&index).map(|fi| {
-            if writable {
+        let ret = frames.get_mut(&index).map(|fi| {
+            if let Some(len) = writable {
                 fi.dirty = !self.cow;
+                fi.len = fi.len.max(len);
             }
             fi.pin_count += pin as usize;
-            fi.frame.clone()
+            (fi.frame.clone(), fi.len)
         });
-        if let Some(frame) = frame {
-            return Ok(frame);
+        if let Some(ret) = ret {
+            return Ok(ret);
         }
 
-        let frame = commit(&self.backend, index).await?;
+        let (frame, len) = commit(&self.backend, index).await?;
+        if len == 0 && writable.is_none() {
+            return Ok((frame, len));
+        }
 
         let fi = FrameInfo {
             frame: frame.clone(),
+            len: writable.map_or(len, |w| w.max(len)),
             dirty: false,
             pin_count: pin as usize,
         };
@@ -146,7 +151,7 @@ impl Phys {
             let mut data = frames.push(index, fi);
 
             let index = match data.as_ref() {
-                None => return Ok(frame),
+                None => return Ok((frame, len)),
                 Some(&(index, _)) => index,
             };
             let mut looped = false;
@@ -166,10 +171,10 @@ impl Phys {
         if let Some((index, fi)) = old_entry {
             debug_assert!(fi.pin_count == 0);
             if fi.dirty {
-                flush(&self.backend, index, &fi.frame).await?;
+                flush(&self.backend, fi.len, index, &fi.frame).await?;
             }
         }
-        Ok(frame)
+        Ok((frame, len))
     }
 
     pub async fn flush(
@@ -178,7 +183,7 @@ impl Phys {
         force_dirty: Option<bool>,
         unpin: bool,
     ) -> Result<(), Error> {
-        let frame = {
+        let ret = {
             let mut frames = self.frames.lock().await;
 
             let fi = frames.get_mut(&index);
@@ -187,11 +192,11 @@ impl Phys {
                 force_dirty
                     .map(|d| d & !self.cow)
                     .unwrap_or_else(|| mem::replace(&mut fi.dirty, false))
-                    .then(|| fi.frame.clone())
+                    .then(|| (fi.frame.clone(), fi.len))
             })
         };
-        if let Some(frame) = frame {
-            flush(&self.backend, index, &frame).await?;
+        if let Some((frame, len)) = ret {
+            flush(&self.backend, len, index, &frame).await?;
         }
         Ok(())
     }
@@ -207,8 +212,9 @@ impl Phys {
             .collect::<Vec<_>>()
         };
 
+        let end_pos = self.position.load(SeqCst);
         let flush_fn = |(index, frame): (usize, Arc<Frame>)| async move {
-            flush(&self.backend, index, &frame).await
+            flush(&self.backend, end_pos, index, &frame).await
         };
         try_join_all(frames.into_iter().map(flush_fn)).await?;
         Ok(())
@@ -223,8 +229,8 @@ impl Phys {
             let max_trial = frames.len();
             let mut trial = 0;
             while let Some((index, mut fi)) = frames.pop_lru() {
-                let (frame, dirty, pinc) = match Arc::try_unwrap(fi.frame) {
-                    Ok(frame) => (frame, fi.dirty, fi.pin_count),
+                let (frame, len, dirty, pinc) = match Arc::try_unwrap(fi.frame) {
+                    Ok(frame) => (frame, fi.len, fi.dirty, fi.pin_count),
                     Err(frame) => {
                         fi.frame = frame;
                         frames.push(index, fi);
@@ -233,7 +239,7 @@ impl Phys {
                 };
 
                 if fi.dirty {
-                    dirties.push_back((index, frame, dirty, pinc))
+                    dirties.push_back((index, frame, len, dirty, pinc))
                 } else {
                     ret.push(frame)
                 }
@@ -249,8 +255,8 @@ impl Phys {
 
         while ret.len() < max_count.get() {
             match dirties.pop_front() {
-                Some((index, frame, ..)) => {
-                    flush(&self.backend, index, &frame).await?;
+                Some((index, frame, len, ..)) => {
+                    flush(&self.backend, len, index, &frame).await?;
                     ret.push(frame)
                 }
                 None => break,
@@ -259,14 +265,17 @@ impl Phys {
 
         {
             let mut frames = self.frames.lock().await;
-            dirties.into_iter().for_each(|(index, frame, dirty, pinc)| {
-                let fi = FrameInfo {
-                    frame: Arc::new(frame),
-                    dirty,
-                    pin_count: pinc,
-                };
-                frames.push(index, fi);
-            })
+            dirties
+                .into_iter()
+                .for_each(|(index, frame, len, dirty, pinc)| {
+                    let fi = FrameInfo {
+                        frame: Arc::new(frame),
+                        len,
+                        dirty,
+                        pin_count: pinc,
+                    };
+                    frames.push(index, fi);
+                })
         };
 
         Ok(ret)
@@ -300,6 +309,7 @@ impl Io for Phys {
                 pos.ok_or(EINVAL)?.try_into()?
             }
         };
+        log::trace!("Phys::seek whence = {whence:?}, pos = {pos}");
         self.position.store(pos, SeqCst);
         Ok(pos)
     }
@@ -319,33 +329,33 @@ impl Io for Phys {
         let ((start_page, start_offset), (end_page, end_offset)) = offsets(start, end);
 
         if start_page == end_page {
-            let frame = self.commit(start_page, false, false).await?;
+            let (frame, end) = self.commit(start_page, None, false).await?;
 
             Ok(copy_from_frame(
                 &mut buffer,
                 &frame,
                 start_offset,
-                end_offset,
+                end_offset.min(end),
             ))
         } else {
             let mut read_len = 0;
             {
-                let frame = self.commit(start_page, false, false).await?;
-                read_len += copy_from_frame(&mut buffer, &frame, start_offset, PAGE_SIZE);
-                if buffer.is_empty() {
+                let (frame, end) = self.commit(start_page, None, false).await?;
+                read_len += copy_from_frame(&mut buffer, &frame, start_offset, end);
+                if end < PAGE_SIZE || buffer.is_empty() {
                     return Ok(read_len);
                 }
             }
             for index in (start_page + 1)..end_page {
-                let frame = self.commit(index, false, false).await?;
-                read_len += copy_from_frame(&mut buffer, &frame, 0, PAGE_SIZE);
-                if buffer.is_empty() {
+                let (frame, end) = self.commit(index, None, false).await?;
+                read_len += copy_from_frame(&mut buffer, &frame, 0, end);
+                if end < PAGE_SIZE || buffer.is_empty() {
                     return Ok(read_len);
                 }
             }
             {
-                let frame = self.commit(end_page, false, false).await?;
-                read_len += copy_from_frame(&mut buffer, &frame, 0, end_offset);
+                let (frame, end) = self.commit(end_page, None, false).await?;
+                read_len += copy_from_frame(&mut buffer, &frame, 0, end_offset.min(end));
             }
 
             Ok(read_len)
@@ -367,13 +377,13 @@ impl Io for Phys {
         let ((start_page, start_offset), (end_page, end_offset)) = offsets(start, end);
 
         if start_page == end_page {
-            let frame = self.commit(start_page, true, false).await?;
+            let (frame, _) = self.commit(start_page, Some(end_offset), false).await?;
 
             Ok(copy_to_frame(&mut buffer, &frame, start_offset, end_offset))
         } else {
             let mut written_len = 0;
             {
-                let frame = self.commit(start_page, true, false).await?;
+                let (frame, _) = self.commit(start_page, Some(PAGE_SIZE), false).await?;
                 let len = copy_to_frame(&mut buffer, &frame, start_offset, PAGE_SIZE);
                 written_len += len;
                 if buffer.is_empty() {
@@ -381,7 +391,7 @@ impl Io for Phys {
                 }
             }
             for index in (start_page + 1)..end_page {
-                let frame = self.commit(index, true, false).await?;
+                let (frame, _) = self.commit(index, Some(PAGE_SIZE), false).await?;
                 let len = copy_to_frame(&mut buffer, &frame, 0, PAGE_SIZE);
                 written_len += len;
                 if buffer.is_empty() {
@@ -389,7 +399,7 @@ impl Io for Phys {
                 }
             }
             {
-                let frame = self.commit(end_page, true, false).await?;
+                let (frame, _) = self.commit(end_page, Some(end_offset), false).await?;
                 let len = copy_to_frame(&mut buffer, &frame, 0, end_offset);
                 written_len += len;
             }
@@ -472,23 +482,29 @@ fn copy_to_frame(
     }
 }
 
-async fn commit<T: Io + ?Sized>(io: impl AsRef<T>, index: usize) -> Result<Arc<Frame>, Error> {
+async fn commit<T: Io + ?Sized>(
+    io: impl AsRef<T>,
+    index: usize,
+) -> Result<(Arc<Frame>, usize), Error> {
     let io = io.as_ref();
     let offset = index << PAGE_SHIFT;
     let end = (offset + PAGE_SIZE).min(io.stream_len().await?);
-    let len = end - offset;
+    let len = end.saturating_sub(offset);
 
     let mut frame = Frame::new().ok_or(ENOMEM)?;
     io.read_exact_at(offset, &mut frame.as_mut_slice()[..len])
         .await?;
-    Ok(Arc::new(frame))
+    Ok((Arc::new(frame), len))
 }
 
 async fn flush<T: Io + ?Sized>(
     io: impl AsRef<T>,
+    end_pos: usize,
     index: usize,
     frame: &Frame,
 ) -> Result<(), Error> {
     let io = io.as_ref();
-    io.write_all_at(index << PAGE_SHIFT, frame.as_slice()).await
+    let len = end_pos.saturating_sub(index << PAGE_SHIFT);
+    io.write_all_at(index << PAGE_SHIFT, &frame.as_slice()[..len])
+        .await
 }

@@ -434,4 +434,11 @@ fssc!(
         let len = (len + PAGE_MASK) & !PAGE_MASK;
         virt.unmap(addr.into()..(addr + len).into()).await
     }
+
+    pub async fn pipe(virt: Pin<&Virt>, files: &Files, fd: UserPtr<i32, Out>) -> Result<(), Error> {
+        let (tx, rx) = crate::fs::pipe();
+        let tx = files.open(tx).await?;
+        let rx = files.open(rx).await?;
+        fd.write_slice(virt, &[rx, tx], false).await
+    }
 );

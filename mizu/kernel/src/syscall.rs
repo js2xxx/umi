@@ -47,6 +47,7 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         .map(GETDENTS64, fd::getdents64)
         .map(UNLINKAT, fd::unlinkat)
         .map(CLOSE, fd::close)
+        .map(PIPE2, fd::pipe)
         // Time
         .map(GETTIMEOFDAY, gettimeofday)
         .map(NANOSLEEP, sleep)

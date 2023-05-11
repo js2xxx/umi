@@ -16,6 +16,7 @@ use core::{
 
 use arsc_rs::Arsc;
 use co_trap::{TrapFrame, UserCx};
+use crossbeam_queue::SegQueue;
 use futures_util::future::{select, select_all, Either};
 use hashbrown::HashMap;
 use kmem::Virt;
@@ -23,7 +24,7 @@ use ksc::{
     async_handler,
     Error::{self, ECHILD, EINVAL},
 };
-use ksync::Broadcast;
+use ksync::{unbounded, Broadcast, Receiver};
 use rand_riscv::RandomState;
 use rv39_paging::{Attr, PAGE_SIZE};
 use spin::{Lazy, Mutex};
@@ -65,20 +66,28 @@ pub enum TaskEvent {
     Continued,
 }
 
+#[derive(Debug, Clone)]
+struct Child {
+    task: Arc<Task>,
+    event: Receiver<SegQueue<TaskEvent>>,
+}
+
 #[derive(Debug)]
 pub struct Task {
     main: Weak<Task>,
     parent: Weak<Task>,
-    children: spin::Mutex<Vec<(Arc<Task>, Broadcast<TaskEvent>)>>,
+    children: spin::Mutex<Vec<Child>>,
     tid: usize,
 
     sig: Signals,
-    event: Broadcast<TaskEvent>,
+    event: Broadcast<SegQueue<TaskEvent>>,
 }
 
 impl Task {
-    pub fn event(&self) -> Broadcast<TaskEvent> {
-        self.event.clone()
+    pub fn event(&self) -> Receiver<SegQueue<TaskEvent>> {
+        let (tx, rx) = unbounded();
+        self.event.subscribe(tx);
+        rx
     }
 
     pub async fn wait(&self) -> i32 {
@@ -98,8 +107,8 @@ pub fn task(id: usize) -> Option<Arc<Task>> {
     ksync::critical(|| TASKS.lock().get(&id).cloned())
 }
 
-pub fn task_event(id: usize) -> Option<Broadcast<TaskEvent>> {
-    ksync::critical(|| TASKS.lock().get(&id).map(|t| t.event.clone()))
+pub fn task_event(id: usize) -> Option<Receiver<SegQueue<TaskEvent>>> {
+    ksync::critical(|| TASKS.lock().get(&id).map(|t| t.event()))
 }
 
 pub fn process(id: usize) -> Option<Arc<Task>> {
@@ -285,10 +294,10 @@ async fn clone_task(
 
     if let Some(parent) = new_ts.task.parent.upgrade() {
         ksync::critical(|| {
-            parent
-                .children
-                .lock()
-                .push((new_ts.task.clone(), new_ts.task.event()))
+            parent.children.lock().push(Child {
+                task: new_ts.task.clone(),
+                event: new_ts.task.event(),
+            })
         });
 
         ksync::critical(|| log::debug!("now have {} child(ren)", parent.children.lock().len()));
@@ -342,15 +351,15 @@ pub async fn waitpid(
 
             match &children[..] {
                 [] => return Err(ECHILD),
-                [(a, ea)] => (ea.recv().await, a.tid),
-                [(a, ea), (b, eb)] => match select(ea.recv(), eb.recv()).await {
-                    Either::Left((te, _)) => (te, a.tid),
-                    Either::Right((te, _)) => (te, b.tid),
+                [a] => (a.event.recv().await, a.task.tid),
+                [a, b] => match select(a.event.recv(), b.event.recv()).await {
+                    Either::Left((te, _)) => (te, a.task.tid),
+                    Either::Right((te, _)) => (te, b.task.tid),
                 },
                 _ => {
-                    let events = children.iter().map(|(_, event)| event);
+                    let events = children.iter().map(|c| &c.event);
                     let select_all = select_all(events.map(|event| event.recv())).await;
-                    (select_all.0, children[select_all.1].0.tid)
+                    (select_all.0, children[select_all.1].task.tid)
                 }
             }
         } else {
@@ -358,10 +367,10 @@ pub async fn waitpid(
                 let children = ts.task.children.lock();
                 children
                     .iter()
-                    .find(|(s, _)| s.tid == pid as usize)
+                    .find(|c| c.task.tid == pid as usize)
                     .cloned()
             });
-            (child.ok_or(ECHILD)?.1.recv().await, pid as usize)
+            (child.ok_or(ECHILD)?.event.recv().await, pid as usize)
         };
         log::trace!("task::wait tid = {tid}, event = {res:?}");
         let event = match res {
@@ -369,7 +378,7 @@ pub async fn waitpid(
             Err(e) => e.data().ok_or(ECHILD)?,
         };
         if matches!(event, TaskEvent::Exited(..)) {
-            ksync::critical(|| ts.task.children.lock().retain(|(c, _)| c.tid != tid));
+            ksync::critical(|| ts.task.children.lock().retain(|c| c.task.tid != tid));
         }
 
         if !wstatus.is_null() {
