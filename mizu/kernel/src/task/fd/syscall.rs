@@ -376,7 +376,7 @@ fssc!(
                 const FIXED     = 0x100;  /* Interpret addr exactly */
                 const ANONYMOUS = 0x10;  /* don't use a file */
 
-                const POPULATE          = 0x20000;  /* populate (prefault) pagetables */
+                const POPULATE  = 0x20000;  /* populate (prefault) pagetables */
             }
         }
 
@@ -402,19 +402,12 @@ fssc!(
             offset >> PAGE_SHIFT
         };
 
-        let attr = {
-            let mut attr = Attr::USER_ACCESS;
-            if prot.contains(Prot::READ) {
-                attr |= Attr::READABLE;
-            }
-            if prot.contains(Prot::WRITE) {
-                attr |= Attr::WRITABLE;
-            }
-            if prot.contains(Prot::EXEC) {
-                attr |= Attr::EXECUTABLE;
-            }
-            attr
-        };
+        let attr = Attr::builder()
+            .user_access(true)
+            .readable(prot.contains(Prot::READ))
+            .writable(prot.contains(Prot::WRITE))
+            .executable(prot.contains(Prot::EXEC))
+            .build();
 
         let count = (len + PAGE_MASK) >> PAGE_SHIFT;
         let addr = virt.map(addr, Arc::new(phys), offset, count, attr).await?;

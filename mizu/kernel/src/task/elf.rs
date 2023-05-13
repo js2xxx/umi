@@ -51,17 +51,12 @@ pub struct LoadedElf {
 }
 
 fn parse_attr(flags: u32) -> Attr {
-    let mut ret = Attr::USER_ACCESS;
-    if flags & PF_R != 0 {
-        ret |= Attr::READABLE;
-    }
-    if flags & PF_W != 0 {
-        ret |= Attr::WRITABLE;
-    }
-    if flags & PF_X != 0 {
-        ret |= Attr::EXECUTABLE;
-    }
-    ret
+    Attr::builder()
+        .user_access(true)
+        .readable(flags & PF_R != 0)
+        .writable(flags & PF_W != 0)
+        .executable(flags & PF_X != 0)
+        .build()
 }
 
 async fn parse_header(phys: &Phys, force_dyn: Option<bool>) -> Result<(Header, bool), Error> {

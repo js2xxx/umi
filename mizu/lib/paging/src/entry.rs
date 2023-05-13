@@ -64,6 +64,14 @@ impl AttrBuilder {
     }
 
     #[inline]
+    pub const fn readable(mut self, readable: bool) -> Self {
+        if readable {
+            self.attr = self.attr.union(Attr::READABLE);
+        }
+        self
+    }
+
+    #[inline]
     pub const fn writable(mut self, writable: bool) -> Self {
         if writable {
             self.attr = self.attr.union(Attr::WRITABLE);

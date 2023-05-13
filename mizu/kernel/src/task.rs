@@ -61,18 +61,14 @@ impl Task {
 
     pub async fn wait(&self) -> i32 {
         let event = self.event();
+        let msg = "Task returned without sending a break code";
         loop {
-            match event.recv().await {
-                Ok(TaskEvent::Exited(code, _)) => break code,
-                Err(err) => {
-                    let task_event = err
-                        .data()
-                        .expect("Task returned without sending a break code");
-                    if let TaskEvent::Exited(code, _) = task_event {
-                        break code;
-                    }
-                }
-                _ => {}
+            let e = match event.recv().await {
+                Ok(e) => e,
+                Err(err) => err.data().expect(msg),
+            };
+            if let TaskEvent::Exited(code, _) = e {
+                break code;
             }
         }
     }
