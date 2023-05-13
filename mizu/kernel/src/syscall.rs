@@ -9,7 +9,7 @@ use ksc::{
 };
 use ktime::{Instant, InstantExt};
 use spin::Lazy;
-use sygnal::{Sig, SigInfo};
+use sygnal::SigInfo;
 
 use crate::{
     mem::{In, Out, UserPtr},
@@ -17,7 +17,7 @@ use crate::{
 };
 
 pub type ScParams<'a> = (&'a mut TaskState, &'a mut TrapFrame);
-pub type ScRet = ControlFlow<(i32, Option<Sig>), Option<SigInfo>>;
+pub type ScRet = ControlFlow<i32, Option<SigInfo>>;
 
 pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
     AHandlers::new()

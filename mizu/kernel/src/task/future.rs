@@ -57,7 +57,7 @@ pub async fn user_loop(mut ts: TaskState, mut tf: TrapFrame) {
 
     let mut stat_time = time::read64();
     let mut sched_time = Instant::now();
-    'life: loop {
+    let code = 'life: loop {
         while let Some(si) = ts.task.sig.pop(ts.sig_mask) {
             let action = ts.sig_actions.get(si.sig);
             match action.ty {
@@ -66,10 +66,8 @@ pub async fn user_loop(mut ts: TaskState, mut tf: TrapFrame) {
                     let _ = ts.task.event.send(&TaskEvent::Continued).await;
                 }
                 ActionType::Kill => {
-                    let exited = TaskEvent::Exited(-1, Some(si.sig));
-                    let _ = ts.task.event.send(&exited).await;
-
-                    break 'life;
+                    ts.exit_signal = Some(si.sig);
+                    break 'life -1;
                 }
                 ActionType::Suspend => {
                     let _ = ts.task.event.send(&TaskEvent::Suspended(si.sig)).await;
@@ -92,18 +90,14 @@ pub async fn user_loop(mut ts: TaskState, mut tf: TrapFrame) {
         match fr {
             FastResult::Continue => {}
             FastResult::Pending => continue,
-            FastResult::Break => break 'life,
+            FastResult::Break => break 'life -1,
             FastResult::Yield => unreachable!(),
         }
 
         match handle_scause(scause, &mut ts, &mut tf).await {
             Continue(Some(sig)) => ts.task.sig.push(sig),
             Continue(None) => {}
-            Break((code, sig)) => {
-                let _ = ts.task.event.send(&TaskEvent::Exited(code, sig)).await;
-                log::trace!("Sent exited event {code} {sig:?}");
-                break 'life;
-            }
+            Break(code) => break 'life code,
         }
 
         let new_time = Instant::now();
@@ -111,7 +105,8 @@ pub async fn user_loop(mut ts: TaskState, mut tf: TrapFrame) {
             sched_time = new_time;
             yield_now().await
         }
-    }
+    };
+    ts.cleanup(code).await
 }
 
 async fn handle_scause(scause: Scause, ts: &mut TaskState, tf: &mut TrapFrame) -> ScRet {
