@@ -1,7 +1,6 @@
 use alloc::{boxed::Box, sync::Arc};
 
 use async_trait::async_trait;
-use futures_lite::future::yield_now;
 use ksc::Error;
 use umio::Io;
 
@@ -26,13 +25,10 @@ pub trait Block: Io {
 
     async fn intr_dispatch(self: Arc<Self>, intr: Interrupt) {
         loop {
-            // TODO: use `intr.wait().await`.
-            if let Some(false) = intr.try_wait() {
+            if !intr.wait().await {
                 break;
             }
-
             self.ack_interrupt();
-            yield_now().await;
         }
     }
 }

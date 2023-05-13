@@ -19,7 +19,6 @@ use crate::{
 pub type ScParams<'a> = (&'a mut TaskState, &'a mut TrapFrame);
 pub type ScRet = ControlFlow<(i32, Option<Sig>), Option<SigInfo>>;
 
-// TODO: Add handlers to the static.
 pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
     AHandlers::new()
         // Memory management

@@ -42,7 +42,6 @@ pub unsafe fn init_hart_id(id: usize) {
 
 pub fn init_bsp_id(id: usize) {
     BSP_ID.store(id, Release);
-    ksync_core::critical(|| HIDS.lock().push(id));
 }
 
 pub fn count() -> usize {
