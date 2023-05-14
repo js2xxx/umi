@@ -1,6 +1,7 @@
 mod tlb;
 
 use alloc::{sync::Arc, vec::Vec};
+use futures_util::Future;
 use core::{
     marker::PhantomPinned,
     mem,
@@ -114,7 +115,7 @@ impl Virt {
     /// The caller must ensure that the current executing address is mapped
     /// correctly.
     #[inline]
-    pub unsafe fn load(self: Pin<Arsc<Self>>) -> Option<Arsc<Virt>> {
+    pub unsafe fn load(self: Pin<Arsc<Self>>) -> Option<impl Future<Output = ()> + Send + 'static> {
         tlb::set_virt(self)
     }
 
@@ -379,6 +380,7 @@ impl Virt {
 
         let count = (range.end.val() - range.start.val()) >> PAGE_SHIFT;
         let _ = table.user_unmap_npages(range.start, count, frames(), ID_OFFSET);
+        tlb::flush(self.cpu_mask.load(Relaxed), range.start, count);
 
         for (addr, mapping) in old {
             let count: usize = (addr.end.val() - addr.start.val()) >> PAGE_SHIFT;
@@ -419,5 +421,6 @@ impl Drop for Virt {
             .root
             .get_mut()
             .user_unmap_npages(*range.start, count, frames(), ID_OFFSET);
+        tlb::flush(self.cpu_mask.load(Relaxed), *range.start, count);
     }
 }

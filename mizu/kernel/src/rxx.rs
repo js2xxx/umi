@@ -159,6 +159,7 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
 
         ksync::enable(true);
     }
+    sbi_rt::set_timer(0);
 
     run_art(payload);
     unsafe { ksync::disable(true) };

@@ -36,13 +36,9 @@ impl<F: Future> Future for TaskFut<F> {
     type Output = F::Output;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let old = unsafe { self.virt.clone().load() };
-        if let Some(old) = old {
-            if Arsc::count(&old) == 1 {
-                crate::executor()
-                    .spawn(async move { old.clear().await })
-                    .detach();
-            }
+        let clear = unsafe { self.virt.clone().load() };
+        if let Some(clear) = clear {
+            crate::executor().spawn(clear).detach();
         }
         self.project().fut.poll(cx)
     }
@@ -82,11 +78,6 @@ pub async fn user_loop(mut ts: TaskState, mut tf: TrapFrame) {
         ts.user_times += usr - stat_time;
         stat_time = usr;
 
-        if usr - sched_time >= TASK_GRAN {
-            sched_time = usr;
-            yield_now().await;
-        }
-
         match fr {
             FastResult::Continue => {}
             FastResult::Pending => continue,
@@ -98,6 +89,13 @@ pub async fn user_loop(mut ts: TaskState, mut tf: TrapFrame) {
             Continue(Some(sig)) => ts.task.sig.push(sig),
             Continue(None) => {}
             Break(code) => break 'life code,
+        }
+
+        let now = time::read64();
+        if now - sched_time >= TASK_GRAN {
+            sched_time = now;
+            log::trace!("task {} yield", ts.task.tid);
+            yield_now().await;
         }
     };
     ts.cleanup(code).await
@@ -150,8 +148,8 @@ async fn handle_scause(scause: Scause, ts: &mut TaskState, tf: &mut TrapFrame) -
                 }
             }
             _ => panic!(
-                "task {} unhandled excep {excep:?} at {:#x}",
-                ts.task.tid, tf.sepc
+                "task {} unhandled excep {excep:?} at {:#x}, stval = {:#x}",
+                ts.task.tid, tf.sepc, tf.stval
             ),
         },
     }
