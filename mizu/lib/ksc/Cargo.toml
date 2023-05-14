@@ -13,7 +13,6 @@ test = [
 
 [dependencies]
 # Local crates
-co-trap = {path = "../co-trap"}
 ksc-core = {path = "../ksc-core"}
 ksc-macros = {path = "../ksc-macros"}
 rand-riscv = {path = "../rand-riscv"}

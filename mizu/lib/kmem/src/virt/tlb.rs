@@ -1,4 +1,9 @@
-use core::{mem, pin::Pin, ptr, sync::atomic::Ordering::SeqCst};
+use core::{
+    mem,
+    pin::Pin,
+    ptr::{self, NonNull},
+    sync::atomic::Ordering::SeqCst,
+};
 
 use arsc_rs::Arsc;
 use riscv::{
@@ -26,13 +31,13 @@ pub fn set_virt(virt: Pin<Arsc<Virt>>) -> Option<Arsc<Virt>> {
             satp::set(Sv39, 0, paddr >> PAGE_SHIFT);
             sfence_vma_all()
         }
-        if !old.is_null() {
-            let old = unsafe { Arsc::from_raw(old) };
-            old.cpu_mask.fetch_and(!(1 << hart_id::hart_id()), SeqCst);
-            return Some(old);
-        }
     }
-    None
+
+    NonNull::new(old.cast_mut()).map(|old| {
+        let old = unsafe { Arsc::from_raw(old.as_ptr()) };
+        old.cpu_mask.fetch_and(!(1 << hart_id::hart_id()), SeqCst);
+        old
+    })
 }
 
 pub fn flush(cpu_mask: usize, addr: LAddr, count: usize) {

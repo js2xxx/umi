@@ -3,14 +3,12 @@ use core::{
     ops::ControlFlow::{Break, Continue},
     pin::Pin,
     task::{Context, Poll},
-    time::Duration,
 };
 
 use arsc_rs::Arsc;
 use co_trap::{FastResult, TrapFrame};
 use kmem::Virt;
 use ksc::{Scn, ENOSYS};
-use ktime::Instant;
 use pin_project::pin_project;
 use riscv::register::{
     scause::{Exception, Scause, Trap},
@@ -50,13 +48,13 @@ impl<F: Future> Future for TaskFut<F> {
     }
 }
 
-const TASK_GRAN: Duration = Duration::from_millis(1);
+const TASK_GRAN: u64 = 20000;
 
 pub async fn user_loop(mut ts: TaskState, mut tf: TrapFrame) {
     log::debug!("task {} startup, tf.a0 = {}", ts.task.tid, tf.gpr.tx.a[0]);
 
     let mut stat_time = time::read64();
-    let mut sched_time = Instant::now();
+    let mut sched_time = stat_time;
     let code = 'life: loop {
         while let Some(si) = ts.task.sig.pop(ts.sig_mask) {
             let action = ts.sig_actions.get(si.sig);
@@ -65,10 +63,7 @@ pub async fn user_loop(mut ts: TaskState, mut tf: TrapFrame) {
                 ActionType::Resume => {
                     let _ = ts.task.event.send(&TaskEvent::Continued).await;
                 }
-                ActionType::Kill => {
-                    ts.exit_signal = Some(si.sig);
-                    break 'life -1;
-                }
+                ActionType::Kill => break 'life si.sig.raw(),
                 ActionType::Suspend => {
                     let _ = ts.task.event.send(&TaskEvent::Suspended(si.sig)).await;
                     ts.task.sig.wait_one(Sig::SIGCONT).await;
@@ -87,6 +82,11 @@ pub async fn user_loop(mut ts: TaskState, mut tf: TrapFrame) {
         ts.user_times += usr - stat_time;
         stat_time = usr;
 
+        if usr - sched_time >= TASK_GRAN {
+            sched_time = usr;
+            yield_now().await;
+        }
+
         match fr {
             FastResult::Continue => {}
             FastResult::Pending => continue,
@@ -98,12 +98,6 @@ pub async fn user_loop(mut ts: TaskState, mut tf: TrapFrame) {
             Continue(Some(sig)) => ts.task.sig.push(sig),
             Continue(None) => {}
             Break(code) => break 'life code,
-        }
-
-        let new_time = Instant::now();
-        if new_time - sched_time >= TASK_GRAN {
-            sched_time = new_time;
-            yield_now().await
         }
     };
     ts.cleanup(code).await

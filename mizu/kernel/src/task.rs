@@ -12,8 +12,10 @@ use core::pin::Pin;
 
 use arsc_rs::Arsc;
 use crossbeam_queue::SegQueue;
+use futures_util::future::{select, select_all, Either};
 use hashbrown::HashMap;
 use kmem::Virt;
+use ksc::Error::{self, ECHILD};
 use ksync::{unbounded, Broadcast, Receiver};
 use rand_riscv::RandomState;
 use rv39_paging::{Attr, PAGE_SIZE};
@@ -89,7 +91,64 @@ pub struct TaskState {
     exit_signal: Option<Sig>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum WaitPid {
+    Group(Option<usize>),
+    Task(Option<usize>),
+}
+
+impl From<isize> for WaitPid {
+    fn from(value: isize) -> Self {
+        match value {
+            -1 => WaitPid::Task(None),
+            0 => WaitPid::Group(None),
+            x if x > 0 => WaitPid::Task(Some(x as usize)),
+            x => WaitPid::Group(Some(-x as usize)),
+        }
+    }
+}
+
 impl TaskState {
+    async fn wait(&self, pid: WaitPid) -> Result<(TaskEvent, usize), Error> {
+        let (res, tid) = match pid {
+            WaitPid::Task(None) => {
+                let children = ksync::critical(|| self.task.children.lock().clone());
+                log::trace!("task::wait found {} child(ren)", children.len());
+
+                match &children[..] {
+                    [] => return Err(ECHILD),
+                    [a] => (a.event.recv().await, a.task.tid),
+                    [a, b] => match select(a.event.recv(), b.event.recv()).await {
+                        Either::Left((te, _)) => (te, a.task.tid),
+                        Either::Right((te, _)) => (te, b.task.tid),
+                    },
+                    _ => {
+                        let events = children.iter().map(|c| &c.event);
+                        let select_all = select_all(events.map(|event| event.recv())).await;
+                        (select_all.0, children[select_all.1].task.tid)
+                    }
+                }
+            }
+            WaitPid::Task(Some(tid)) => {
+                let child = ksync::critical(|| {
+                    let children = self.task.children.lock();
+                    children.iter().find(|c| c.task.tid == tid).cloned()
+                });
+                (child.ok_or(ECHILD)?.event.recv().await, tid)
+            }
+            x => todo!("{x:?}"),
+        };
+        log::trace!("task::wait tid = {tid}, event = {res:?}");
+        let event = match res {
+            Ok(w) => w,
+            Err(e) => e.data().ok_or(ECHILD)?,
+        };
+        if matches!(event, TaskEvent::Exited(..)) {
+            ksync::critical(|| self.task.children.lock().retain(|c| c.task.tid != tid));
+        }
+        Ok((event, tid))
+    }
+
     async fn cleanup(mut self, code: i32) {
         if let Some(mut tid_clear) = self.tid_clear.take() {
             let _ = tid_clear.write(self.virt.as_ref(), 0).await;

@@ -6,11 +6,10 @@ use core::{
 
 use arsc_rs::Arsc;
 use co_trap::{TrapFrame, UserCx};
-use futures_util::future::{select, select_all, Either};
 use kmem::Phys;
 use ksc::{
     async_handler,
-    Error::{self, ECHILD, EINVAL, ENOTDIR},
+    Error::{self, EINVAL, ENOTDIR},
     RawReg,
 };
 use ksync::Broadcast;
@@ -37,8 +36,7 @@ pub async fn uyield(_: &mut TaskState, cx: UserCx<'_, fn()>) -> ScRet {
 
 #[async_handler]
 pub async fn pid(ts: &mut TaskState, cx: UserCx<'_, fn() -> usize>) -> ScRet {
-    let task = &ts.task;
-    cx.ret(task.tid);
+    cx.ret(ts.task.tid);
     Continue(None)
 }
 
@@ -221,49 +219,9 @@ pub async fn waitpid(
     ts: &mut TaskState,
     cx: UserCx<'_, fn(isize, UserPtr<i32, Out>, i32) -> Result<usize, Error>>,
 ) -> ScRet {
-    async fn inner(
-        ts: &mut TaskState,
-        pid: isize,
-        mut wstatus: UserPtr<i32, Out>,
-        _options: i32,
-    ) -> Result<usize, Error> {
-        log::trace!("task::wait pid = {pid}");
-        let (res, tid) = if pid <= 0 {
-            let children = ksync::critical(|| ts.task.children.lock().clone());
-            log::trace!("task::wait found {} child(ren)", children.len());
-
-            match &children[..] {
-                [] => return Err(ECHILD),
-                [a] => (a.event.recv().await, a.task.tid),
-                [a, b] => match select(a.event.recv(), b.event.recv()).await {
-                    Either::Left((te, _)) => (te, a.task.tid),
-                    Either::Right((te, _)) => (te, b.task.tid),
-                },
-                _ => {
-                    let events = children.iter().map(|c| &c.event);
-                    let select_all = select_all(events.map(|event| event.recv())).await;
-                    (select_all.0, children[select_all.1].task.tid)
-                }
-            }
-        } else {
-            let child = ksync::critical(|| {
-                let children = ts.task.children.lock();
-                children
-                    .iter()
-                    .find(|c| c.task.tid == pid as usize)
-                    .cloned()
-            });
-            (child.ok_or(ECHILD)?.event.recv().await, pid as usize)
-        };
-        log::trace!("task::wait tid = {tid}, event = {res:?}");
-        let event = match res {
-            Ok(w) => w,
-            Err(e) => e.data().ok_or(ECHILD)?,
-        };
-        if matches!(event, TaskEvent::Exited(..)) {
-            ksync::critical(|| ts.task.children.lock().retain(|c| c.task.tid != tid));
-        }
-
+    let (pid, mut wstatus, _options) = cx.args();
+    let inner = async move {
+        let (event, tid) = ts.wait(pid.into()).await?;
         if !wstatus.is_null() {
             let ws = match event {
                 TaskEvent::Exited(code, sig) => ((code & 0xff) << 8) | sig.map_or(0, Sig::raw),
@@ -274,10 +232,8 @@ pub async fn waitpid(
             wstatus.write(ts.virt.as_ref(), ws).await?;
         }
         Ok(tid)
-    }
-    let (pid, wstatus, options) = cx.args();
-
-    cx.ret(inner(ts, pid, wstatus, options).await);
+    };
+    cx.ret(inner.await);
     Continue(None)
 }
 
