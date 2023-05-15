@@ -9,12 +9,15 @@ use core::{
 
 use async_trait::async_trait;
 use futures_util::future::try_join_all;
-use ksc_core::Error::{self, EINVAL, ENOMEM, EPERM};
+use ksc_core::{
+    handler::Boxed,
+    Error::{self, EINVAL, ENOMEM},
+};
 use ksync::Mutex;
 use rand_riscv::RandomState;
 use rv39_paging::{PAddr, ID_OFFSET, PAGE_SHIFT, PAGE_SIZE};
 use umifs::misc::Zero;
-use umio::{advance_slices, ioslice_len, Io, IoExt, IoSlice, IoSliceMut, SeekFrom};
+use umio::{advance_slices, ioslice_len, IntoAnyExt, Io, IoExt, IoSlice, IoSliceMut, SeekFrom};
 
 use crate::lru::LruCache;
 
@@ -91,12 +94,12 @@ impl Phys {
         }
     }
 
-    pub fn clone_as(&self, cow: bool) -> Result<Self, Error> {
-        if self.cow && !cow {
-            return Err(EPERM);
+    pub fn clone_as(self: &Arc<Self>, cow: bool) -> Self {
+        if cow {
+            Phys::new(self.clone(), 0, true)
+        } else {
+            Phys::new(self.backend.clone(), 0, false)
         }
-        // TODO: Reuse frames among COW physes.
-        Ok(Phys::new(self.backend.clone(), 0, cow))
     }
 
     pub fn is_cow(&self) -> bool {
@@ -135,7 +138,7 @@ impl Phys {
             return Ok(ret);
         }
 
-        let (frame, len) = commit(&self.backend, index).await?;
+        let (frame, len) = commit(&self.backend, index, writable, pin).await?;
         if len == 0 && writable.is_none() {
             return Ok((frame, len));
         }
@@ -482,27 +485,37 @@ fn copy_to_frame(
     }
 }
 
-async fn commit<T: Io + ?Sized>(
-    io: impl AsRef<T>,
+fn commit(
+    io: &Arc<dyn Io>,
     index: usize,
-) -> Result<(Arc<Frame>, usize), Error> {
-    let io = io.as_ref();
-    let offset = index << PAGE_SHIFT;
-    let end = (offset + PAGE_SIZE).min(io.stream_len().await?);
-    let len = end.saturating_sub(offset);
+    writable: Option<usize>,
+    pin: bool,
+) -> Boxed<Result<(Arc<Frame>, usize), Error>> {
+    Box::pin(async move {
+        if let Some(phys) = io.clone().downcast::<Phys>() {
+            let (frame, len) = phys.commit(index, writable, pin).await?;
+            return Ok(if writable.is_some() && phys.cow {
+                let mut dst = Frame::new().ok_or(ENOMEM)?;
+                dst.as_mut_slice()[..len].copy_from_slice(&frame.as_slice()[..len]);
+                (Arc::new(dst), len)
+            } else {
+                (frame, len)
+            });
+        }
 
-    let mut frame = Frame::new().ok_or(ENOMEM)?;
-    io.read_exact_at(offset, &mut frame.as_mut_slice()[..len])
-        .await?;
-    Ok((Arc::new(frame), len))
+        let io = io.as_ref();
+        let offset = index << PAGE_SHIFT;
+        let end = (offset + PAGE_SIZE).min(io.stream_len().await?);
+        let len = end.saturating_sub(offset);
+
+        let mut frame = Frame::new().ok_or(ENOMEM)?;
+        io.read_exact_at(offset, &mut frame.as_mut_slice()[..len])
+            .await?;
+        Ok((Arc::new(frame), len))
+    })
 }
 
-async fn flush<T: Io + ?Sized>(
-    io: impl AsRef<T>,
-    end_pos: usize,
-    index: usize,
-    frame: &Frame,
-) -> Result<(), Error> {
+async fn flush(io: &Arc<dyn Io>, end_pos: usize, index: usize, frame: &Frame) -> Result<(), Error> {
     let io = io.as_ref();
     let len = end_pos.saturating_sub(index << PAGE_SHIFT);
     io.write_all_at(index << PAGE_SHIFT, &frame.as_slice()[..len])

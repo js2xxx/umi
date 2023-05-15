@@ -406,6 +406,7 @@ name = "ksc"
 version = "0.1.0"
 dependencies = [
  "bevy_utils_proc_macros",
+ "co-trap",
  "futures-util",
  "hashbrown",
  "ksc-core",

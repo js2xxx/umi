@@ -389,7 +389,7 @@ fssc!(
         } else {
             let entry = files.get(fd).await?;
             match entry.clone().downcast::<Phys>() {
-                Some(phys) => phys.clone_as(cow)?,
+                Some(phys) => phys.clone_as(cow),
                 None => Phys::new(entry.to_io().ok_or(EISDIR)?, 0, cow),
             }
         };

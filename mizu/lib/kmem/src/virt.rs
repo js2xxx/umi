@@ -91,12 +91,12 @@ impl Mapping {
         Ok(())
     }
 
-    async fn deep_fork(&self) -> Result<Mapping, Error> {
-        Ok(Mapping {
-            phys: Arc::new(self.phys.clone_as(true)?),
+    async fn deep_fork(&self) -> Mapping {
+        Mapping {
+            phys: Arc::new(self.phys.clone_as(self.phys.is_cow())),
             start_index: self.start_index,
             attr: self.attr,
-        })
+        }
     }
 }
 
@@ -401,7 +401,7 @@ impl Virt {
         let mut new_map = RangeMap::new(*range.start..*range.end);
 
         for (addr, mapping) in map.iter() {
-            let new_mapping = mapping.deep_fork().await?;
+            let new_mapping = mapping.deep_fork().await;
             let _ = new_map.try_insert(*addr.start..*addr.end, new_mapping);
         }
 

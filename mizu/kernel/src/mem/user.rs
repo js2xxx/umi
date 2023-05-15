@@ -180,7 +180,10 @@ impl<T: Copy, D: InPtr> UserPtr<T, D> {
             Ok((&mut buf[count..], !has_zero))
         }
 
-        let rest_len = self.paged_op(virt, inner, buf.len(), &mut *buf).await?.len();
+        let rest_len = self
+            .paged_op(virt, inner, buf.len(), &mut *buf)
+            .await?
+            .len();
         let pos = buf[..(buf.len() - rest_len)]
             .iter()
             .position(|&s| s == Default::default())
