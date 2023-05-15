@@ -78,6 +78,8 @@ impl Task {
 
 pub struct TaskState {
     pub(crate) task: Arc<Task>,
+    tgroup: Arsc<(usize, spin::RwLock<Vec<Arc<Task>>>)>,
+
     sig_mask: SigSet,
     pub(crate) brk: usize,
 
@@ -155,17 +157,26 @@ impl TaskState {
         }
 
         let sig = self.exit_signal.take();
-        if let (Some(sig), Some(parent)) = (sig, self.task.parent.upgrade()) {
-            parent.sig.push(SigInfo {
-                sig,
-                code: sygnal::SigCode::USER,
-                fields: sygnal::SigFields::SigChld {
-                    pid: self.task.tid,
-                    uid: 0,
-                    status: code,
-                },
-            })
+        let last_thread = ksync::critical(|| {
+            let mut tgroup = self.tgroup.1.write();
+            let index = tgroup.iter().position(|t| Arc::ptr_eq(t, &self.task));
+            tgroup.swap_remove(index.unwrap());
+            tgroup.is_empty()
+        });
+        if last_thread {
+            if let (Some(sig), Some(parent)) = (sig, self.task.parent.upgrade()) {
+                parent.sig.push(SigInfo {
+                    sig,
+                    code: sygnal::SigCode::USER,
+                    fields: sygnal::SigFields::SigChld {
+                        pid: self.task.tid,
+                        uid: 0,
+                        status: code,
+                    },
+                })
+            }
         }
+
         let _ = self.files.flush_all().await;
 
         self.task.event.send(&TaskEvent::Exited(code, sig)).await;

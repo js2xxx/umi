@@ -1,6 +1,7 @@
 use alloc::{
     string::String,
     sync::{Arc, Weak},
+    vec,
     vec::Vec,
 };
 use core::{
@@ -164,6 +165,7 @@ impl InitTask {
 
         let ts = TaskState {
             task: task.clone(),
+            tgroup: Arsc::new((tid, spin::RwLock::new(vec![task.clone()]))),
             sig_mask: SigSet::EMPTY,
             brk: 0,
             system_times: 0,

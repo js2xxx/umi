@@ -1,5 +1,6 @@
-use alloc::{boxed::Box, string::ToString, sync::Arc, vec::Vec};
+use alloc::{boxed::Box, string::ToString, sync::Arc, vec, vec::Vec};
 use core::{
+    mem,
     num::NonZeroUsize,
     ops::ControlFlow::{Break, Continue},
 };
@@ -13,7 +14,7 @@ use ksc::{
     RawReg,
 };
 use ksync::Broadcast;
-use sygnal::{Sig, SigSet, Signals};
+use sygnal::{Sig, SigCode, SigFields, SigInfo, SigSet, Signals};
 use umifs::types::Permissions;
 
 use crate::{
@@ -35,8 +36,14 @@ pub async fn uyield(_: &mut TaskState, cx: UserCx<'_, fn()>) -> ScRet {
 }
 
 #[async_handler]
-pub async fn pid(ts: &mut TaskState, cx: UserCx<'_, fn() -> usize>) -> ScRet {
+pub async fn tid(ts: &mut TaskState, cx: UserCx<'_, fn() -> usize>) -> ScRet {
     cx.ret(ts.task.tid);
+    Continue(None)
+}
+
+#[async_handler]
+pub async fn pid(ts: &mut TaskState, cx: UserCx<'_, fn() -> usize>) -> ScRet {
+    cx.ret(ts.tgroup.0);
     Continue(None)
 }
 
@@ -63,6 +70,18 @@ pub async fn exit(_: &mut TaskState, cx: UserCx<'_, fn(i32)>) -> ScRet {
     Break(cx.args())
 }
 
+#[async_handler]
+pub async fn exit_group(ts: &mut TaskState, cx: UserCx<'_, fn(i32)>) -> ScRet {
+    for t in ksync::critical(|| ts.tgroup.1.read().clone()) {
+        t.sig.push(SigInfo {
+            sig: Sig::SIGKILL,
+            code: SigCode::USER,
+            fields: SigFields::None,
+        });
+    }
+    Break(cx.args())
+}
+
 async fn clone_task(
     ts: &mut TaskState,
     tf: &TrapFrame,
@@ -86,6 +105,8 @@ async fn clone_task(
             const SIGHAND        = 0x00000800;
             /// Share parent.
             const PARENT         = 0x00008000;
+            /// Share thread group.
+            const THREAD         = 0x00010000;
             /// Set TLS.
             const SETTLS         = 0x00080000;
 
@@ -95,19 +116,32 @@ async fn clone_task(
         }
     }
     let flags = Flags::from_bits_truncate(flags);
+
+    if flags.contains(Flags::SIGHAND) && !flags.contains(Flags::VM) {
+        return Err(EINVAL);
+    }
+
+    if flags.contains(Flags::THREAD) && !flags.contains(Flags::SIGHAND) {
+        return Err(EINVAL);
+    }
+
     let bits = (flags & Flags::CSIGNAL).bits();
-    let exit_signal = Some(if bits == 0 {
-        Sig::SIGCHLD
+    let exit_signal = if flags.intersects(Flags::PARENT | Flags::THREAD) {
+        ts.exit_signal
     } else {
-        Sig::new(bits as i32).ok_or(EINVAL)?
-    });
+        Some(if bits == 0 {
+            Sig::SIGCHLD
+        } else {
+            Sig::new(bits as i32).ok_or(EINVAL)?
+        })
+    };
 
     log::trace!("clone_task: flags = {flags:?}");
 
     let new_tid = init::alloc_tid();
     log::trace!("new tid = {new_tid}");
     let task = Arc::new(Task {
-        parent: if flags.contains(Flags::PARENT) {
+        parent: if flags.intersects(Flags::PARENT | Flags::THREAD) {
             ts.task.parent.clone()
         } else {
             Arc::downgrade(&ts.task)
@@ -150,6 +184,13 @@ async fn clone_task(
 
     let new_ts = TaskState {
         task: task.clone(),
+        tgroup: if flags.contains(Flags::THREAD) {
+            let tgroup = ts.tgroup.clone();
+            ksync::critical(|| tgroup.1.write().push(task.clone()));
+            tgroup
+        } else {
+            Arsc::new((new_tid, spin::RwLock::new(vec![task.clone()])))
+        },
         sig_mask: SigSet::EMPTY,
         brk: ts.brk,
         system_times: 0,
@@ -173,15 +214,17 @@ async fn clone_task(
         new_ts.task.parent.upgrade()
     );
 
-    if let Some(parent) = new_ts.task.parent.upgrade() {
-        ksync::critical(|| {
-            parent.children.lock().push(Child {
-                task: new_ts.task.clone(),
-                event: new_ts.task.event(),
-            })
-        });
+    if !flags.contains(Flags::THREAD) {
+        if let Some(parent) = new_ts.task.parent.upgrade() {
+            ksync::critical(|| {
+                parent.children.lock().push(Child {
+                    task: new_ts.task.clone(),
+                    event: new_ts.task.event(),
+                })
+            });
 
-        ksync::critical(|| log::debug!("now have {} child(ren)", parent.children.lock().len()));
+            ksync::critical(|| log::debug!("now have {} child(ren)", parent.children.lock().len()));
+        }
     }
 
     ksync::critical(|| TASKS.lock().insert(new_tid, task.clone()));
@@ -285,6 +328,21 @@ pub async fn execve(
         let (file, _) = crate::fs::open(&name, Default::default(), Permissions::all()).await?;
 
         ts.virt.clear().await;
+        let old = mem::replace(
+            &mut ts.tgroup,
+            Arsc::new((ts.task.tid, spin::RwLock::new(vec![ts.task.clone()]))),
+        );
+        for t in ksync::critical(|| old.1.read().clone())
+            .into_iter()
+            .filter(|t| !Arc::ptr_eq(t, &ts.task))
+        {
+            t.sig.push(SigInfo {
+                sig: Sig::SIGKILL,
+                code: SigCode::DETHREAD,
+                fields: SigFields::None,
+            });
+        }
+
         let init = InitTask::from_elf(
             ts.task.parent.clone(),
             Phys::new(file.to_io().ok_or(ENOTDIR)?, 0, true),
