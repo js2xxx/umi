@@ -59,7 +59,10 @@ pub async fn user_loop(mut ts: TaskState, mut tf: TrapFrame) {
                 ActionType::Resume => {
                     let _ = ts.task.event.send(&TaskEvent::Continued).await;
                 }
-                ActionType::Kill => break 'life si.sig.raw(),
+                ActionType::Kill => {
+                    ts.sig_fatal(si, false);
+                    break 'life si.sig.raw();
+                }
                 ActionType::Suspend => {
                     let _ = ts.task.event.send(&TaskEvent::Suspended(si.sig)).await;
                     ts.task.sig.wait_one(Sig::SIGCONT).await;

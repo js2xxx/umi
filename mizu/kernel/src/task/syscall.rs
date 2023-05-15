@@ -1,6 +1,5 @@
 use alloc::{boxed::Box, string::ToString, sync::Arc, vec, vec::Vec};
 use core::{
-    mem,
     num::NonZeroUsize,
     ops::ControlFlow::{Break, Continue},
 };
@@ -72,13 +71,14 @@ pub async fn exit(_: &mut TaskState, cx: UserCx<'_, fn(i32)>) -> ScRet {
 
 #[async_handler]
 pub async fn exit_group(ts: &mut TaskState, cx: UserCx<'_, fn(i32)>) -> ScRet {
-    for t in ksync::critical(|| ts.tgroup.1.read().clone()) {
-        t.sig.push(SigInfo {
+    ts.sig_fatal(
+        SigInfo {
             sig: Sig::SIGKILL,
             code: SigCode::USER,
             fields: SigFields::None,
-        });
-    }
+        },
+        false,
+    );
     Break(cx.args())
 }
 
@@ -328,20 +328,14 @@ pub async fn execve(
         let (file, _) = crate::fs::open(&name, Default::default(), Permissions::all()).await?;
 
         ts.virt.clear().await;
-        let old = mem::replace(
-            &mut ts.tgroup,
-            Arsc::new((ts.task.tid, spin::RwLock::new(vec![ts.task.clone()]))),
-        );
-        for t in ksync::critical(|| old.1.read().clone())
-            .into_iter()
-            .filter(|t| !Arc::ptr_eq(t, &ts.task))
-        {
-            t.sig.push(SigInfo {
+        ts.sig_fatal(
+            SigInfo {
                 sig: Sig::SIGKILL,
                 code: SigCode::DETHREAD,
                 fields: SigFields::None,
-            });
-        }
+            },
+            true,
+        );
 
         let init = InitTask::from_elf(
             ts.task.parent.clone(),

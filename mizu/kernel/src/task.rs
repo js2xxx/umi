@@ -6,9 +6,10 @@ mod syscall;
 
 use alloc::{
     sync::{Arc, Weak},
+    vec,
     vec::Vec,
 };
-use core::pin::Pin;
+use core::{mem, pin::Pin};
 
 use arsc_rs::Arsc;
 use crossbeam_queue::SegQueue;
@@ -149,6 +150,23 @@ impl TaskState {
             ksync::critical(|| self.task.children.lock().retain(|c| c.task.tid != tid));
         }
         Ok((event, tid))
+    }
+
+    fn sig_fatal(&mut self, si: SigInfo, clear: bool) {
+        let tgroup = if clear {
+            mem::replace(
+                &mut self.tgroup,
+                Arsc::new((self.task.tid, spin::RwLock::new(vec![self.task.clone()]))),
+            )
+        } else {
+            self.tgroup.clone()
+        };
+        for t in ksync::critical(|| tgroup.1.read().clone())
+            .into_iter()
+            .filter(|t| !Arc::ptr_eq(t, &self.task))
+        {
+            t.sig.push(si);
+        }
     }
 
     async fn cleanup(mut self, code: i32) {
