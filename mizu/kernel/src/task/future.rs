@@ -14,9 +14,9 @@ use riscv::register::{
     scause::{Exception, Scause, Trap},
     time,
 };
-use sygnal::{ActionType, Sig, SigCode, SigInfo};
+use sygnal::{Sig, SigCode, SigInfo};
 
-use super::{TaskEvent, TaskState};
+use super::TaskState;
 use crate::syscall::ScRet;
 
 #[pin_project]
@@ -51,24 +51,10 @@ pub async fn user_loop(mut ts: TaskState, mut tf: TrapFrame) {
 
     let mut stat_time = time::read64();
     let mut sched_time = stat_time;
-    let code = 'life: loop {
-        while let Some(si) = ts.task.sig.pop(ts.sig_mask) {
-            let action = ts.sig_actions.get(si.sig);
-            match action.ty {
-                ActionType::Ignore => {}
-                ActionType::Resume => {
-                    let _ = ts.task.event.send(&TaskEvent::Continued).await;
-                }
-                ActionType::Kill => {
-                    ts.sig_fatal(si, false);
-                    break 'life si.sig.raw();
-                }
-                ActionType::Suspend => {
-                    let _ = ts.task.event.send(&TaskEvent::Suspended(si.sig)).await;
-                    ts.task.sig.wait_one(Sig::SIGCONT).await;
-                }
-                ActionType::User { .. } => todo!(),
-            }
+    let (code, sig) = 'life: loop {
+        match ts.handle_signals().await {
+            Continue(()) => {}
+            Break((code, sig)) => break 'life (code, Some(sig)),
         }
 
         let sys = time::read64();
@@ -84,14 +70,14 @@ pub async fn user_loop(mut ts: TaskState, mut tf: TrapFrame) {
         match fr {
             FastResult::Continue => {}
             FastResult::Pending => continue,
-            FastResult::Break => break 'life -1,
+            FastResult::Break => break 'life (-1, None),
             FastResult::Yield => unreachable!(),
         }
 
         match handle_scause(scause, &mut ts, &mut tf).await {
             Continue(Some(sig)) => ts.task.sig.push(sig),
             Continue(None) => {}
-            Break(code) => break 'life code,
+            Break(code) => break 'life (code, None),
         }
 
         let now = time::read64();
@@ -101,7 +87,7 @@ pub async fn user_loop(mut ts: TaskState, mut tf: TrapFrame) {
             yield_now().await;
         }
     };
-    ts.cleanup(code).await
+    ts.cleanup(code, sig).await
 }
 
 async fn handle_scause(scause: Scause, ts: &mut TaskState, tf: &mut TrapFrame) -> ScRet {

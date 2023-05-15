@@ -4,6 +4,7 @@
 
 extern crate alloc;
 
+mod atomic;
 mod broadcast;
 pub mod epoch;
 mod mpmc;
@@ -22,7 +23,9 @@ pub use event_listener as event;
 use futures_util::task::noop_waker;
 pub use ksync_core::*;
 
-pub use self::{broadcast::*, mpmc::*, mutex::*, rcu::*, rw_lock::*, semaphore::*};
+pub use self::{
+    atomic::AtomicArsc, broadcast::*, mpmc::*, mutex::*, rcu::*, rw_lock::*, semaphore::*,
+};
 
 pub fn poll_once<F: Future>(f: F) -> Option<F::Output> {
     let noop = noop_waker();

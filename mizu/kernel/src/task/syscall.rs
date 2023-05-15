@@ -2,6 +2,7 @@ use alloc::{boxed::Box, string::ToString, sync::Arc, vec, vec::Vec};
 use core::{
     num::NonZeroUsize,
     ops::ControlFlow::{Break, Continue},
+    sync::atomic::Ordering::SeqCst,
 };
 
 use arsc_rs::Arsc;
@@ -12,7 +13,7 @@ use ksc::{
     Error::{self, EINVAL, ENOTDIR},
     RawReg,
 };
-use ksync::Broadcast;
+use ksync::{AtomicArsc, Broadcast};
 use sygnal::{Sig, SigCode, SigFields, SigInfo, SigSet, Signals};
 use umifs::types::Permissions;
 
@@ -149,6 +150,11 @@ async fn clone_task(
         children: spin::Mutex::new(Vec::new()),
         tid: new_tid,
         sig: Signals::new(),
+        shared_sig: AtomicArsc::new(if flags.contains(Flags::THREAD) {
+            ts.task.shared_sig.load(SeqCst)
+        } else {
+            Default::default()
+        }),
         event: Broadcast::new(),
     });
     if flags.contains(Flags::PARENT_SETTID) {
@@ -336,6 +342,7 @@ pub async fn execve(
             true,
         );
         ts.virt.clear().await;
+        ts.task.shared_sig.swap(Default::default(), SeqCst);
 
         let init = InitTask::from_elf(
             ts.task.parent.clone(),

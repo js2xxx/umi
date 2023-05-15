@@ -160,6 +160,7 @@ impl InitTask {
             tid,
 
             sig: Signals::new(),
+            shared_sig: Default::default(),
             event: Broadcast::new(),
         });
 

@@ -9,7 +9,7 @@ use alloc::{
     vec,
     vec::Vec,
 };
-use core::{mem, pin::Pin};
+use core::{mem, ops::ControlFlow, pin::Pin, sync::atomic::Ordering::SeqCst};
 
 use arsc_rs::Arsc;
 use crossbeam_queue::SegQueue;
@@ -17,11 +17,11 @@ use futures_util::future::{select, select_all, Either};
 use hashbrown::HashMap;
 use kmem::Virt;
 use ksc::Error::{self, ECHILD};
-use ksync::{unbounded, Broadcast, Receiver};
+use ksync::{unbounded, AtomicArsc, Broadcast, Receiver};
 use rand_riscv::RandomState;
 use rv39_paging::{Attr, PAGE_SIZE};
 use spin::{Lazy, Mutex};
-use sygnal::{ActionSet, Sig, SigInfo, SigSet, Signals};
+use sygnal::{ActionSet, ActionType, Sig, SigInfo, SigSet, Signals};
 
 use self::fd::Files;
 pub use self::{future::yield_now, init::InitTask, syscall::*};
@@ -52,6 +52,7 @@ pub struct Task {
     tid: usize,
 
     sig: Signals,
+    shared_sig: AtomicArsc<Signals>,
     event: Broadcast<SegQueue<TaskEvent>>,
 }
 
@@ -152,6 +153,30 @@ impl TaskState {
         Ok((event, tid))
     }
 
+    async fn handle_signals(&mut self) -> ControlFlow<(i32, Sig), ()> {
+        let si = self.task.sig.pop(self.sig_mask);
+        let si = si.or_else(|| self.task.shared_sig.load(SeqCst).pop(self.sig_mask));
+        if let Some(si) = si {
+            let action = self.sig_actions.get(si.sig);
+            match action.ty {
+                ActionType::Ignore => {}
+                ActionType::Resume => {
+                    let _ = self.task.event.send(&TaskEvent::Continued).await;
+                }
+                ActionType::Kill => {
+                    self.sig_fatal(si, false);
+                    return ControlFlow::Break((-1, si.sig));
+                }
+                ActionType::Suspend => {
+                    let _ = self.task.event.send(&TaskEvent::Suspended(si.sig)).await;
+                    self.task.sig.wait_one(Sig::SIGCONT).await;
+                }
+                ActionType::User { .. } => todo!(),
+            }
+        }
+        ControlFlow::Continue(())
+    }
+
     fn sig_fatal(&mut self, si: SigInfo, clear: bool) {
         let tgroup = if clear {
             mem::replace(
@@ -169,12 +194,11 @@ impl TaskState {
         }
     }
 
-    async fn cleanup(mut self, code: i32) {
+    async fn cleanup(mut self, code: i32, sig: Option<Sig>) {
         if let Some(mut tid_clear) = self.tid_clear.take() {
             let _ = tid_clear.write(self.virt.as_ref(), 0).await;
         }
 
-        let sig = self.exit_signal.take();
         let last_thread = ksync::critical(|| {
             let mut tgroup = self.tgroup.1.write();
             let index = tgroup.iter().position(|t| Arc::ptr_eq(t, &self.task));
@@ -182,7 +206,8 @@ impl TaskState {
             tgroup.is_empty()
         });
         if last_thread {
-            if let (Some(sig), Some(parent)) = (sig, self.task.parent.upgrade()) {
+            let exit_signal = self.exit_signal.take();
+            if let (Some(sig), Some(parent)) = (exit_signal, self.task.parent.upgrade()) {
                 parent.sig.push(SigInfo {
                     sig,
                     code: sygnal::SigCode::USER,
