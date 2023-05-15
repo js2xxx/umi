@@ -327,7 +327,6 @@ pub async fn execve(
 
         let (file, _) = crate::fs::open(&name, Default::default(), Permissions::all()).await?;
 
-        ts.virt.clear().await;
         ts.sig_fatal(
             SigInfo {
                 sig: Sig::SIGKILL,
@@ -336,6 +335,7 @@ pub async fn execve(
             },
             true,
         );
+        ts.virt.clear().await;
 
         let init = InitTask::from_elf(
             ts.task.parent.clone(),
