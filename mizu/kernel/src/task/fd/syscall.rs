@@ -141,7 +141,7 @@ fssc!(
         files: &Files,
         buf: UserPtr<u8, Out>,
         len: usize,
-    ) -> Result<usize, Error> {
+    ) -> Result<UserPtr<u8, Out>, Error> {
         log::trace!("user getcwd buf = {buf:?}, len = {len}");
 
         let cwd = files.cwd();
@@ -150,7 +150,7 @@ fssc!(
             Err(ERANGE)
         } else {
             buf.write_slice(virt, path, true).await?;
-            Ok(buf.addr())
+            Ok(buf)
         }
     }
 
