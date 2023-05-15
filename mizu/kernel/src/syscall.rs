@@ -9,7 +9,7 @@ use ksc::{
 };
 use ktime::{Instant, InstantExt};
 use spin::Lazy;
-use sygnal::{Sig, SigInfo};
+use sygnal::SigInfo;
 
 use crate::{
     mem::{In, Out, UserPtr},
@@ -17,9 +17,8 @@ use crate::{
 };
 
 pub type ScParams<'a> = (&'a mut TaskState, &'a mut TrapFrame);
-pub type ScRet = ControlFlow<(i32, Option<Sig>), Option<SigInfo>>;
+pub type ScRet = ControlFlow<i32, Option<SigInfo>>;
 
-// TODO: Add handlers to the static.
 pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
     AHandlers::new()
         // Memory management
@@ -28,12 +27,14 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         .map(MUNMAP, fd::munmap)
         // Tasks
         .map(SCHED_YIELD, task::uyield)
+        .map(GETTID, task::tid)
         .map(GETPID, task::pid)
         .map(GETPPID, task::ppid)
         .map(TIMES, task::times)
         .map(CLONE, task::clone)
         .map(WAIT4, task::waitpid)
         .map(EXIT, task::exit)
+        .map(EXIT_GROUP, task::exit_group)
         .map(EXECVE, task::execve)
         // FS operations
         .map(READ, fd::read)

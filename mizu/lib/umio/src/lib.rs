@@ -102,7 +102,7 @@ pub fn advance_slices(bufs: &mut &mut [impl IoSliceExt], n: usize) {
     }
 }
 
-pub trait IntoAny: Any {
+pub trait IntoAny: Any + Send + Sync {
     fn into_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync>;
 
     fn into_any_arsc(self: Arsc<Self>) -> Arsc<dyn Any + Send + Sync>;
@@ -131,7 +131,7 @@ pub trait IntoAnyExt: IntoAny {
 impl<T: IntoAny + ?Sized> IntoAnyExt for T {}
 
 #[async_trait]
-pub trait Io: ToIo + Send + Sync + 'static {
+pub trait Io: ToIo + IntoAny {
     async fn read(&self, buffer: &mut [IoSliceMut]) -> Result<usize, Error> {
         let offset = self.seek(SeekFrom::Current(0)).await?;
         let read_len = self.read_at(offset, buffer).await?;

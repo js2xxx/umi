@@ -2,68 +2,35 @@ mod elf;
 pub mod fd;
 mod future;
 mod init;
+mod signal;
+mod syscall;
 
 use alloc::{
-    boxed::Box,
-    string::ToString,
     sync::{Arc, Weak},
     vec::Vec,
 };
-use core::{
-    num::NonZeroUsize,
-    ops::ControlFlow::{Break, Continue},
-    pin::Pin,
-};
+use core::pin::Pin;
 
 use arsc_rs::Arsc;
-use co_trap::{TrapFrame, UserCx};
 use crossbeam_queue::SegQueue;
 use futures_util::future::{select, select_all, Either};
 use hashbrown::HashMap;
-use kmem::{Phys, Virt};
-use ksc::{
-    async_handler,
-    Error::{self, ECHILD, EINVAL, ENOTDIR},
-    RawReg,
-};
-use ksync::{unbounded, Broadcast, Receiver};
+use kmem::Virt;
+use ksc::Error::{self, ECHILD};
+use ksync::{unbounded, AtomicArsc, Broadcast, Receiver};
 use rand_riscv::RandomState;
 use rv39_paging::{Attr, PAGE_SIZE};
 use spin::{Lazy, Mutex};
 use sygnal::{ActionSet, Sig, SigInfo, SigSet, Signals};
-use umifs::types::Permissions;
 
 use self::fd::Files;
-pub use self::{future::yield_now, init::InitTask};
-use crate::{
-    executor,
-    mem::{In, Out, UserPtr},
-    syscall::ScRet,
-    task::{
-        fd::MAX_PATH_LEN,
-        future::{user_loop, TaskFut},
-    },
-};
+pub use self::{future::yield_now, init::InitTask, syscall::*};
+use crate::mem::{Out, UserPtr};
 
 const DEFAULT_STACK_SIZE: usize = PAGE_SIZE * 32;
 const DEFAULT_STACK_ATTR: Attr = Attr::USER_ACCESS
     .union(Attr::READABLE)
     .union(Attr::WRITABLE);
-
-pub struct TaskState {
-    pub(crate) task: Arc<Task>,
-    sig_mask: SigSet,
-    pub(crate) brk: usize,
-
-    system_times: u64,
-    user_times: u64,
-
-    pub(crate) virt: Pin<Arsc<Virt>>,
-    sig_actions: Arsc<ActionSet>,
-    files: Files,
-    tid_clear: Option<UserPtr<usize, Out>>,
-    exit_signal: Option<Sig>,
-}
 
 #[derive(Clone, Copy, Debug)]
 pub enum TaskEvent {
@@ -80,17 +47,17 @@ struct Child {
 
 #[derive(Debug)]
 pub struct Task {
-    main: Weak<Task>,
     parent: Weak<Task>,
     children: spin::Mutex<Vec<Child>>,
     tid: usize,
 
     sig: Signals,
+    shared_sig: AtomicArsc<Signals>,
     event: Broadcast<SegQueue<TaskEvent>>,
 }
 
 impl Task {
-    pub fn event(&self) -> Receiver<SegQueue<TaskEvent>> {
+    fn event(&self) -> Receiver<SegQueue<TaskEvent>> {
         let (tx, rx) = unbounded();
         self.event.subscribe(tx);
         rx
@@ -98,287 +65,82 @@ impl Task {
 
     pub async fn wait(&self) -> i32 {
         let event = self.event();
+        let msg = "Task returned without sending a break code";
         loop {
-            if let Ok(TaskEvent::Exited(code, _)) = event.recv().await {
+            let e = match event.recv().await {
+                Ok(e) => e,
+                Err(err) => err.data().expect(msg),
+            };
+            if let TaskEvent::Exited(code, _) = e {
                 break code;
             }
         }
     }
 }
 
-static TASKS: Lazy<Mutex<HashMap<usize, Arc<Task>, RandomState>>> =
-    Lazy::new(|| Mutex::new(HashMap::with_hasher(RandomState::new())));
+pub struct TaskState {
+    pub(crate) task: Arc<Task>,
+    tgroup: Arsc<(usize, spin::RwLock<Vec<Arc<Task>>>)>,
 
-pub fn task(id: usize) -> Option<Arc<Task>> {
-    ksync::critical(|| TASKS.lock().get(&id).cloned())
+    sig_mask: SigSet,
+    pub(crate) brk: usize,
+
+    system_times: u64,
+    user_times: u64,
+
+    pub(crate) virt: Pin<Arsc<Virt>>,
+    sig_actions: Arsc<ActionSet>,
+    files: Files,
+    tid_clear: Option<UserPtr<usize, Out>>,
+    exit_signal: Option<Sig>,
 }
 
-pub fn task_event(id: usize) -> Option<Receiver<SegQueue<TaskEvent>>> {
-    ksync::critical(|| TASKS.lock().get(&id).map(|t| t.event()))
+#[derive(Debug, Clone, Copy)]
+pub enum WaitPid {
+    Group(Option<usize>),
+    Task(Option<usize>),
 }
 
-pub fn process(id: usize) -> Option<Arc<Task>> {
-    let task = self::task(id)?;
-    Some(match task.main.upgrade() {
-        Some(main) => main,
-        None => task,
-    })
-}
-
-#[async_handler]
-pub async fn uyield(_: &mut TaskState, cx: UserCx<'_, fn()>) -> ScRet {
-    yield_now().await;
-    cx.ret(());
-    ScRet::Continue(None)
-}
-
-#[async_handler]
-pub async fn pid(ts: &mut TaskState, cx: UserCx<'_, fn() -> usize>) -> ScRet {
-    let task = &ts.task;
-    cx.ret(task.main.upgrade().map_or(task.tid, |main| main.tid));
-    Continue(None)
-}
-
-#[async_handler]
-pub async fn ppid(ts: &mut TaskState, cx: UserCx<'_, fn() -> usize>) -> ScRet {
-    let task = &ts.task;
-    cx.ret(task.parent.upgrade().map_or(1, |parent| parent.tid));
-    Continue(None)
-}
-
-#[async_handler]
-pub async fn times(
-    ts: &mut TaskState,
-    cx: UserCx<'_, fn(UserPtr<u64, Out>) -> Result<(), Error>>,
-) -> ScRet {
-    let mut out = cx.args();
-    let data = [ts.user_times, ts.system_times, 0, 0];
-    cx.ret(out.write_slice(ts.virt.as_ref(), &data, false).await);
-    Continue(None)
-}
-
-#[async_handler]
-pub async fn exit(ts: &mut TaskState, cx: UserCx<'_, fn(i32)>) -> ScRet {
-    let code = cx.args();
-
-    if let Some(mut tid_clear) = ts.tid_clear.take() {
-        let _ = tid_clear.write(ts.virt.as_ref(), 0).await;
-    }
-
-    let take = ts.exit_signal.take();
-    if let (Some(sig), Some(parent)) = (take, ts.task.parent.upgrade()) {
-        parent.sig.push(SigInfo {
-            sig,
-            code: sygnal::SigCode::USER,
-            fields: sygnal::SigFields::SigChld {
-                pid: ts.task.tid,
-                uid: 0,
-                status: code,
-            },
-        })
-    }
-
-    ksync::critical(|| TASKS.lock().remove(&ts.task.tid));
-    let _ = ts.files.flush_all().await;
-
-    Break((code, take))
-}
-
-async fn clone_task(
-    ts: &mut TaskState,
-    tf: &TrapFrame,
-    flags: u64,
-    stack: Option<NonZeroUsize>,
-    mut ptid: UserPtr<usize, Out>,
-    tls: usize,
-    mut ctid: UserPtr<usize, Out>,
-) -> Result<usize, Error> {
-    bitflags::bitflags! {
-        #[derive(Debug, Copy, Clone)]
-        struct Flags: u64 {
-            const CSIGNAL        = 0x000000ff;
-            /// Share virt.
-            const VM             = 0x00000100;
-            /// Share cwd.
-            const FS             = 0x00000200;
-            /// Share fd.
-            const FILES          = 0x00000400;
-            /// Share sigaction.
-            const SIGHAND        = 0x00000800;
-            /// Share parent.
-            const PARENT         = 0x00008000;
-            /// Set TLS.
-            const SETTLS         = 0x00080000;
-
-            const PARENT_SETTID  = 0x00100000;
-            const CHILD_CLEARTID = 0x00200000;
-            const CHILD_SETTID   = 0x01000000;
+impl From<isize> for WaitPid {
+    fn from(value: isize) -> Self {
+        match value {
+            -1 => WaitPid::Task(None),
+            0 => WaitPid::Group(None),
+            x if x > 0 => WaitPid::Task(Some(x as usize)),
+            x => WaitPid::Group(Some(-x as usize)),
         }
     }
-    let flags = Flags::from_bits_truncate(flags);
-    let bits = (flags & Flags::CSIGNAL).bits();
-    let exit_signal = if bits == 0 {
-        None
-    } else {
-        Some(Sig::new(bits as i32).ok_or(EINVAL)?)
-    };
-
-    log::trace!("clone_task: flags = {flags:?}");
-
-    let new_tid = init::alloc_tid();
-    log::trace!("new tid = {new_tid}");
-    let task = Task {
-        main: if flags.contains(Flags::VM) {
-            Arc::downgrade(&ts.task)
-        } else {
-            Weak::new()
-        },
-        parent: if flags.contains(Flags::PARENT) {
-            ts.task.parent.clone()
-        } else {
-            Arc::downgrade(&ts.task)
-        },
-        children: spin::Mutex::new(Vec::new()),
-        tid: new_tid,
-        sig: Signals::new(),
-        event: Broadcast::new(),
-    };
-    if flags.contains(Flags::PARENT_SETTID) {
-        ptid.write(ts.virt.as_ref(), new_tid).await?;
-    }
-    if flags.contains(Flags::CHILD_SETTID) {
-        ctid.write(ts.virt.as_ref(), new_tid).await?;
-    }
-
-    log::trace!("clone_task: cloning virt");
-
-    let virt = if flags.contains(Flags::VM) {
-        ts.virt.clone()
-    } else {
-        ts.virt.as_ref().deep_fork().await?
-    };
-
-    let mut new_tf = *tf;
-
-    log::trace!("clone_task: setting up TrapFrame");
-
-    new_tf.set_syscall_ret(0);
-    new_tf.gpr.tx.sp = match stack {
-        Some(stack) => stack.get(),
-        None => InitTask::load_stack(virt.as_ref(), None, Default::default())
-            .await?
-            .val(),
-    };
-    if flags.contains(Flags::SETTLS) {
-        new_tf.gpr.tx.tp = tls;
-    }
-    log::trace!("clone_task: setting up TaskState");
-
-    let task = Arc::new(task);
-    let new_ts = TaskState {
-        task: task.clone(),
-        sig_mask: SigSet::EMPTY,
-        brk: ts.brk,
-        system_times: 0,
-        user_times: 0,
-        virt,
-        files: ts
-            .files
-            .deep_fork(flags.contains(Flags::FS), flags.contains(Flags::FILES))
-            .await,
-        sig_actions: if flags.contains(Flags::SIGHAND) {
-            ts.sig_actions.clone()
-        } else {
-            Arsc::new(ts.sig_actions.deep_fork())
-        },
-        tid_clear: flags.contains(Flags::CHILD_CLEARTID).then_some(ctid),
-        exit_signal,
-    };
-
-    log::trace!(
-        "clone_task: push into parent: {:?}",
-        new_ts.task.parent.upgrade()
-    );
-
-    if let Some(parent) = new_ts.task.parent.upgrade() {
-        ksync::critical(|| {
-            parent.children.lock().push(Child {
-                task: new_ts.task.clone(),
-                event: new_ts.task.event(),
-            })
-        });
-
-        ksync::critical(|| log::debug!("now have {} child(ren)", parent.children.lock().len()));
-    }
-
-    ksync::critical(|| TASKS.lock().insert(new_tid, task.clone()));
-    let fut = TaskFut::new(new_ts.virt.clone(), user_loop(new_ts, new_tf));
-    executor().spawn(fut).detach();
-
-    Ok(new_tid)
 }
 
-#[async_handler]
-pub async fn clone(
-    ts: &mut TaskState,
-    cx: UserCx<
-        '_,
-        fn(u64, usize, UserPtr<usize, Out>, usize, UserPtr<usize, Out>) -> Result<usize, Error>,
-    >,
-) -> ScRet {
-    let (flags, stack, parent_tidptr, tls, child_tidptr) = cx.args();
-    let ret = clone_task(
-        ts,
-        &cx,
-        flags,
-        NonZeroUsize::new(stack),
-        parent_tidptr,
-        tls,
-        child_tidptr,
-    )
-    .await;
-    cx.ret(ret);
-    Continue(None)
-}
+impl TaskState {
+    async fn wait(&self, pid: WaitPid) -> Result<(TaskEvent, usize), Error> {
+        let (res, tid) = match pid {
+            WaitPid::Task(None) => {
+                let children = ksync::critical(|| self.task.children.lock().clone());
+                log::trace!("task::wait found {} child(ren)", children.len());
 
-#[async_handler]
-pub async fn waitpid(
-    ts: &mut TaskState,
-    cx: UserCx<'_, fn(isize, UserPtr<i32, Out>, i32) -> Result<usize, Error>>,
-) -> ScRet {
-    async fn inner(
-        ts: &mut TaskState,
-        pid: isize,
-        mut wstatus: UserPtr<i32, Out>,
-        _options: i32,
-    ) -> Result<usize, Error> {
-        log::trace!("task::wait pid = {pid}");
-        let (res, tid) = if pid <= 0 {
-            let children = ksync::critical(|| ts.task.children.lock().clone());
-            log::trace!("task::wait found {} child(ren)", children.len());
-
-            match &children[..] {
-                [] => return Err(ECHILD),
-                [a] => (a.event.recv().await, a.task.tid),
-                [a, b] => match select(a.event.recv(), b.event.recv()).await {
-                    Either::Left((te, _)) => (te, a.task.tid),
-                    Either::Right((te, _)) => (te, b.task.tid),
-                },
-                _ => {
-                    let events = children.iter().map(|c| &c.event);
-                    let select_all = select_all(events.map(|event| event.recv())).await;
-                    (select_all.0, children[select_all.1].task.tid)
+                match &children[..] {
+                    [] => return Err(ECHILD),
+                    [a] => (a.event.recv().await, a.task.tid),
+                    [a, b] => match select(a.event.recv(), b.event.recv()).await {
+                        Either::Left((te, _)) => (te, a.task.tid),
+                        Either::Right((te, _)) => (te, b.task.tid),
+                    },
+                    _ => {
+                        let events = children.iter().map(|c| &c.event);
+                        let select_all = select_all(events.map(|event| event.recv())).await;
+                        (select_all.0, children[select_all.1].task.tid)
+                    }
                 }
             }
-        } else {
-            let child = ksync::critical(|| {
-                let children = ts.task.children.lock();
-                children
-                    .iter()
-                    .find(|c| c.task.tid == pid as usize)
-                    .cloned()
-            });
-            (child.ok_or(ECHILD)?.event.recv().await, pid as usize)
+            WaitPid::Task(Some(tid)) => {
+                let child = ksync::critical(|| {
+                    let children = self.task.children.lock();
+                    children.iter().find(|c| c.task.tid == tid).cloned()
+                });
+                (child.ok_or(ECHILD)?.event.recv().await, tid)
+            }
+            x => todo!("{x:?}"),
         };
         log::trace!("task::wait tid = {tid}, event = {res:?}");
         let event = match res {
@@ -386,90 +148,45 @@ pub async fn waitpid(
             Err(e) => e.data().ok_or(ECHILD)?,
         };
         if matches!(event, TaskEvent::Exited(..)) {
-            ksync::critical(|| ts.task.children.lock().retain(|c| c.task.tid != tid));
+            ksync::critical(|| self.task.children.lock().retain(|c| c.task.tid != tid));
         }
-
-        if !wstatus.is_null() {
-            let ws = match event {
-                TaskEvent::Exited(code, sig) => ((code & 0xff) << 8) | sig.map_or(0, Sig::raw),
-                TaskEvent::Suspended(sig) => (sig.raw() << 8) | 0x7f,
-                TaskEvent::Continued => 0xffff,
-            };
-            log::trace!("Generated ws = {ws:#x}");
-            wstatus.write(ts.virt.as_ref(), ws).await?;
-        }
-        Ok(tid)
+        Ok((event, tid))
     }
-    let (pid, wstatus, options) = cx.args();
 
-    cx.ret(inner(ts, pid, wstatus, options).await);
-    Continue(None)
+    async fn cleanup(mut self, code: i32, sig: Option<Sig>) {
+        if let Some(mut tid_clear) = self.tid_clear.take() {
+            let _ = tid_clear.write(self.virt.as_ref(), 0).await;
+        }
+
+        let last_thread = ksync::critical(|| {
+            let mut tgroup = self.tgroup.1.write();
+            let index = tgroup.iter().position(|t| Arc::ptr_eq(t, &self.task));
+            tgroup.swap_remove(index.unwrap());
+            tgroup.is_empty()
+        });
+        if last_thread {
+            let exit_signal = self.exit_signal.take();
+            if let (Some(sig), Some(parent)) = (exit_signal, self.task.parent.upgrade()) {
+                parent.sig.push(SigInfo {
+                    sig,
+                    code: sygnal::SigCode::USER,
+                    fields: sygnal::SigFields::SigChld {
+                        pid: self.task.tid,
+                        uid: 0,
+                        status: code,
+                    },
+                })
+            }
+        }
+
+        let _ = self.files.flush_all().await;
+
+        self.task.event.send(&TaskEvent::Exited(code, sig)).await;
+        log::trace!("Sent exited event {code} {sig:?}");
+
+        ksync::critical(|| TASKS.lock().remove(&self.task.tid));
+    }
 }
 
-#[async_handler]
-pub async fn execve(
-    ts: &mut TaskState,
-    mut cx: UserCx<
-        '_,
-        fn(UserPtr<u8, In>, UserPtr<usize, In>, UserPtr<usize, In>) -> Result<(), Error>,
-    >,
-) -> ScRet {
-    async fn inner(
-        ts: &mut TaskState,
-        tf: &mut TrapFrame,
-        name: UserPtr<u8, In>,
-        args: UserPtr<usize, In>,
-        envs: UserPtr<usize, In>,
-    ) -> Result<(), Error> {
-        let mut ptrs = [0; 64];
-        let mut data = [0; MAX_PATH_LEN];
-
-        let name = name
-            .read_path(ts.virt.as_ref(), &mut data)
-            .await?
-            .to_path_buf();
-
-        let argc = args
-            .read_slice_with_zero(ts.virt.as_ref(), &mut ptrs)
-            .await?;
-        let mut args = Vec::new();
-        for &ptr in argc {
-            let arg = UserPtr::<_, In>::from_raw(ptr);
-            let arg = arg.read_str(ts.virt.as_ref(), &mut data).await?;
-            args.push(arg.to_string());
-        }
-
-        let envc = envs
-            .read_slice_with_zero(ts.virt.as_ref(), &mut ptrs)
-            .await?;
-        let mut envs = Vec::new();
-        for &ptr in envc {
-            let env = UserPtr::<_, In>::from_raw(ptr);
-            let env = env.read_str(ts.virt.as_ref(), &mut data).await?;
-            envs.push(env.to_string());
-        }
-
-        log::trace!("task::execve: name = {name:?}, args = {args:?}, envs = {envs:?}");
-
-        let (file, _) = crate::fs::open(&name, Default::default(), Permissions::all()).await?;
-
-        ts.virt.clear().await;
-        let init = init::InitTask::from_elf(
-            ts.task.parent.clone(),
-            Phys::new(file.to_io().ok_or(ENOTDIR)?, 0, true),
-            ts.virt.clone(),
-            Default::default(),
-            args,
-        )
-        .await?;
-        init.reset(ts, tf);
-
-        Ok(())
-    }
-    let (name, args, env) = cx.args();
-    let ret = inner(ts, &mut cx, name, args, env).await;
-    if ret.is_err() {
-        cx.ret(ret)
-    }
-    Continue(None)
-}
+static TASKS: Lazy<Mutex<HashMap<usize, Arc<Task>, RandomState>>> =
+    Lazy::new(|| Mutex::new(HashMap::with_hasher(RandomState::new())));

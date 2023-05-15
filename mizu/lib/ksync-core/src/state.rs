@@ -23,18 +23,18 @@ impl PreemptState {
     }
 
     pub fn lock(&self) -> PreemptStateGuard {
-        unsafe { self.disable() };
+        unsafe { self.disable(true) };
         PreemptStateGuard { state: self }
     }
 
-    pub unsafe fn disable(&self) {
-        if self.count.fetch_add(1, Relaxed) == 0 {
+    pub unsafe fn disable(&self, set_sstatus: bool) {
+        if self.count.fetch_add(1, Relaxed) == 0 && set_sstatus {
             unsafe { sstatus::clear_sie() }
         }
     }
 
-    pub unsafe fn enable(&self) {
-        if self.count.fetch_sub(1, Relaxed) == 1 {
+    pub unsafe fn enable(&self, set_sstatus: bool) {
+        if self.count.fetch_sub(1, Relaxed) == 1 && set_sstatus {
             unsafe { sstatus::set_sie() }
         }
     }
@@ -42,7 +42,7 @@ impl PreemptState {
 
 impl Drop for PreemptStateGuard<'_> {
     fn drop(&mut self) {
-        unsafe { self.state.enable() }
+        unsafe { self.state.enable(true) }
     }
 }
 
@@ -56,11 +56,11 @@ impl const Default for PreemptState {
 pub static PREEMPT: PreemptState = PreemptState::default();
 
 #[no_mangle]
-unsafe extern "C" fn preempt_disable() {
-    PREEMPT.disable()
+unsafe extern "C" fn preempt_disable(set_sstatus: bool) {
+    PREEMPT.disable(set_sstatus)
 }
 
 #[no_mangle]
-unsafe extern "C" fn preempt_enable() {
-    PREEMPT.enable()
+unsafe extern "C" fn preempt_enable(set_sstatus: bool) {
+    PREEMPT.enable(set_sstatus)
 }

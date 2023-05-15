@@ -97,10 +97,23 @@ impl Plic {
     }
 
     pub fn enable(&self, pin: u32, cx: usize, enable: bool) {
+        log::trace!(
+            "Plic::enable base = {:p}, pin = {pin}, cx = {cx}, {}",
+            self.0,
+            if enable { "enable" } else { "disable" }
+        );
+
         let (byte, bit_in_byte_mask) = bitmap_index_u32(pin as usize);
         let mut all_cell = unsafe { Enable::at(self.0) };
         let mut cx_cell = all_cell.map_mut(|s| s.index_mut(cx));
         let mut cell = cx_cell.map_mut(|s| s.index_mut(byte));
+
+        log::trace!(
+            "Plic::enable byte index = {:#x}, bit_in_byte_mask = {:#b}, cell base = {:p}",
+            byte,
+            bit_in_byte_mask,
+            cell.map_mut(|x| &mut *x).extract_inner()
+        );
 
         cell.update(|value| {
             if enable {

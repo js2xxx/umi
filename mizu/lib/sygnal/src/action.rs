@@ -33,10 +33,6 @@ pub struct Action {
     pub mask: SigSet,
 }
 
-// TODO: Remove if necessary.
-unsafe impl Send for ActionType {}
-unsafe impl Sync for ActionType {}
-
 impl Action {
     pub const fn default(sig: Sig) -> Self {
         Action {

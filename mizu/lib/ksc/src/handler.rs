@@ -285,7 +285,7 @@ impl<K, P, O> Default for AHandlers<K, P, O> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "test"))]
 mod tests {
     use std::sync::LazyLock;
 

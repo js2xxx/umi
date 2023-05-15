@@ -7,13 +7,14 @@ version = "0.1.0"
 [features]
 test = [
   "dep:spin_on",
+  "dep:co-trap",
   "ksc-core/test",
   "rand-riscv/test",
 ]
 
 [dependencies]
 # Local crates
-co-trap = {path = "../co-trap"}
+co-trap = {path = "../co-trap", optional = true}
 ksc-core = {path = "../ksc-core"}
 ksc-macros = {path = "../ksc-macros"}
 rand-riscv = {path = "../rand-riscv"}

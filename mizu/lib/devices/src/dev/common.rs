@@ -13,7 +13,7 @@ pub trait MmioReg {
     /// The caller must ensure the exclusive access of the given `Self::Access`
     /// at the given base during the given `'a` lifetime.
     unsafe fn at<'a>(base: NonNull<()>) -> Volatile<&'a mut Self::Repr, Self::Access> {
-        mem::transmute(base.cast::<Self::Repr>())
+        mem::transmute(base.as_ptr().byte_add(Self::OFFSET).cast::<Self::Repr>())
     }
 }
 

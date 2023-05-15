@@ -82,8 +82,6 @@ async fn main(fdt: usize) {
         "execve",
     ];
 
-    sbi_rt::set_timer(0);
-
     for case in spec {
         let file = rt.open_file(case.as_ref()).await.unwrap();
         log::info!("Found test case {case:?}");

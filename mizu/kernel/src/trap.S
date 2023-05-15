@@ -28,12 +28,14 @@ ktrap_entry:
     sd t5, 18*8(sp)
     sd t6, 19*8(sp)
 
+    li a0, 0
     call preempt_disable
 
     mv a0, sp
     addi a0, a0, 8
     call ktrap_handler
 
+    li a0, 0
     call preempt_enable
 
     ld ra, 1*8(sp)

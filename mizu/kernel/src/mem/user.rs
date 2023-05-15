@@ -42,18 +42,18 @@ impl OutPtr for Out {}
 impl OutPtr for InOut {}
 
 pub struct UserPtr<T: Copy, D> {
-    addr: usize,
+    addr: LAddr,
     _marker: PhantomData<(T, D)>,
 }
 
 impl<T: Copy, D: PtrType> fmt::Debug for UserPtr<T, D> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "({}) {:#x}", D::DEBUG, self.addr)
+        write!(f, "({}) {:?}", D::DEBUG, self.addr)
     }
 }
 
 impl<T: Copy, D> UserPtr<T, D> {
-    pub fn addr(&self) -> usize {
+    pub fn addr(&self) -> LAddr {
         self.addr
     }
 
@@ -69,10 +69,10 @@ impl<T: Copy, D> UserPtr<T, D> {
     }
 
     pub fn is_null(&self) -> bool {
-        self.addr == 0
+        self.addr.is_null()
     }
 
-    async fn op<'a, U, G, F>(
+    async fn paged_op<'a, U, G, F>(
         &self,
         virt: Pin<&'a Virt>,
         mut f: G,
@@ -84,7 +84,7 @@ impl<T: Copy, D> UserPtr<T, D> {
         F: Future<Output = Result<(U, bool), Error>> + Send + 'a,
         U: 'a,
     {
-        let mut start = self.addr;
+        let mut start = self.addr.val();
         let mut end = (start + PAGE_MASK) & !PAGE_MASK;
 
         log::trace!("UserPtr::op at {start:#x}, len = {len}");
@@ -119,25 +119,25 @@ impl<T: Copy, D> UserPtr<T, D> {
 impl<T: Copy, D> RawReg for UserPtr<T, D> {
     fn from_raw(raw: usize) -> Self {
         UserPtr {
-            addr: raw,
+            addr: raw.into(),
             _marker: PhantomData,
         }
     }
 
     fn into_raw(self) -> usize {
-        self.addr
+        self.addr.val()
     }
 }
 
 impl<T: Copy, D: InPtr> UserPtr<T, D> {
     pub async fn read(&self, virt: Pin<&Virt>) -> Result<T, Error> {
-        if !(self.addr as *const T).is_aligned() {
+        if !self.addr.is_aligned() || self.addr.is_null() {
             return Err(EFAULT);
         }
         let mut dst = MaybeUninit::<T>::uninit();
         unsafe {
             let dst_addr = dst.as_mut_ptr().into();
-            checked_copy(virt, self.addr.into(), dst_addr, mem::size_of::<T>()).await?;
+            checked_copy(virt, self.addr, dst_addr, mem::size_of::<T>()).await?;
             Ok(dst.assume_init())
         }
     }
@@ -149,12 +149,12 @@ impl<T: Copy, D: InPtr> UserPtr<T, D> {
             data.len()
         );
 
-        if !(self.addr as *const T).is_aligned() {
+        if !self.addr.is_aligned() || self.addr.is_null() {
             return Err(EFAULT);
         }
         unsafe {
             let dst = data.as_mut_ptr().into();
-            checked_copy(virt, self.addr.into(), dst, mem::size_of_val(data)).await
+            checked_copy(virt, self.addr, dst, mem::size_of_val(data)).await
         }
     }
 
@@ -180,7 +180,10 @@ impl<T: Copy, D: InPtr> UserPtr<T, D> {
             Ok((&mut buf[count..], !has_zero))
         }
 
-        let rest_len = self.op(virt, inner, buf.len(), &mut *buf).await?.len();
+        let rest_len = self
+            .paged_op(virt, inner, buf.len(), &mut *buf)
+            .await?
+            .len();
         let pos = buf[..(buf.len() - rest_len)]
             .iter()
             .position(|&s| s == Default::default())
@@ -213,7 +216,7 @@ impl<D: InPtr> UserPtr<u8, D> {
             Ok((&mut buf[count..], !has_zero))
         }
 
-        self.op(virt, inner, buf.len(), &mut *buf).await?;
+        self.paged_op(virt, inner, buf.len(), &mut *buf).await?;
 
         let ret = CStr::from_bytes_until_nul(buf)?.to_str()?;
         Ok(ret)
@@ -233,12 +236,12 @@ impl<D: InPtr> UserPtr<u8, D> {
 
 impl<T: Copy, D: OutPtr> UserPtr<T, D> {
     pub async fn write(&mut self, virt: Pin<&Virt>, data: T) -> Result<(), Error> {
-        if !(self.addr as *const T).is_aligned() {
+        if !self.addr.is_aligned() || self.addr.is_null() {
             return Err(EFAULT);
         }
         unsafe {
             let src = (&data as *const T).into();
-            checked_copy(virt, src, self.addr.into(), mem::size_of::<T>()).await
+            checked_copy(virt, src, self.addr, mem::size_of::<T>()).await
         }
     }
 
@@ -254,15 +257,15 @@ impl<T: Copy, D: OutPtr> UserPtr<T, D> {
             data.len()
         );
 
-        if !(self.addr as *const T).is_aligned() {
+        if !self.addr.is_aligned() || self.addr.is_null() {
             return Err(EFAULT);
         }
         unsafe {
             let count = mem::size_of_val(data);
             let src = data.as_ptr().into();
-            checked_copy(virt, src, self.addr.into(), count).await?;
+            checked_copy(virt, src, self.addr, count).await?;
             if add_tail_zero {
-                checked_zero(virt, 0, (self.addr + count).into(), mem::size_of::<T>()).await?;
+                checked_zero(virt, 0, self.addr + count, mem::size_of::<T>()).await?;
             }
             Ok(())
         }
@@ -310,6 +313,7 @@ impl UserBuffer {
     }
 }
 
+#[inline]
 async unsafe fn checked_copy(
     virt: Pin<&Virt>,
     src: LAddr,
@@ -318,31 +322,11 @@ async unsafe fn checked_copy(
 ) -> Result<(), Error> {
     extern "C" {
         fn _checked_copy(src: LAddr, dst: LAddr, count: usize) -> usize;
-        fn _checked_ua_fault();
     }
-    if src.is_null() || dst.is_null() {
-        return Err(EFAULT);
-    }
-
-    let addr = match UA_FAULT.set(&(_checked_ua_fault as _), || unsafe {
-        _checked_copy(src, dst, count)
-    }) {
-        0 => return Ok(()),
-        addr => addr,
-    };
-
-    virt.commit(addr.into()).await?;
-    match UA_FAULT.set(&(_checked_ua_fault as _), || unsafe {
-        _checked_copy(src, dst, count)
-    }) {
-        0 => Ok(()),
-        addr => {
-            log::info!("checked copy fault at {addr:?}");
-            Err(EFAULT)
-        }
-    }
+    checked_op(virt, || unsafe { _checked_copy(src, dst, count) }).await
 }
 
+#[inline]
 async unsafe fn checked_zero(
     virt: Pin<&Virt>,
     src: u8,
@@ -351,25 +335,24 @@ async unsafe fn checked_zero(
 ) -> Result<(), Error> {
     extern "C" {
         fn _checked_zero(src: u8, dst: LAddr, count: usize) -> usize;
+    }
+    checked_op(virt, || unsafe { _checked_zero(src, dst, count) }).await
+}
+
+async fn checked_op<F: Fn() -> usize>(virt: Pin<&Virt>, op: F) -> Result<(), Error> {
+    extern "C" {
         fn _checked_ua_fault();
     }
-    if dst.is_null() {
-        return Err(EFAULT);
-    }
-    let addr = match UA_FAULT.set(&(_checked_ua_fault as _), || unsafe {
-        _checked_zero(src, dst, count)
-    }) {
+    let addr = match UA_FAULT.set(&(_checked_ua_fault as _), &op) {
         0 => return Ok(()),
         addr => addr,
     };
 
     virt.commit(addr.into()).await?;
-    match UA_FAULT.set(&(_checked_ua_fault as _), || unsafe {
-        _checked_zero(src, dst, count)
-    }) {
+    match UA_FAULT.set(&(_checked_ua_fault as _), &op) {
         0 => Ok(()),
         addr => {
-            log::info!("checked zero fault at {addr:?}");
+            log::info!("checked op fault at {addr:?}");
             Err(EFAULT)
         }
     }

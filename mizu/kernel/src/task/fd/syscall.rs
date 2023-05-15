@@ -141,7 +141,7 @@ fssc!(
         files: &Files,
         buf: UserPtr<u8, Out>,
         len: usize,
-    ) -> Result<usize, Error> {
+    ) -> Result<UserPtr<u8, Out>, Error> {
         log::trace!("user getcwd buf = {buf:?}, len = {len}");
 
         let cwd = files.cwd();
@@ -150,7 +150,7 @@ fssc!(
             Err(ERANGE)
         } else {
             buf.write_slice(virt, path, true).await?;
-            Ok(buf.addr())
+            Ok(buf)
         }
     }
 
@@ -376,7 +376,7 @@ fssc!(
                 const FIXED     = 0x100;  /* Interpret addr exactly */
                 const ANONYMOUS = 0x10;  /* don't use a file */
 
-                const POPULATE          = 0x20000;  /* populate (prefault) pagetables */
+                const POPULATE  = 0x20000;  /* populate (prefault) pagetables */
             }
         }
 
@@ -389,7 +389,7 @@ fssc!(
         } else {
             let entry = files.get(fd).await?;
             match entry.clone().downcast::<Phys>() {
-                Some(phys) => phys.clone_as(cow)?,
+                Some(phys) => phys.clone_as(cow),
                 None => Phys::new(entry.to_io().ok_or(EISDIR)?, 0, cow),
             }
         };
@@ -402,19 +402,12 @@ fssc!(
             offset >> PAGE_SHIFT
         };
 
-        let attr = {
-            let mut attr = Attr::USER_ACCESS;
-            if prot.contains(Prot::READ) {
-                attr |= Attr::READABLE;
-            }
-            if prot.contains(Prot::WRITE) {
-                attr |= Attr::WRITABLE;
-            }
-            if prot.contains(Prot::EXEC) {
-                attr |= Attr::EXECUTABLE;
-            }
-            attr
-        };
+        let attr = Attr::builder()
+            .user_access(true)
+            .readable(prot.contains(Prot::READ))
+            .writable(prot.contains(Prot::WRITE))
+            .executable(prot.contains(Prot::EXEC))
+            .build();
 
         let count = (len + PAGE_MASK) >> PAGE_SHIFT;
         let addr = virt.map(addr, Arc::new(phys), offset, count, attr).await?;

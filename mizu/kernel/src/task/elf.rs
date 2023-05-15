@@ -51,18 +51,15 @@ pub struct LoadedElf {
 }
 
 fn parse_attr(flags: u32) -> Attr {
-    let mut ret = Attr::USER_ACCESS;
-    if flags & PF_R != 0 {
-        ret |= Attr::READABLE;
-    }
-    if flags & PF_W != 0 {
-        ret |= Attr::WRITABLE;
-    }
-    if flags & PF_X != 0 {
-        ret |= Attr::EXECUTABLE;
-    }
-    ret
+    Attr::builder()
+        .user_access(true)
+        .readable(flags & PF_R != 0)
+        .writable(flags & PF_W != 0)
+        .executable(flags & PF_X != 0)
+        .build()
 }
+
+static ZEROS: [u8; 256] = [0; 256];
 
 async fn parse_header(phys: &Phys, force_dyn: Option<bool>) -> Result<(Header, bool), Error> {
     let mut data = [0; mem::size_of::<Header>()];
@@ -144,26 +141,41 @@ async fn map_segment(
         ));
     }
     let file_end = (offset + file_size) & !PAGE_MASK;
-    // let data_end = offset + file_size;
+    let data_end = offset + file_size;
     let memory_end = (offset + memory_size + PAGE_MASK) & !PAGE_MASK;
     let aligned_offset = offset & !PAGE_MASK;
     let aligned_address = address & !PAGE_MASK;
     let aligned_file_size = file_end - aligned_offset;
-    // let aligned_copy_size = data_end - file_end;
+    let zero_size = memory_end - data_end;
     let aligned_alloc_size = memory_end.saturating_sub(file_end);
 
     let attr = parse_attr(segment.p_flags);
 
     if aligned_file_size + aligned_alloc_size > 0 {
         log::trace!(
-            "elf::load: Map {:#x}~{:#x} -> {:?}",
+            "elf::load: Map {:#x}~{:#x} -> {:?}, zero {:#x} bytes before end",
             aligned_offset,
             aligned_offset + aligned_file_size + aligned_alloc_size,
-            base + aligned_address
+            base + aligned_address,
+            zero_size
         );
+
+        let segment = phys.clone_as(true);
+
+        let mut zero_offset = data_end;
+        let mut zero_size = zero_size;
+        while zero_size > 0 {
+            let s = zero_size.min(ZEROS.len());
+            segment
+                .write_all_at(zero_offset, &ZEROS[..s])
+                .await
+                .map_err(Error::PhysWrite)?;
+            zero_offset += s;
+            zero_size -= s;
+        }
         virt.map(
             Some(base + aligned_address),
-            phys.clone(),
+            Arc::new(segment),
             aligned_offset >> PAGE_SHIFT,
             (aligned_file_size + aligned_alloc_size) >> PAGE_SHIFT,
             attr,
@@ -171,36 +183,6 @@ async fn map_segment(
         .await
         .map_err(Error::VirtMap)?;
     }
-
-    // if aligned_alloc_size > 0 {
-    //     let address = aligned_address + aligned_file_size;
-
-    //     let mem = Phys::new_anon(true);
-
-    //     let mut cdata = vec![0; aligned_copy_size];
-    //     phys.read_exact_at(file_end, &mut cdata)
-    //         .await
-    //         .map_err(Error::PhysRead)?;
-    //     mem.write_all_at(0, &cdata)
-    //         .await
-    //         .map_err(Error::PhysWrite)?;
-
-    //     log::trace!(
-    //         "elf::load: Alloc {:#x}~{:#x} -> {:?}",
-    //         file_end,
-    //         file_end + aligned_alloc_size,
-    //         base + address
-    //     );
-    //     virt.map(
-    //         Some(base + address),
-    //         Arc::new(mem),
-    //         0,
-    //         aligned_alloc_size >> PAGE_SHIFT,
-    //         attr,
-    //     )
-    //     .await
-    //     .map_err(Error::VirtMap)?;
-    // }
     Ok(())
 }
 

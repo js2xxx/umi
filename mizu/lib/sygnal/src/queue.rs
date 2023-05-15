@@ -28,10 +28,6 @@ pub struct Signals {
     pending: [SigPending; NR_SIGNALS],
 }
 
-// TODO: Remove if necessary.
-unsafe impl Send for SigInfo {}
-unsafe impl Sync for SigInfo {}
-
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SigInfo {
     pub sig: Sig,

@@ -1,6 +1,7 @@
 use alloc::{
     string::String,
     sync::{Arc, Weak},
+    vec,
     vec::Vec,
 };
 use core::{
@@ -16,7 +17,7 @@ use ksc::Error::{self, ENOSYS};
 use ksync::Broadcast;
 use riscv::register::sstatus;
 use rv39_paging::{Attr, LAddr, ID_OFFSET, PAGE_MASK, PAGE_SHIFT, PAGE_SIZE};
-use sygnal::{ActionSet, SigSet, Signals};
+use sygnal::{ActionSet, Sig, SigSet, Signals};
 use umifs::path::Path;
 
 use crate::{
@@ -30,7 +31,6 @@ use crate::{
 };
 
 pub struct InitTask {
-    main: Weak<Task>,
     parent: Weak<Task>,
     virt: Pin<Arsc<Virt>>,
     tf: TrapFrame,
@@ -145,7 +145,6 @@ impl InitTask {
         let tf = Self::trap_frame(loaded.entry, stack, 0);
 
         Ok(InitTask {
-            main: Weak::new(),
             parent,
             virt,
             tf,
@@ -156,17 +155,18 @@ impl InitTask {
     pub fn spawn(self) -> Result<Arc<Task>, ksc::Error> {
         let tid = alloc_tid();
         let task = Arc::new(Task {
-            main: self.main,
             parent: self.parent,
             children: spin::Mutex::new(Default::default()),
             tid,
 
             sig: Signals::new(),
+            shared_sig: Default::default(),
             event: Broadcast::new(),
         });
 
         let ts = TaskState {
             task: task.clone(),
+            tgroup: Arsc::new((tid, spin::RwLock::new(vec![task.clone()]))),
             sig_mask: SigSet::EMPTY,
             brk: 0,
             system_times: 0,
@@ -175,7 +175,7 @@ impl InitTask {
             files: self.files,
             sig_actions: Arsc::new(ActionSet::new()),
             tid_clear: None,
-            exit_signal: None,
+            exit_signal: Some(Sig::SIGCHLD),
         };
 
         ksync::critical(|| TASKS.lock().insert(tid, task.clone()));

@@ -7,10 +7,11 @@ use core::{
     num::NonZeroUsize,
     ops::Range,
     pin::Pin,
-    sync::atomic::{AtomicUsize, Ordering::Relaxed},
+    sync::atomic::{AtomicUsize, Ordering::SeqCst},
 };
 
 use arsc_rs::Arsc;
+use futures_util::Future;
 use ksc_core::Error::{self, EFAULT, EINVAL, ENOSPC, EPERM};
 use ksync::Mutex;
 use range_map::{AslrKey, RangeMap};
@@ -73,12 +74,12 @@ impl Mapping {
         &mut self,
         addr: LAddr,
         offset: usize,
-        count: usize,
+        count: NonZeroUsize,
         table: &mut Table,
         cpu_mask: usize,
     ) -> Result<(), Error> {
         for (index, addr) in
-            (0..count).map(|c| (c + self.start_index + offset, addr + (c << PAGE_SHIFT)))
+            (0..count.get()).map(|c| (c + self.start_index + offset, addr + (c << PAGE_SHIFT)))
         {
             if let Ok(entry) = table.la2pte(addr, ID_OFFSET) {
                 let dirty = entry.get(rv39_paging::Level::pt()).1.contains(Attr::DIRTY);
@@ -90,12 +91,12 @@ impl Mapping {
         Ok(())
     }
 
-    async fn deep_fork(&self) -> Result<Mapping, Error> {
-        Ok(Mapping {
-            phys: Arc::new(self.phys.clone_as(true)?),
+    async fn deep_fork(&self) -> Mapping {
+        Mapping {
+            phys: Arc::new(self.phys.clone_as(self.phys.is_cow())),
             start_index: self.start_index,
             attr: self.attr,
-        })
+        }
     }
 }
 
@@ -114,7 +115,7 @@ impl Virt {
     /// The caller must ensure that the current executing address is mapped
     /// correctly.
     #[inline]
-    pub unsafe fn load(self: Pin<Arsc<Self>>) -> Option<Arsc<Virt>> {
+    pub unsafe fn load(self: Pin<Arsc<Self>>) -> Option<impl Future<Output = ()> + Send + 'static> {
         tlb::set_virt(self)
     }
 
@@ -202,8 +203,8 @@ impl Virt {
             let len = end.val() - start.val();
             let count = len >> PAGE_SHIFT;
 
-            let cpu_mask = self.cpu_mask.load(Relaxed);
             if let Some(count) = NonZeroUsize::new(count) {
+                let cpu_mask = self.cpu_mask.load(SeqCst);
                 let mut p = mapping
                     .commit(start, offset, count, &mut table, cpu_mask)
                     .await?;
@@ -239,10 +240,12 @@ impl Virt {
             let offset = (start.val() - addr.start.val()) >> PAGE_SHIFT;
             let count = (end.val() - start.val()) >> PAGE_SHIFT;
 
-            let cpu_mask = self.cpu_mask.load(Relaxed);
-            mapping
-                .decommit(start, offset, count, &mut table, cpu_mask)
-                .await?;
+            if let Some(count) = NonZeroUsize::new(count) {
+                let cpu_mask = self.cpu_mask.load(SeqCst);
+                mapping
+                    .decommit(start, offset, count, &mut table, cpu_mask)
+                    .await?;
+            }
         }
         Ok(())
     }
@@ -264,10 +267,12 @@ impl Virt {
             }
             let count = (addr.end.val() - addr.start.val()) >> PAGE_SHIFT;
 
-            let cpu_mask = self.cpu_mask.load(Relaxed);
-            mapping
-                .decommit(*addr.start, 0, count, &mut table, cpu_mask)
-                .await?;
+            if let Some(count) = NonZeroUsize::new(count) {
+                let cpu_mask = self.cpu_mask.load(SeqCst);
+                mapping
+                    .decommit(*addr.start, 0, count, &mut table, cpu_mask)
+                    .await?;
+            }
             mapping.attr = attr;
         }
 
@@ -279,15 +284,12 @@ impl Virt {
             let offset = (range.start.val() - addr.start.val()) >> PAGE_SHIFT;
             let count = (addr.end.val() - range.start.val()) >> PAGE_SHIFT;
 
-            mapping
-                .decommit(
-                    range.start,
-                    offset,
-                    count,
-                    &mut table,
-                    self.cpu_mask.load(Relaxed),
-                )
-                .await?;
+            if let Some(count) = NonZeroUsize::new(count) {
+                let cpu_mask = self.cpu_mask.load(SeqCst);
+                mapping
+                    .decommit(range.start, offset, count, &mut table, cpu_mask)
+                    .await?;
+            }
 
             let latter = Mapping {
                 phys: mapping.phys.clone(),
@@ -305,10 +307,12 @@ impl Virt {
             let addr = entry.old_key();
             let count = (range.end.val() - addr.start.val()) >> PAGE_SHIFT;
 
-            let cpu_mask = self.cpu_mask.load(Relaxed);
-            mapping
-                .decommit(range.end, 0, count, &mut table, cpu_mask)
-                .await?;
+            if let Some(count) = NonZeroUsize::new(count) {
+                let cpu_mask = self.cpu_mask.load(SeqCst);
+                mapping
+                    .decommit(range.end, 0, count, &mut table, cpu_mask)
+                    .await?;
+            }
 
             let former = Mapping {
                 phys: mapping.phys.clone(),
@@ -332,16 +336,11 @@ impl Virt {
 
         for (addr, mut mapping) in map.drain(range.clone()) {
             let count = (addr.end.val() - addr.start.val()) >> PAGE_SHIFT;
-
-            mapping
-                .decommit(
-                    addr.start,
-                    0,
-                    count,
-                    &mut table,
-                    self.cpu_mask.load(Relaxed),
-                )
-                .await?;
+            if let Some(count) = NonZeroUsize::new(count) {
+                mapping
+                    .decommit(addr.start, 0, count, &mut table, self.cpu_mask.load(SeqCst))
+                    .await?;
+            }
         }
 
         if let Some((mut mapping, mut entry)) = map.split_entry(range.start) {
@@ -349,20 +348,24 @@ impl Virt {
             let offset = (range.start.val() - addr.start.val()) >> PAGE_SHIFT;
             let count = (addr.end.val() - range.start.val()) >> PAGE_SHIFT;
 
-            let cpu_mask = self.cpu_mask.load(Relaxed);
-            mapping
-                .decommit(range.start, offset, count, &mut table, cpu_mask)
-                .await?;
+            if let Some(count) = NonZeroUsize::new(count) {
+                let cpu_mask = self.cpu_mask.load(SeqCst);
+                mapping
+                    .decommit(range.start, offset, count, &mut table, cpu_mask)
+                    .await?;
+            }
             entry.set_former(mapping);
         }
         if let Some((mut mapping, mut entry)) = map.split_entry(range.end) {
             let addr = entry.old_key();
             let count = (range.end.val() - addr.start.val()) >> PAGE_SHIFT;
 
-            let cpu_mask = self.cpu_mask.load(Relaxed);
-            mapping
-                .decommit(range.end, 0, count, &mut table, cpu_mask)
-                .await?;
+            if let Some(count) = NonZeroUsize::new(count) {
+                let cpu_mask = self.cpu_mask.load(SeqCst);
+                mapping
+                    .decommit(range.end, 0, count, &mut table, cpu_mask)
+                    .await?;
+            }
             mapping.start_index += count;
             entry.set_latter(mapping);
         }
@@ -379,6 +382,7 @@ impl Virt {
 
         let count = (range.end.val() - range.start.val()) >> PAGE_SHIFT;
         let _ = table.user_unmap_npages(range.start, count, frames(), ID_OFFSET);
+        tlb::flush(self.cpu_mask.load(SeqCst), range.start, count);
 
         for (addr, mapping) in old {
             let count: usize = (addr.end.val() - addr.start.val()) >> PAGE_SHIFT;
@@ -397,7 +401,7 @@ impl Virt {
         let mut new_map = RangeMap::new(*range.start..*range.end);
 
         for (addr, mapping) in map.iter() {
-            let new_mapping = mapping.deep_fork().await?;
+            let new_mapping = mapping.deep_fork().await;
             let _ = new_map.try_insert(*addr.start..*addr.end, new_mapping);
         }
 
@@ -419,5 +423,6 @@ impl Drop for Virt {
             .root
             .get_mut()
             .user_unmap_npages(*range.start, count, frames(), ID_OFFSET);
+        tlb::flush(self.cpu_mask.load(SeqCst), *range.start, count);
     }
 }

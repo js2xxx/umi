@@ -3,22 +3,20 @@ use core::{
     ops::ControlFlow::{Break, Continue},
     pin::Pin,
     task::{Context, Poll},
-    time::Duration,
 };
 
 use arsc_rs::Arsc;
 use co_trap::{FastResult, TrapFrame};
 use kmem::Virt;
 use ksc::{Scn, ENOSYS};
-use ktime::Instant;
 use pin_project::pin_project;
 use riscv::register::{
     scause::{Exception, Scause, Trap},
     time,
 };
-use sygnal::{ActionType, Sig, SigCode, SigInfo};
+use sygnal::{Sig, SigCode, SigInfo};
 
-use super::{TaskEvent, TaskState};
+use super::TaskState;
 use crate::syscall::ScRet;
 
 #[pin_project]
@@ -38,45 +36,25 @@ impl<F: Future> Future for TaskFut<F> {
     type Output = F::Output;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let old = unsafe { self.virt.clone().load() };
-        if let Some(old) = old {
-            if Arsc::count(&old) == 1 {
-                crate::executor()
-                    .spawn(async move { old.clear().await })
-                    .detach();
-            }
+        let clear = unsafe { self.virt.clone().load() };
+        if let Some(clear) = clear {
+            crate::executor().spawn(clear).detach();
         }
         self.project().fut.poll(cx)
     }
 }
 
-const TASK_GRAN: Duration = Duration::from_millis(1);
+const TASK_GRAN: u64 = 20000;
 
 pub async fn user_loop(mut ts: TaskState, mut tf: TrapFrame) {
     log::debug!("task {} startup, tf.a0 = {}", ts.task.tid, tf.gpr.tx.a[0]);
 
     let mut stat_time = time::read64();
-    let mut sched_time = Instant::now();
-    'life: loop {
-        while let Some(si) = ts.task.sig.pop(ts.sig_mask) {
-            let action = ts.sig_actions.get(si.sig);
-            match action.ty {
-                ActionType::Ignore => {}
-                ActionType::Resume => {
-                    let _ = ts.task.event.send(&TaskEvent::Continued).await;
-                }
-                ActionType::Kill => {
-                    let exited = TaskEvent::Exited(-1, Some(si.sig));
-                    let _ = ts.task.event.send(&exited).await;
-
-                    break 'life;
-                }
-                ActionType::Suspend => {
-                    let _ = ts.task.event.send(&TaskEvent::Suspended(si.sig)).await;
-                    ts.task.sig.wait_one(Sig::SIGCONT).await;
-                }
-                ActionType::User { .. } => todo!(),
-            }
+    let mut sched_time = stat_time;
+    let (code, sig) = 'life: loop {
+        match ts.handle_signals().await {
+            Continue(()) => {}
+            Break((code, sig)) => break 'life (code, Some(sig)),
         }
 
         let sys = time::read64();
@@ -92,26 +70,24 @@ pub async fn user_loop(mut ts: TaskState, mut tf: TrapFrame) {
         match fr {
             FastResult::Continue => {}
             FastResult::Pending => continue,
-            FastResult::Break => break 'life,
+            FastResult::Break => break 'life (-1, None),
             FastResult::Yield => unreachable!(),
         }
 
         match handle_scause(scause, &mut ts, &mut tf).await {
             Continue(Some(sig)) => ts.task.sig.push(sig),
             Continue(None) => {}
-            Break((code, sig)) => {
-                let _ = ts.task.event.send(&TaskEvent::Exited(code, sig)).await;
-                log::trace!("Sent exited event {code} {sig:?}");
-                break 'life;
-            }
+            Break(code) => break 'life (code, None),
         }
 
-        let new_time = Instant::now();
-        if new_time - sched_time >= TASK_GRAN {
-            sched_time = new_time;
-            yield_now().await
+        let now = time::read64();
+        if now - sched_time >= TASK_GRAN {
+            sched_time = now;
+            log::trace!("task {} yield", ts.task.tid);
+            yield_now().await;
         }
-    }
+    };
+    ts.cleanup(code, sig).await
 }
 
 async fn handle_scause(scause: Scause, ts: &mut TaskState, tf: &mut TrapFrame) -> ScRet {
@@ -161,8 +137,8 @@ async fn handle_scause(scause: Scause, ts: &mut TaskState, tf: &mut TrapFrame) -
                 }
             }
             _ => panic!(
-                "task {} unhandled excep {excep:?} at {:#x}",
-                ts.task.tid, tf.sepc
+                "task {} unhandled excep {excep:?} at {:#x}, stval = {:#x}",
+                ts.task.tid, tf.sepc, tf.stval
             ),
         },
     }

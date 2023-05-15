@@ -1,5 +1,5 @@
-#![cfg_attr(not(test), no_std)]
-#![cfg_attr(test, feature(once_cell))]
+#![cfg_attr(not(feature = "test"), no_std)]
+#![cfg_attr(feature = "test", feature(once_cell))]
 
 extern crate alloc;
 

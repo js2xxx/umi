@@ -127,7 +127,7 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
     }
 
     // Disable interrupt in `ksync`.
-    unsafe { ksync::disable() };
+    unsafe { ksync::disable(true) };
 
     // Init default kernel trap handler.
     unsafe { crate::trap::init() };
@@ -157,11 +157,12 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
         sie::set_ssoft();
         sstatus::set_spie();
 
-        ksync::enable();
+        ksync::enable(true);
     }
+    sbi_rt::set_timer(0);
 
     run_art(payload);
-    unsafe { ksync::disable() };
+    unsafe { ksync::disable(true) };
 
     if hart_id::is_bsp() {
         sbi_rt::system_reset(Shutdown, NoReason);

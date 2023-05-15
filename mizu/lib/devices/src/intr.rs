@@ -40,8 +40,10 @@ impl IntrManager {
             }
             _ => None,
         })?;
-        cx.into_iter()
-            .for_each(|cx| self.plic.enable(pin, cx, true));
+        cx.into_iter().for_each(|cx| {
+            self.plic.enable(pin, cx, true);
+            self.plic.set_priority(pin, 1)
+        });
         Some(Interrupt(rx))
     }
 
@@ -50,6 +52,7 @@ impl IntrManager {
     }
 
     pub fn notify(&self, cx: usize) {
+        log::trace!("Intr::notify cx = {cx}");
         let pin = self.plic.claim(cx);
         if pin > 0 {
             let exist = ksync::critical(|| {
