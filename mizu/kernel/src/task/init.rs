@@ -64,8 +64,9 @@ impl InitTask {
 
         let end = addr + PAGE_SIZE + stack_size;
         let count = args.len();
+        // 1 for argc, 1 for argv ending null, 1 for envp ending null, 1 for auxv ending null.
         let len =
-            mem::size_of::<usize>() * (count + 1) + args.iter().map(|s| s.len() + 1).sum::<usize>();
+            mem::size_of::<usize>() * (count + 4) + args.iter().map(|s| s.len() + 1).sum::<usize>();
         assert!(len <= PAGE_SIZE);
 
         let sp = LAddr::from((end - len).val() & !7);
@@ -77,7 +78,8 @@ impl InitTask {
             log::trace!("argc: *{sp:?} = {count}");
             lsp.cast::<usize>().write(count);
             let argv = lsp.add(mem::size_of::<usize>());
-            let argp = argv.add(mem::size_of::<usize>() * count);
+            // 1 for argv ending null, 1 for envp ending null, 1 for auxv ending null.
+            let argp = argv.add(mem::size_of::<usize>() * (count + 3));
             let (_, off) = args.iter().fold((argp, Vec::new()), |(ptr, mut off), arg| {
                 let aptr = (ptr as usize)
                     .wrapping_add(sp.val())
@@ -120,21 +122,19 @@ impl InitTask {
 
     pub async fn from_elf(
         parent: Weak<Task>,
-        file: Phys,
+        phys: &Arc<Phys>,
         virt: Pin<Arsc<Virt>>,
         lib_path: Vec<&Path>,
         args: Vec<String>,
     ) -> Result<Self, Error> {
-        let phys = Arc::new(file);
-
-        let has_interp = if let Some(interp) = elf::get_interp(&phys).await? {
+        let has_interp = if let Some(interp) = elf::get_interp(phys).await? {
             let _ = (lib_path, interp);
             todo!("load deynamic linker");
         } else {
             false
         };
 
-        let loaded = elf::load(&phys, None, virt.as_ref()).await?;
+        let loaded = elf::load(phys, None, virt.as_ref()).await?;
         if loaded.tls.is_some() && !has_interp {
             return Err(ENOSYS);
         }

@@ -31,6 +31,7 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         .map(GETPID, task::pid)
         .map(GETPPID, task::ppid)
         .map(TIMES, task::times)
+        .map(SET_TID_ADDRESS, task::set_tid_addr)
         .map(CLONE, task::clone)
         .map(WAIT4, task::waitpid)
         .map(EXIT, task::exit)
@@ -40,6 +41,8 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         .map(SIGALTSTACK, signal::sigaltstack)
         .map(RT_SIGPROCMASK, signal::sigprocmask)
         .map(RT_SIGACTION, signal::sigaction)
+        .map(RT_SIGTIMEDWAIT, signal::sigtimedwait)
+        .map(KILL, signal::kill)
         .map(RT_SIGRETURN, task::TaskState::resume_from_signal)
         // FS operations
         .map(READ, fd::read)
@@ -66,9 +69,9 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
 
 #[derive(Debug, Clone, Copy, Default)]
 #[repr(C, packed)]
-struct Tv {
-    sec: u64,
-    usec: u64,
+pub struct Tv {
+    pub sec: u64,
+    pub usec: u64,
 }
 
 #[async_handler]

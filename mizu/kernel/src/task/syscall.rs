@@ -66,6 +66,16 @@ pub async fn times(
 }
 
 #[async_handler]
+pub async fn set_tid_addr(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(UserPtr<usize, Out>) -> usize>,
+) -> ScRet {
+    ts.tid_clear = Some(cx.args());
+    cx.ret(ts.task.tid);
+    Continue(None)
+}
+
+#[async_handler]
 pub async fn exit(_: &mut TaskState, cx: UserCx<'_, fn(i32)>) -> ScRet {
     Break(cx.args())
 }
@@ -347,7 +357,7 @@ pub async fn execve(
 
         let init = InitTask::from_elf(
             ts.task.parent.clone(),
-            Phys::new(file.to_io().ok_or(ENOTDIR)?, 0, true),
+            &Arc::new(Phys::new(file.to_io().ok_or(ENOTDIR)?, 0, true)),
             ts.virt.clone(),
             Default::default(),
             args,

@@ -97,26 +97,26 @@ pub struct TaskState {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum WaitPid {
+pub enum PidSelection {
     Group(Option<usize>),
     Task(Option<usize>),
 }
 
-impl From<isize> for WaitPid {
+impl From<isize> for PidSelection {
     fn from(value: isize) -> Self {
         match value {
-            -1 => WaitPid::Task(None),
-            0 => WaitPid::Group(None),
-            x if x > 0 => WaitPid::Task(Some(x as usize)),
-            x => WaitPid::Group(Some(-x as usize)),
+            -1 => PidSelection::Task(None),
+            0 => PidSelection::Group(None),
+            x if x > 0 => PidSelection::Task(Some(x as usize)),
+            x => PidSelection::Group(Some(-x as usize)),
         }
     }
 }
 
 impl TaskState {
-    async fn wait(&self, pid: WaitPid) -> Result<(TaskEvent, usize), Error> {
+    async fn wait(&self, pid: PidSelection) -> Result<(TaskEvent, usize), Error> {
         let (res, tid) = match pid {
-            WaitPid::Task(None) => {
+            PidSelection::Task(None) => {
                 let children = ksync::critical(|| self.task.children.lock().clone());
                 log::trace!("task::wait found {} child(ren)", children.len());
 
@@ -134,7 +134,7 @@ impl TaskState {
                     }
                 }
             }
-            WaitPid::Task(Some(tid)) => {
+            PidSelection::Task(Some(tid)) => {
                 let child = ksync::critical(|| {
                     let children = self.task.children.lock();
                     children.iter().find(|c| c.task.tid == tid).cloned()

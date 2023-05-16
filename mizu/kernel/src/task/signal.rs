@@ -149,7 +149,7 @@ impl TaskState {
 
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
-struct UsigInfo {
+pub struct UsigInfo {
     sig: Sig,
     errno: i32,
     code: i32,

@@ -1,18 +1,21 @@
 use alloc::boxed::Box;
-use core::{mem, num::NonZeroI32};
+use core::{mem, num::NonZeroI32, pin::pin, sync::atomic::Ordering::SeqCst, time::Duration};
 
 use co_trap::UserCx;
+use futures_util::future::{select, Either};
 use ksc::{
     async_handler,
-    Error::{self, EINVAL},
+    Error::{self, EINVAL, ESRCH, ETIMEDOUT},
 };
+use ktime::{TimeOutExt, Timer};
 use rv39_paging::{LAddr, PAGE_SIZE};
-use sygnal::{Action, ActionType, Sig, SigSet};
+use sygnal::{Action, ActionType, Sig, SigCode, SigFields, SigInfo, SigSet};
 
+use super::UsigInfo;
 use crate::{
     mem::{In, Out, UserPtr},
-    syscall::ScRet,
-    task::TaskState,
+    syscall::{ScRet, Tv},
+    task::{PidSelection, TaskState},
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -209,5 +212,88 @@ pub async fn sigprocmask(
     };
     cx.ret(fut.await);
 
+    ScRet::Continue(None)
+}
+
+#[async_handler]
+pub async fn sigtimedwait(
+    ts: &mut TaskState,
+    cx: UserCx<
+        '_,
+        fn(
+            UserPtr<SigSet, In>,
+            UserPtr<UsigInfo, Out>,
+            UserPtr<Tv, In>,
+            usize,
+        ) -> Result<i32, Error>,
+    >,
+) -> ScRet {
+    let (set, mut usi_ptr, tv, size) = cx.args();
+    let fut = async move {
+        if size != mem::size_of::<SigSet>() {
+            return Err(EINVAL);
+        }
+        let set = set.read(ts.virt.as_ref()).await?;
+        let tv = tv.read(ts.virt.as_ref()).await?;
+        let dur = Duration::from_secs(tv.sec) + Duration::from_micros(tv.usec);
+
+        let shared_sig = ts.task.shared_sig.load(SeqCst);
+
+        let local = pin!(ts.task.sig.wait(set));
+        let shared = pin!(shared_sig.wait(set));
+        let res = select(local, shared)
+            .ok_or_timeout(Timer::after(dur), || ETIMEDOUT)
+            .await?;
+        let si = match res {
+            Either::Left((si, _)) => si,
+            Either::Right((si, _)) => si,
+        };
+        let usi = UsigInfo {
+            sig: si.sig,
+            errno: 0,
+            code: si.code,
+        };
+        usi_ptr.write(ts.virt.as_ref(), usi).await?;
+
+        Ok(si.sig.raw())
+    };
+    cx.ret(fut.await);
+    ScRet::Continue(None)
+}
+
+#[async_handler]
+pub async fn kill(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(isize, i32) -> Result<(), Error>>,
+) -> ScRet {
+    let (pid, sig) = cx.args();
+    let fut = async move {
+        let pid = PidSelection::from(pid);
+        let sig = NonZeroI32::new(sig)
+            .and_then(|s| Sig::new(s.get()))
+            .ok_or(EINVAL)?;
+
+        let si = SigInfo {
+            sig,
+            code: SigCode::USER as _,
+            fields: SigFields::SigKill {
+                pid: ts.task.tid,
+                uid: 0,
+            },
+        };
+        match pid {
+            PidSelection::Task(Some(tid)) => {
+                let child = ksync::critical(|| {
+                    let children = ts.task.children.lock();
+                    let mut iter = children.iter();
+                    iter.find(|c| c.task.tid == tid).map(|c| c.task.clone())
+                });
+                child.ok_or(ESRCH)?.sig.push(si);
+            }
+            x => todo!("kill {x:?}"),
+        }
+        Ok(())
+    };
+    cx.ret(fut.await);
     ScRet::Continue(None)
 }
