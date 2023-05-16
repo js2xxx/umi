@@ -12,7 +12,12 @@ pub enum ActionType {
     Kill,
     Suspend,
     Resume,
-    User { entry: LAddr, exit: LAddr },
+    User {
+        entry: LAddr,
+        exit: LAddr,
+        use_extra_cx: bool,
+        use_alt_stack: bool,
+    },
 }
 
 impl ActionType {

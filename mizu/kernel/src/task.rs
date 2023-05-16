@@ -2,7 +2,7 @@ mod elf;
 pub mod fd;
 mod future;
 mod init;
-mod signal;
+pub mod signal;
 mod syscall;
 
 use alloc::{
@@ -23,7 +23,7 @@ use rv39_paging::{Attr, PAGE_SIZE};
 use spin::{Lazy, Mutex};
 use sygnal::{ActionSet, Sig, SigInfo, SigSet, Signals};
 
-use self::fd::Files;
+use self::{fd::Files, signal::SigStack};
 pub use self::{future::yield_now, init::InitTask, syscall::*};
 use crate::mem::{Out, UserPtr};
 
@@ -83,6 +83,7 @@ pub struct TaskState {
     tgroup: Arsc<(usize, spin::RwLock<Vec<Arc<Task>>>)>,
 
     sig_mask: SigSet,
+    sig_stack: Option<SigStack>,
     pub(crate) brk: usize,
 
     system_times: u64,
@@ -169,7 +170,7 @@ impl TaskState {
             if let (Some(sig), Some(parent)) = (exit_signal, self.task.parent.upgrade()) {
                 parent.sig.push(SigInfo {
                     sig,
-                    code: sygnal::SigCode::USER,
+                    code: sygnal::SigCode::USER as _,
                     fields: sygnal::SigFields::SigChld {
                         pid: self.task.tid,
                         uid: 0,

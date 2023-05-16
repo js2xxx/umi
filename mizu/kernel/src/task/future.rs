@@ -128,7 +128,7 @@ async fn handle_scause(scause: Scause, ts: &mut TaskState, tf: &mut TrapFrame) -
                     log::error!("failing to commit pages at address {:#x}: {err}", tf.stval);
                     return Continue(Some(SigInfo {
                         sig: Sig::SIGSEGV,
-                        code: SigCode::KERNEL,
+                        code: SigCode::KERNEL as _,
                         fields: sygnal::SigFields::SigSys {
                             addr: tf.stval.into(),
                             num: 0,

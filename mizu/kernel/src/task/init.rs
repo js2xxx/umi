@@ -168,6 +168,7 @@ impl InitTask {
             task: task.clone(),
             tgroup: Arsc::new((tid, spin::RwLock::new(vec![task.clone()]))),
             sig_mask: SigSet::EMPTY,
+            sig_stack: None,
             brk: 0,
             system_times: 0,
             user_times: 0,

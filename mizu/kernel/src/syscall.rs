@@ -13,7 +13,7 @@ use sygnal::SigInfo;
 
 use crate::{
     mem::{In, Out, UserPtr},
-    task::{self, fd, TaskState},
+    task::{self, fd, signal, TaskState},
 };
 
 pub type ScParams<'a> = (&'a mut TaskState, &'a mut TrapFrame);
@@ -36,6 +36,10 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         .map(EXIT, task::exit)
         .map(EXIT_GROUP, task::exit_group)
         .map(EXECVE, task::execve)
+        // Signals
+        .map(SIGALTSTACK, signal::sigaltstack)
+        .map(RT_SIGPROCMASK, signal::sigprocmask)
+        .map(RT_SIGACTION, signal::sigaction)
         // FS operations
         .map(READ, fd::read)
         .map(WRITE, fd::write)

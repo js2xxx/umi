@@ -75,7 +75,7 @@ pub async fn exit_group(ts: &mut TaskState, cx: UserCx<'_, fn(i32)>) -> ScRet {
     ts.sig_fatal(
         SigInfo {
             sig: Sig::SIGKILL,
-            code: SigCode::USER,
+            code: SigCode::USER as _,
             fields: SigFields::None,
         },
         false,
@@ -198,6 +198,7 @@ async fn clone_task(
             Arsc::new((new_tid, spin::RwLock::new(vec![task.clone()])))
         },
         sig_mask: SigSet::EMPTY,
+        sig_stack: None,
         brk: ts.brk,
         system_times: 0,
         user_times: 0,
@@ -336,7 +337,7 @@ pub async fn execve(
         ts.sig_fatal(
             SigInfo {
                 sig: Sig::SIGKILL,
-                code: SigCode::DETHREAD,
+                code: SigCode::DETHREAD as _,
                 fields: SigFields::None,
             },
             true,
