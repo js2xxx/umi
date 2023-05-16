@@ -157,21 +157,21 @@ pub async fn sigaltstack(
     ts: &mut TaskState,
     cx: UserCx<'_, fn(UserPtr<SigStack, In>, UserPtr<SigStack, Out>) -> Result<(), Error>>,
 ) -> ScRet {
+    const DISABLE: i32 = 2;
+
     let (stack, mut old) = cx.args();
     let fut = async move {
         if !old.is_null() {
             old.write(ts.virt.as_ref(), ts.sig_stack.unwrap_or_default())
                 .await?;
         }
-        ts.sig_stack = if !stack.is_null() {
+        if !stack.is_null() {
             let stack = stack.read(ts.virt.as_ref()).await?;
-            if stack.len < PAGE_SIZE * 2 || stack.flags != 0 {
+            if stack.len < PAGE_SIZE * 2 {
                 return Err(EINVAL);
             }
-            Some(stack)
-        } else {
-            None
-        };
+            ts.sig_stack = (stack.flags & DISABLE == 0).then_some(stack);
+        }
         Ok(())
     };
     cx.ret(fut.await);

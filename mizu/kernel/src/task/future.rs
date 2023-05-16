@@ -17,7 +17,7 @@ use riscv::register::{
 use sygnal::{Sig, SigCode, SigInfo};
 
 use super::TaskState;
-use crate::syscall::ScRet;
+use crate::{syscall::ScRet, task::signal::SIGRETURN_GUARD};
 
 #[pin_project]
 pub struct TaskFut<F> {
@@ -52,9 +52,9 @@ pub async fn user_loop(mut ts: TaskState, mut tf: TrapFrame) {
     let mut stat_time = time::read64();
     let mut sched_time = stat_time;
     let (code, sig) = 'life: loop {
-        match ts.handle_signals().await {
-            Continue(()) => {}
-            Break((code, sig)) => break 'life (code, Some(sig)),
+        match ts.handle_signals(&mut tf).await {
+            Ok(()) => {}
+            Err((code, sig)) => break 'life (code, Some(sig)),
         }
 
         let sys = time::read64();
@@ -123,6 +123,10 @@ async fn handle_scause(scause: Scause, ts: &mut TaskState, tf: &mut TrapFrame) -
                     tf.sepc,
                     tf.stval
                 );
+                if tf.stval == SIGRETURN_GUARD {
+                    return TaskState::resume_from_signal(ts, tf).await;
+                }
+
                 let res = ts.virt.commit(tf.stval.into()).await;
                 if let Err(err) = res {
                     log::error!("failing to commit pages at address {:#x}: {err}", tf.stval);

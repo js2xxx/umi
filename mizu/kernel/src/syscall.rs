@@ -40,6 +40,7 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         .map(SIGALTSTACK, signal::sigaltstack)
         .map(RT_SIGPROCMASK, signal::sigprocmask)
         .map(RT_SIGACTION, signal::sigaction)
+        .map(RT_SIGRETURN, task::TaskState::resume_from_signal)
         // FS operations
         .map(READ, fd::read)
         .map(WRITE, fd::write)

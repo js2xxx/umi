@@ -53,6 +53,13 @@ impl<T: Copy, D: PtrType> fmt::Debug for UserPtr<T, D> {
 }
 
 impl<T: Copy, D> UserPtr<T, D> {
+    pub fn new(addr: LAddr) -> Self {
+        UserPtr {
+            addr,
+            _marker: PhantomData,
+        }
+    }
+
     pub fn addr(&self) -> LAddr {
         self.addr
     }
