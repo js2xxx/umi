@@ -196,18 +196,24 @@ pub async fn sigprocmask(
         if size != mem::size_of::<SigSet>() {
             return Err(EINVAL);
         }
-        let set = set.read(ts.virt.as_ref()).await?;
+        let set = if !set.is_null() {
+            Some(set.read(ts.virt.as_ref()).await?)
+        } else {
+            None
+        };
         let current = ts.sig_mask;
 
         if !old.is_null() {
             old.write(ts.virt.as_ref(), current).await?;
         }
-        ts.sig_mask = match how {
-            SIG_BLOCK => current | set,
-            SIG_UNBLOCK => current & !set,
-            SIG_SETMASK => set,
-            _ => return Err(EINVAL),
-        };
+        if let Some(set) = set {
+            ts.sig_mask = match how {
+                SIG_BLOCK => current | set,
+                SIG_UNBLOCK => current & !set,
+                SIG_SETMASK => set,
+                _ => return Err(EINVAL),
+            };
+        }
         Ok(())
     };
     cx.ret(fut.await);

@@ -1,4 +1,4 @@
-use alloc::{boxed::Box, sync::Arc};
+use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use core::{
     alloc::Layout,
     mem::{self, MaybeUninit},
@@ -7,10 +7,11 @@ use core::{
 
 use afat32::NullTimeProvider;
 use co_trap::UserCx;
+use futures_util::{stream, StreamExt, TryStreamExt};
 use kmem::{Phys, Virt};
 use ksc::{
     async_handler,
-    Error::{self, EBADF, EEXIST, EINVAL, EISDIR, ENODEV, ENOSYS, ENOTBLK, ENOTDIR, EPERM, ERANGE},
+    Error::{self, *},
 };
 use rv39_paging::{Attr, LAddr, PAGE_MASK, PAGE_SHIFT};
 use umifs::{
@@ -82,6 +83,78 @@ pub async fn write(
     ScRet::Continue(None)
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+#[repr(C)]
+pub struct IoVec {
+    buffer: UserBuffer,
+    len: usize,
+}
+const MAX_IOV_LEN: usize = 8;
+
+#[async_handler]
+pub async fn readv(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(i32, UserPtr<IoVec, In>, usize) -> Result<usize, Error>>,
+) -> ScRet {
+    let (fd, iov, vlen) = cx.args();
+    let fut = async move {
+        if vlen == 0 {
+            return Ok(0);
+        }
+        let vlen = vlen.min(MAX_IOV_LEN);
+        let entry = ts.files.get(fd).await?;
+        let io = entry.to_io().ok_or(EBADF)?;
+
+        let mut iov_buf = [Default::default(); MAX_IOV_LEN];
+        iov.read_slice(ts.virt.as_ref(), &mut iov_buf[..vlen])
+            .await?;
+        let virt = ts.virt.as_ref();
+        let mut bufs = stream::iter(iov_buf[..vlen].iter_mut())
+            .then(|iov| iov.buffer.as_mut_slice(virt, iov.len))
+            .try_fold(Vec::new(), |mut acc, mut iov| async move {
+                acc.append(&mut iov);
+                Ok(acc)
+            })
+            .await?;
+
+        io.read(&mut bufs).await
+    };
+    cx.ret(fut.await);
+    ScRet::Continue(None)
+}
+
+#[async_handler]
+pub async fn writev(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(i32, UserPtr<IoVec, In>, usize) -> Result<usize, Error>>,
+) -> ScRet {
+    let (fd, iov, vlen) = cx.args();
+    let fut = async move {
+        if vlen == 0 {
+            return Ok(0);
+        }
+        let vlen = vlen.min(MAX_IOV_LEN);
+        let entry = ts.files.get(fd).await?;
+        let io = entry.to_io().ok_or(EBADF)?;
+
+        let mut iov_buf = [Default::default(); MAX_IOV_LEN];
+        iov.read_slice(ts.virt.as_ref(), &mut iov_buf[..vlen])
+            .await?;
+        let virt = ts.virt.as_ref();
+        let mut bufs = stream::iter(iov_buf[..vlen].iter())
+            .then(|iov| iov.buffer.as_slice(virt, iov.len))
+            .try_fold(Vec::new(), |mut acc, mut iov| async move {
+                acc.append(&mut iov);
+                Ok(acc)
+            })
+            .await?;
+
+        io.write(&mut bufs).await
+    };
+    cx.ret(fut.await);
+    ScRet::Continue(None)
+}
+
 #[async_handler]
 pub async fn lseek(
     ts: &mut TaskState,
@@ -97,7 +170,7 @@ pub async fn lseek(
             SEEK_SET => SeekFrom::Start(offset as usize),
             SEEK_CUR => SeekFrom::Current(offset),
             SEEK_END => SeekFrom::End(offset),
-            _ => return Err(EINVAL)
+            _ => return Err(EINVAL),
         };
         let entry = ts.files.get(fd).await?;
         let io = entry.to_io().ok_or(EISDIR)?;
@@ -220,7 +293,11 @@ fssc!(
         );
 
         let base = files.get(fd).await?;
-        let (entry, _) = base.open(path, options, perm).await?;
+        let entry = match base.open(path, options, perm).await {
+            Ok((entry, _)) => entry,
+            Err(ENOENT) if files.cwd() == "" => crate::fs::open(path, options, perm).await?.0,
+            Err(err) => return Err(err),
+        };
         files.open(entry).await
     }
 

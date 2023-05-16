@@ -176,6 +176,7 @@ impl Virt {
                     start_index,
                     attr: attr | Attr::VALID,
                 };
+                log::trace!("Virt::map result = {start:?}..{end:?}");
                 map.try_insert(start..end, mapping).map_err(|_| ENOSPC)?;
                 Ok(start)
             }
@@ -185,6 +186,7 @@ impl Virt {
 
                 let ent = map.allocate_with_aslr(aslr_key, LAddr::val).ok_or(ENOSPC)?;
                 let addr = *ent.key().start;
+                log::trace!("Virt::map result = {:?}", ent.key());
                 ent.insert(Mapping {
                     phys,
                     start_index,

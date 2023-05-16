@@ -64,7 +64,8 @@ impl InitTask {
 
         let end = addr + PAGE_SIZE + stack_size;
         let count = args.len();
-        // 1 for argc, 1 for argv ending null, 1 for envp ending null, 1 for auxv ending null.
+        // 1 for argc, 1 for argv ending null, 1 for envp ending null, 1 for auxv ending
+        // null.
         let len =
             mem::size_of::<usize>() * (count + 4) + args.iter().map(|s| s.len() + 1).sum::<usize>();
         assert!(len <= PAGE_SIZE);

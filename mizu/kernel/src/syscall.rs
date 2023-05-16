@@ -4,7 +4,8 @@ use core::{ops::ControlFlow, pin::Pin, time::Duration};
 use co_trap::{TrapFrame, UserCx};
 use kmem::Virt;
 use ksc::{
-    async_handler, AHandlers, Error,
+    async_handler, AHandlers,
+    Error::{self, EPERM},
     Scn::{self, *},
 };
 use ktime::{Instant, InstantExt};
@@ -14,11 +15,7 @@ use sygnal::SigInfo;
 
 use crate::{
     mem::{In, Out, UserPtr, USER_RANGE},
-    task::{
-        self,
-        fd::{self, MAX_FDS},
-        signal, TaskState,
-    },
+    task::{self, fd, signal, TaskState},
 };
 
 pub type ScParams<'a> = (&'a mut TaskState, &'a mut TrapFrame);
@@ -52,6 +49,8 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         // FS operations
         .map(READ, fd::read)
         .map(WRITE, fd::write)
+        .map(READV, fd::readv)
+        .map(WRITEV, fd::writev)
         .map(LSEEK, fd::lseek)
         .map(CHDIR, fd::chdir)
         .map(GETCWD, fd::getcwd)
@@ -178,10 +177,13 @@ struct Rlimit {
 #[async_handler]
 async fn prlimit(
     ts: &mut TaskState,
-    cx: UserCx<'_, fn(u32, UserPtr<Rlimit, In>, UserPtr<Rlimit, Out>) -> Result<(), Error>>,
+    cx: UserCx<'_, fn(usize, u32, UserPtr<Rlimit, In>, UserPtr<Rlimit, Out>) -> Result<(), Error>>,
 ) -> ScRet {
-    let (ty, new, mut old) = cx.args();
+    let (pid, ty, new, mut old) = cx.args();
     let fut = async move {
+        if pid != 0 {
+            return Err(EPERM);
+        }
         let (cur, max) = match ty {
             RLIMIT_AS => (USER_RANGE.len(), USER_RANGE.len()),
             RLIMIT_NPROC => (65536, 65536),
@@ -190,14 +192,14 @@ async fn prlimit(
                 (s, usize::MAX)
             }
             RLIMIT_DATA | RLIMIT_STACK => (8 * 1024 * 1024, usize::MAX),
-            RLIMIT_NOFILE => (
-                if new.is_null() {
+            RLIMIT_NOFILE => {
+                let limit = if new.is_null() {
                     ts.files.get_limit()
                 } else {
                     ts.files.set_limit(new.read(ts.virt.as_ref()).await?.cur)
-                },
-                MAX_FDS,
-            ),
+                };
+                (limit, limit)
+            }
             _ => return Ok(()),
         };
         if !old.is_null() {

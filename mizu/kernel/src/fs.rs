@@ -1,6 +1,7 @@
 mod dev;
 mod pipe;
 mod serial;
+mod tmp;
 
 use alloc::{collections::BTreeMap, sync::Arc};
 use core::time::Duration;
@@ -96,6 +97,7 @@ pub async fn open_dir(
 
 pub async fn fs_init() {
     mount("dev".into(), Arsc::new(dev::DevFs));
+    mount("tmp".into(), Arsc::new(tmp::TmpFs));
     for block in blocks() {
         let block_shift = block.block_shift();
         let phys = Phys::new(block.to_io().unwrap(), 0, false);

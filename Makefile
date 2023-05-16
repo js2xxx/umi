@@ -30,7 +30,7 @@ QEMU_ARGS := -monitor stdio \
 
 ifeq ($(BOARD), qemu-virt)
 	QEMU_ARGS += -machine virt \
-		-bios sbi-qemu
+		-bios default
 endif
 
 run: build

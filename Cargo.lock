@@ -218,6 +218,7 @@ dependencies = [
  "kmem",
  "ksc",
  "ksync",
+ "ktime",
  "log",
  "rand-riscv",
  "rv39-paging",

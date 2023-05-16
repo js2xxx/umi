@@ -19,7 +19,7 @@ use umifs::types::Permissions;
 
 use crate::{
     executor,
-    mem::{In, Out, UserPtr, deep_fork},
+    mem::{deep_fork, In, Out, UserPtr},
     syscall::ScRet,
     task::{
         fd::MAX_PATH_LEN,

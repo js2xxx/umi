@@ -12,6 +12,7 @@ test = []
 kmem = {path = "../kmem"}
 ksc = {path = "../ksc"}
 ksync = {path = "../ksync"}
+ktime = {path = "../ktime"}
 rand-riscv = {path = "../rand-riscv"}
 rv39-paging = {path = "../paging"}
 umio = {path = "../umio"}

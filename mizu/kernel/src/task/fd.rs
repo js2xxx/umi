@@ -6,7 +6,7 @@ use core::sync::atomic::{AtomicI32, AtomicUsize, Ordering::SeqCst};
 use arsc_rs::Arsc;
 use futures_util::future::join_all;
 use hashbrown::HashMap;
-use ksc::Error::{self, EBADF, ENOSPC};
+use ksc::Error::{self, EBADF, EMFILE};
 use ksync::RwLock;
 use rand_riscv::RandomState;
 use umifs::{
@@ -77,7 +77,7 @@ impl Files {
     pub async fn open(&self, entry: Arc<dyn Entry>) -> Result<i32, Error> {
         let mut map = self.fds.map.write().await;
         if map.len() >= self.fds.limit.load(SeqCst) {
-            return Err(ENOSPC);
+            return Err(EMFILE);
         }
         let fd = self.fds.id_alloc.fetch_add(1, SeqCst);
         map.insert_unique_unchecked(fd, entry);
@@ -154,5 +154,5 @@ pub async fn default_stdio() -> Result<[Arc<dyn Entry>; 3], Error> {
         .open("".as_ref(), OpenOptions::RDONLY, Permissions::SELF_R)
         .await?
         .0;
-    Ok([stderr, stdout, stdin])
+    Ok([stdin, stdout, stderr])
 }

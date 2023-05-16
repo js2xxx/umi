@@ -283,7 +283,7 @@ impl<T: Copy, D: OutPtr> UserPtr<T, D> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct UserBuffer {
     addr: LAddr,
 }
@@ -295,6 +295,14 @@ impl RawReg for UserBuffer {
 
     fn into_raw(self) -> usize {
         self.addr.val()
+    }
+}
+
+impl Default for UserBuffer {
+    fn default() -> Self {
+        UserBuffer {
+            addr: 0usize.into(),
+        }
     }
 }
 

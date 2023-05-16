@@ -27,7 +27,7 @@ use self::{fd::Files, signal::SigStack};
 pub use self::{future::yield_now, init::InitTask, syscall::*};
 use crate::mem::{Out, UserPtr};
 
-const DEFAULT_STACK_SIZE: usize = PAGE_SIZE * 32;
+const DEFAULT_STACK_SIZE: usize = PAGE_SIZE * 4;
 const DEFAULT_STACK_ATTR: Attr = Attr::USER_ACCESS
     .union(Attr::READABLE)
     .union(Attr::WRITABLE);

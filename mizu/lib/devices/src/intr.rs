@@ -42,7 +42,7 @@ impl IntrManager {
         })?;
         cx.into_iter().for_each(|cx| {
             self.plic.enable(pin, cx, true);
-            self.plic.set_priority(pin, 1)
+            self.plic.set_priority(pin, 10)
         });
         Some(Interrupt(rx))
     }
@@ -61,6 +61,7 @@ impl IntrManager {
             });
             if exist.is_none() {
                 self.plic.enable(pin, cx, false);
+                self.plic.set_priority(pin, 0);
             }
             self.plic.complete(cx, pin);
         }
