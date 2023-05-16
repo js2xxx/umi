@@ -8,12 +8,17 @@ use ksc::{
     Scn::{self, *},
 };
 use ktime::{Instant, InstantExt};
+use riscv::register::time;
 use spin::Lazy;
 use sygnal::SigInfo;
 
 use crate::{
-    mem::{In, Out, UserPtr},
-    task::{self, fd, signal, TaskState},
+    mem::{In, Out, UserPtr, USER_RANGE},
+    task::{
+        self,
+        fd::{self, MAX_FDS},
+        signal, TaskState,
+    },
 };
 
 pub type ScParams<'a> = (&'a mut TaskState, &'a mut TrapFrame);
@@ -47,6 +52,7 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         // FS operations
         .map(READ, fd::read)
         .map(WRITE, fd::write)
+        .map(LSEEK, fd::lseek)
         .map(CHDIR, fd::chdir)
         .map(GETCWD, fd::getcwd)
         .map(DUP, fd::dup)
@@ -62,9 +68,11 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         .map(UMOUNT2, fd::umount)
         // Time
         .map(GETTIMEOFDAY, gettimeofday)
+        .map(CLOCK_GETTIME, clock_gettime)
         .map(NANOSLEEP, sleep)
         // Miscellaneous
         .map(UNAME, uname)
+        .map(PRLIMIT64, prlimit)
 });
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -80,6 +88,21 @@ async fn gettimeofday(
     cx: UserCx<'_, fn(UserPtr<Tv, Out>, i32) -> Result<(), Error>>,
 ) -> ScRet {
     let (mut out, _) = cx.args();
+
+    let now = Instant::now();
+    let (sec, usec) = now.to_su();
+    let ret = out.write(ts.virt.as_ref(), Tv { sec, usec }).await;
+    cx.ret(ret);
+
+    ScRet::Continue(None)
+}
+
+#[async_handler]
+async fn clock_gettime(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(usize, UserPtr<Tv, Out>) -> Result<(), Error>>,
+) -> ScRet {
+    let (_, mut out) = cx.args();
 
     let now = Instant::now();
     let (sec, usec) = now.to_su();
@@ -135,5 +158,53 @@ async fn uname(
     }
     let ret = inner(ts.virt.as_ref(), cx.args());
     cx.ret(ret.await);
+    ScRet::Continue(None)
+}
+
+const RLIMIT_CPU: u32 = 0; // CPU time in sec
+const RLIMIT_DATA: u32 = 2; // max data size
+const RLIMIT_STACK: u32 = 3; // max stack size
+const RLIMIT_NPROC: u32 = 6; // max number of processes
+const RLIMIT_NOFILE: u32 = 7; // max number of open files
+const RLIMIT_AS: u32 = 9; // address space limit
+
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+struct Rlimit {
+    cur: usize,
+    max: usize,
+}
+
+#[async_handler]
+async fn prlimit(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(u32, UserPtr<Rlimit, In>, UserPtr<Rlimit, Out>) -> Result<(), Error>>,
+) -> ScRet {
+    let (ty, new, mut old) = cx.args();
+    let fut = async move {
+        let (cur, max) = match ty {
+            RLIMIT_AS => (USER_RANGE.len(), USER_RANGE.len()),
+            RLIMIT_NPROC => (65536, 65536),
+            RLIMIT_CPU => {
+                let s = time::read() / config::TIME_FREQ as usize;
+                (s, usize::MAX)
+            }
+            RLIMIT_DATA | RLIMIT_STACK => (8 * 1024 * 1024, usize::MAX),
+            RLIMIT_NOFILE => (
+                if new.is_null() {
+                    ts.files.get_limit()
+                } else {
+                    ts.files.set_limit(new.read(ts.virt.as_ref()).await?.cur)
+                },
+                MAX_FDS,
+            ),
+            _ => return Ok(()),
+        };
+        if !old.is_null() {
+            old.write(ts.virt.as_ref(), Rlimit { cur, max }).await?;
+        }
+        Ok(())
+    };
+    cx.ret(fut.await);
     ScRet::Continue(None)
 }

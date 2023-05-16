@@ -10,7 +10,7 @@ use goblin::elf64::{header::*, program_header::*, section_header::*};
 use kmem::{Phys, Virt};
 use ksc::Error::{ENOEXEC, ENOSYS};
 use rv39_paging::{Attr, LAddr, PAGE_MASK, PAGE_SHIFT};
-use umifs::traits::IoExt;
+use umifs::traits::{Io, IoExt};
 
 #[derive(Debug)]
 pub enum Error {
@@ -160,10 +160,11 @@ async fn map_segment(
             zero_size
         );
 
-        let segment = phys.clone_as(true);
+        let len = phys.stream_len().await.map_err(Error::PhysRead)?;
+        let segment = phys.clone_as(true).await;
 
         let mut zero_offset = data_end;
-        let mut zero_size = zero_size;
+        let mut zero_size = zero_size.min(len);
         while zero_size > 0 {
             let s = zero_size.min(ZEROS.len());
             segment

@@ -19,7 +19,7 @@ use umifs::types::Permissions;
 
 use crate::{
     executor,
-    mem::{In, Out, UserPtr},
+    mem::{In, Out, UserPtr, deep_fork},
     syscall::ScRet,
     task::{
         fd::MAX_PATH_LEN,
@@ -179,7 +179,7 @@ async fn clone_task(
     let virt = if flags.contains(Flags::VM) {
         ts.virt.clone()
     } else {
-        ts.virt.as_ref().deep_fork().await?
+        deep_fork(&ts.virt).await?
     };
 
     let mut new_tf = *tf;
@@ -187,12 +187,9 @@ async fn clone_task(
     log::trace!("clone_task: setting up TrapFrame");
 
     new_tf.set_syscall_ret(0);
-    new_tf.gpr.tx.sp = match stack {
-        Some(stack) => stack.get(),
-        None => InitTask::load_stack(virt.as_ref(), None, Default::default())
-            .await?
-            .val(),
-    };
+    if let Some(stack) = stack {
+        new_tf.gpr.tx.sp = stack.get();
+    }
     if flags.contains(Flags::SETTLS) {
         new_tf.gpr.tx.tp = tls;
     }

@@ -91,7 +91,7 @@ pub struct TaskState {
 
     pub(crate) virt: Pin<Arsc<Virt>>,
     sig_actions: Arsc<ActionSet>,
-    files: Files,
+    pub(crate) files: Files,
     tid_clear: Option<UserPtr<usize, Out>>,
     exit_signal: Option<Sig>,
 }

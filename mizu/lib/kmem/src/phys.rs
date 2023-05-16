@@ -9,15 +9,12 @@ use core::{
 
 use async_trait::async_trait;
 use futures_util::future::try_join_all;
-use ksc_core::{
-    handler::Boxed,
-    Error::{self, EINVAL, ENOMEM},
-};
+use ksc_core::Error::{self, EINVAL, ENOMEM};
 use ksync::Mutex;
 use rand_riscv::RandomState;
 use rv39_paging::{PAddr, ID_OFFSET, PAGE_SHIFT, PAGE_SIZE};
 use umifs::misc::Zero;
-use umio::{advance_slices, ioslice_len, IntoAnyExt, Io, IoExt, IoSlice, IoSliceMut, SeekFrom};
+use umio::{advance_slices, ioslice_len, Io, IoExt, IoSlice, IoSliceMut, SeekFrom};
 
 use crate::lru::LruCache;
 
@@ -55,6 +52,12 @@ impl Frame {
     pub fn as_mut_slice(&mut self) -> &mut [u8] {
         unsafe { self.as_ptr().as_mut() }
     }
+
+    pub fn copy(&self, len: usize) -> Option<Frame> {
+        let mut f = Self::new()?;
+        f.as_mut_slice()[..len].copy_from_slice(&self.as_slice()[..len]);
+        Some(f)
+    }
 }
 
 impl Drop for Frame {
@@ -70,6 +73,7 @@ impl Borrow<PAddr> for Frame {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct FrameInfo {
     frame: Arc<Frame>,
     len: usize,
@@ -94,11 +98,26 @@ impl Phys {
         }
     }
 
-    pub fn clone_as(self: &Arc<Self>, cow: bool) -> Self {
-        if cow {
-            Phys::new(self.clone(), 0, true)
-        } else {
-            Phys::new(self.backend.clone(), 0, false)
+    pub async fn clone_as(self: &Arc<Self>, cow: bool) -> Self {
+        if !cow {
+            return Phys::new(self.backend.clone(), 0, false);
+        }
+        let frames = {
+            let frames = self.frames.lock().await;
+            frames.iter().rev().fold(
+                LruCache::unbounded_with_hasher(RandomState::new()),
+                |mut new, (&index, fi)| {
+                    new.put(index, fi.clone());
+                    new
+                },
+            )
+        };
+
+        Phys {
+            frames: Mutex::new(frames),
+            position: Default::default(),
+            cow: true,
+            backend: self.backend.clone(),
         }
     }
 
@@ -120,25 +139,31 @@ impl Phys {
         writable: Option<usize>,
         pin: bool,
     ) -> Result<(Arc<Frame>, usize), Error> {
-        log::trace!(
-            "Phys::commit index = {index} {writable:?} {}",
-            if pin { "pin" } else { "" }
-        );
+        // log::trace!(
+        //     "Phys::commit index = {index} {writable:?} {}",
+        //     if pin { "pin" } else { "" }
+        // );
         let mut frames = self.frames.lock().await;
 
-        let ret = frames.get_mut(&index).map(|fi| {
-            if let Some(len) = writable {
-                fi.dirty = !self.cow;
-                fi.len = fi.len.max(len);
-            }
-            fi.pin_count += pin as usize;
-            (fi.frame.clone(), fi.len)
-        });
+        let ret = match frames.get_mut(&index) {
+            Some(fi) => Some({
+                if let Some(len) = writable {
+                    if Arc::strong_count(&fi.frame) > 1 {
+                        fi.frame = Arc::new(fi.frame.copy(fi.len).ok_or(ENOMEM)?);
+                    }
+                    fi.dirty = !self.cow;
+                    fi.len = fi.len.max(len);
+                }
+                fi.pin_count += pin as usize;
+                (fi.frame.clone(), fi.len)
+            }),
+            None => None,
+        };
         if let Some(ret) = ret {
             return Ok(ret);
         }
 
-        let (frame, len) = commit(&self.backend, index, writable, pin).await?;
+        let (frame, len) = commit(&self.backend, index).await?;
         if len == 0 && writable.is_none() {
             return Ok((frame, len));
         }
@@ -318,10 +343,10 @@ impl Io for Phys {
     }
 
     async fn read_at(&self, offset: usize, mut buffer: &mut [IoSliceMut]) -> Result<usize, Error> {
-        log::trace!(
-            "Phys::read_at {offset:#x}, buffer len = {}",
-            ioslice_len(&buffer)
-        );
+        // log::trace!(
+        //     "Phys::read_at {offset:#x}, buffer len = {}",
+        //     ioslice_len(&buffer)
+        // );
 
         let ioslice_len = ioslice_len(&buffer);
         let (start, end) = (offset, offset.checked_add(ioslice_len).ok_or(EINVAL)?);
@@ -366,10 +391,10 @@ impl Io for Phys {
     }
 
     async fn write_at(&self, offset: usize, mut buffer: &mut [IoSlice]) -> Result<usize, Error> {
-        log::trace!(
-            "Phys::write_at {offset:#x}, buffer len = {}",
-            ioslice_len(&buffer)
-        );
+        // log::trace!(
+        //     "Phys::write_at {offset:#x}, buffer len = {}",
+        //     ioslice_len(&buffer)
+        // );
 
         let ioslice_len = ioslice_len(&buffer);
         let (start, end) = (offset, offset.checked_add(ioslice_len).ok_or(EINVAL)?);
@@ -485,34 +510,16 @@ fn copy_to_frame(
     }
 }
 
-fn commit(
-    io: &Arc<dyn Io>,
-    index: usize,
-    writable: Option<usize>,
-    pin: bool,
-) -> Boxed<Result<(Arc<Frame>, usize), Error>> {
-    Box::pin(async move {
-        if let Some(phys) = io.clone().downcast::<Phys>() {
-            let (frame, len) = phys.commit(index, writable, pin).await?;
-            return Ok(if writable.is_some() && phys.cow {
-                let mut dst = Frame::new().ok_or(ENOMEM)?;
-                dst.as_mut_slice()[..len].copy_from_slice(&frame.as_slice()[..len]);
-                (Arc::new(dst), len)
-            } else {
-                (frame, len)
-            });
-        }
+async fn commit(io: &Arc<dyn Io>, index: usize) -> Result<(Arc<Frame>, usize), Error> {
+    let io = io.as_ref();
+    let offset = index << PAGE_SHIFT;
+    let end = (offset + PAGE_SIZE).min(io.stream_len().await?);
+    let len = end.saturating_sub(offset);
 
-        let io = io.as_ref();
-        let offset = index << PAGE_SHIFT;
-        let end = (offset + PAGE_SIZE).min(io.stream_len().await?);
-        let len = end.saturating_sub(offset);
-
-        let mut frame = Frame::new().ok_or(ENOMEM)?;
-        io.read_exact_at(offset, &mut frame.as_mut_slice()[..len])
-            .await?;
-        Ok((Arc::new(frame), len))
-    })
+    let mut frame = Frame::new().ok_or(ENOMEM)?;
+    io.read_exact_at(offset, &mut frame.as_mut_slice()[..len])
+        .await?;
+    Ok((Arc::new(frame), len))
 }
 
 async fn flush(io: &Arc<dyn Io>, end_pos: usize, index: usize, frame: &Frame) -> Result<(), Error> {

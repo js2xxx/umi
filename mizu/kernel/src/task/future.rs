@@ -47,7 +47,12 @@ impl<F: Future> Future for TaskFut<F> {
 const TASK_GRAN: u64 = 20000;
 
 pub async fn user_loop(mut ts: TaskState, mut tf: TrapFrame) {
-    log::debug!("task {} startup, tf.a0 = {}", ts.task.tid, tf.gpr.tx.a[0]);
+    log::debug!(
+        "task {} startup, tf.a0 = {}, sepc = {:#x}",
+        ts.task.tid,
+        tf.gpr.tx.a[0],
+        tf.sepc
+    );
 
     let mut stat_time = time::read64();
     let mut sched_time = stat_time;
@@ -70,7 +75,7 @@ pub async fn user_loop(mut ts: TaskState, mut tf: TrapFrame) {
         match fr {
             FastResult::Continue => {}
             FastResult::Pending => continue,
-            FastResult::Break => break 'life (-1, None),
+            FastResult::Break => break 'life (0, None),
             FastResult::Yield => unreachable!(),
         }
 
@@ -85,6 +90,7 @@ pub async fn user_loop(mut ts: TaskState, mut tf: TrapFrame) {
             sched_time = now;
             log::trace!("task {} yield", ts.task.tid);
             yield_now().await;
+            log::trace!("task {} yielded", ts.task.tid);
         }
     };
     ts.cleanup(code, sig).await
@@ -96,21 +102,25 @@ async fn handle_scause(scause: Scause, ts: &mut TaskState, tf: &mut TrapFrame) -
         Trap::Exception(excep) => match excep {
             Exception::UserEnvCall => {
                 let res = async {
-                    let scn = tf.scn().ok_or(ENOSYS)?;
+                    let scn = tf.scn().ok_or(None)?;
                     if scn != Scn::WRITE {
-                        log::info!("task {} syscall {scn:?}", ts.task.tid);
+                        log::info!(
+                            "task {} syscall {scn:?}, sepc = {:#x}",
+                            ts.task.tid,
+                            tf.sepc
+                        );
                     }
                     crate::syscall::SYSCALL
                         .handle(scn, (ts, tf))
                         .await
-                        .ok_or(ENOSYS)
+                        .ok_or(Some(scn))
                 }
                 .await;
                 match res {
                     Ok(res) => return res,
-                    Err(err) => {
-                        log::warn!("error in syscall: {err}");
-                        tf.set_syscall_ret(err.into_raw())
+                    Err(scn) => {
+                        log::warn!("SYSCALL not implemented: {scn:?}");
+                        tf.set_syscall_ret(ENOSYS.into_raw())
                     }
                 }
             }

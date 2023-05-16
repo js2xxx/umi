@@ -52,7 +52,7 @@ impl IntrManager {
     }
 
     pub fn notify(&self, cx: usize) {
-        log::trace!("Intr::notify cx = {cx}");
+        // log::trace!("Intr::notify cx = {cx}");
         let pin = self.plic.claim(cx);
         if pin > 0 {
             let exist = ksync::critical(|| {

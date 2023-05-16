@@ -1,6 +1,6 @@
 mod syscall;
 
-use alloc::{boxed::Box, sync::Arc, vec};
+use alloc::{boxed::Box, vec};
 use core::{alloc::Layout, mem, sync::atomic::Ordering::SeqCst};
 
 use arsc_rs::Arsc;
@@ -26,6 +26,7 @@ impl TaskState {
         let si = si.or_else(|| self.task.shared_sig.load(SeqCst).pop(self.sig_mask));
         if let Some(si) = si {
             let action = self.sig_actions.get(si.sig);
+            log::trace!("received signal {:?}, code = {}", si.sig, si.code);
             match action.ty {
                 ActionType::Ignore => {}
                 ActionType::Resume => {
@@ -33,7 +34,7 @@ impl TaskState {
                 }
                 ActionType::Kill => {
                     self.sig_fatal(si, false);
-                    return Err((-1, si.sig));
+                    return Err((0, si.sig));
                 }
                 ActionType::Suspend => {
                     let _ = self.task.event.send(&TaskEvent::Suspended(si.sig)).await;
@@ -50,7 +51,7 @@ impl TaskState {
                             self.task.sig.push(sigsegv)
                         } else {
                             self.sig_fatal(sigsegv, false);
-                            return Err((-1, Sig::SIGSEGV));
+                            return Err((0, Sig::SIGSEGV));
                         }
                     }
                 }
@@ -70,8 +71,9 @@ impl TaskState {
         };
         for t in ksync::critical(|| tgroup.1.read().clone())
             .into_iter()
-            .filter(|t| !Arc::ptr_eq(t, &self.task))
+            .filter(|t| t.tid != self.task.tid)
         {
+            log::debug!("Send fatal {:?} to task {}", si.sig, t.tid);
             t.sig.push(si);
         }
     }

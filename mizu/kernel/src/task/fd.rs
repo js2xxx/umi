@@ -1,7 +1,7 @@
 mod syscall;
 
 use alloc::sync::Arc;
-use core::sync::atomic::{AtomicI32, Ordering::SeqCst};
+use core::sync::atomic::{AtomicI32, AtomicUsize, Ordering::SeqCst};
 
 use arsc_rs::Arsc;
 use futures_util::future::join_all;
@@ -17,12 +17,15 @@ use umifs::{
 
 pub use self::syscall::*;
 
-const MAX_FDS: usize = 65536;
+pub const MAX_FDS: usize = 65536;
 
 struct Fds {
     map: RwLock<HashMap<i32, Arc<dyn Entry>, RandomState>>,
     id_alloc: AtomicI32,
+    limit: AtomicUsize,
 }
+
+const LIMIT_DEFAULT: usize = 64;
 
 pub struct Files {
     fds: Arsc<Fds>,
@@ -41,9 +44,18 @@ impl Files {
                         .collect(),
                 ),
                 id_alloc: AtomicI32::new(3),
+                limit: LIMIT_DEFAULT.into(),
             }),
             cwd: Arsc::new(spin::RwLock::new(cwd)),
         }
+    }
+
+    pub fn set_limit(&self, max: usize) -> usize {
+        self.fds.limit.swap(max.min(MAX_FDS), SeqCst)
+    }
+
+    pub fn get_limit(&self) -> usize {
+        self.fds.limit.load(SeqCst)
     }
 
     pub async fn reopen(&self, fd: i32, entry: Arc<dyn Entry>) {
@@ -64,7 +76,7 @@ impl Files {
 
     pub async fn open(&self, entry: Arc<dyn Entry>) -> Result<i32, Error> {
         let mut map = self.fds.map.write().await;
-        if map.len() >= MAX_FDS {
+        if map.len() >= self.fds.limit.load(SeqCst) {
             return Err(ENOSPC);
         }
         let fd = self.fds.id_alloc.fetch_add(1, SeqCst);
@@ -120,6 +132,7 @@ impl Files {
                 Arsc::new(Fds {
                     map: RwLock::new(self.fds.map.read().await.clone()),
                     id_alloc: AtomicI32::new(self.fds.id_alloc.load(SeqCst)),
+                    limit: LIMIT_DEFAULT.into(),
                 })
             },
         }

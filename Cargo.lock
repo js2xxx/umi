@@ -143,6 +143,7 @@ dependencies = [
  "enum-primitive-derive",
  "ksc-core",
  "ksync-core",
+ "log",
  "num-traits",
  "riscv",
  "static_assertions",

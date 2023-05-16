@@ -248,12 +248,14 @@ pub async fn sigtimedwait(
             Either::Left((si, _)) => si,
             Either::Right((si, _)) => si,
         };
-        let usi = UsigInfo {
-            sig: si.sig,
-            errno: 0,
-            code: si.code,
-        };
-        usi_ptr.write(ts.virt.as_ref(), usi).await?;
+        if !usi_ptr.is_null() {
+            let usi = UsigInfo {
+                sig: si.sig,
+                errno: 0,
+                code: si.code,
+            };
+            usi_ptr.write(ts.virt.as_ref(), usi).await?;
+        }
 
         Ok(si.sig.raw())
     };

@@ -15,7 +15,7 @@ use ksc::{
 use rv39_paging::{Attr, LAddr, PAGE_MASK, PAGE_SHIFT};
 use umifs::{
     traits::IntoAnyExt,
-    types::{FileType, OpenOptions, Permissions},
+    types::{FileType, OpenOptions, Permissions, SeekFrom},
 };
 
 use super::Files;
@@ -78,6 +78,32 @@ pub async fn write(
 
     let ret = write_inner(ts, cx.args()).await;
     cx.ret(ret);
+
+    ScRet::Continue(None)
+}
+
+#[async_handler]
+pub async fn lseek(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(i32, isize, isize) -> Result<usize, Error>>,
+) -> ScRet {
+    const SEEK_SET: isize = 0;
+    const SEEK_CUR: isize = 1;
+    const SEEK_END: isize = 2;
+
+    let (fd, offset, whence) = cx.args();
+    let fut = async move {
+        let whence = match whence {
+            SEEK_SET => SeekFrom::Start(offset as usize),
+            SEEK_CUR => SeekFrom::Current(offset),
+            SEEK_END => SeekFrom::End(offset),
+            _ => return Err(EINVAL)
+        };
+        let entry = ts.files.get(fd).await?;
+        let io = entry.to_io().ok_or(EISDIR)?;
+        io.seek(whence).await
+    };
+    cx.ret(fut.await);
 
     ScRet::Continue(None)
 }
@@ -389,7 +415,7 @@ fssc!(
         } else {
             let entry = files.get(fd).await?;
             match entry.clone().downcast::<Phys>() {
-                Some(phys) => phys.clone_as(cow),
+                Some(phys) => phys.clone_as(cow).await,
                 None => Phys::new(entry.to_io().ok_or(EISDIR)?, 0, cow),
             }
         };

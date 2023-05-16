@@ -135,7 +135,7 @@ impl InitTask {
         };
 
         let loaded = elf::load(phys, None, virt.as_ref()).await?;
-        if loaded.tls.is_some() && !has_interp {
+        if loaded.is_dyn && !has_interp {
             return Err(ENOSYS);
         }
         virt.commit(loaded.entry).await?;

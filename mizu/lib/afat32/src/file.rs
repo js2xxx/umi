@@ -13,8 +13,7 @@ use umifs::{
     path::Path,
     traits::{Entry, Io},
     types::{
-        advance_slices, ioslice_len, FileType, IoSlice, IoSliceMut, Metadata, OpenOptions,
-        Permissions, SeekFrom,
+        advance_slices, FileType, IoSlice, IoSliceMut, Metadata, OpenOptions, Permissions, SeekFrom,
     },
 };
 
@@ -170,7 +169,7 @@ impl<T: TimeProvider> FatFile<T> {
 #[async_trait]
 impl<T: TimeProvider> Io for FatFile<T> {
     async fn seek(&self, whence: SeekFrom) -> Result<usize, Error> {
-        log::trace!("FatFile::seek {whence:?}");
+        // log::trace!("FatFile::seek {whence:?}");
 
         let offset = match whence {
             SeekFrom::Start(offset) => offset,
@@ -202,10 +201,10 @@ impl<T: TimeProvider> Io for FatFile<T> {
         mut offset: usize,
         mut buffer: &mut [IoSliceMut],
     ) -> Result<usize, Error> {
-        log::trace!(
-            "FatFile::read_at {offset:#x}, buffer len = {}",
-            ioslice_len(&buffer)
-        );
+        // log::trace!(
+        //     "FatFile::read_at {offset:#x}, buffer len = {}",
+        //     ioslice_len(&buffer)
+        // );
 
         let cluster_shift = self.cluster_shift;
         let (cluster_index, offset_in_cluster) = self.decomp(offset);
@@ -248,10 +247,10 @@ impl<T: TimeProvider> Io for FatFile<T> {
         mut offset: usize,
         mut buffer: &mut [IoSlice],
     ) -> Result<usize, Error> {
-        log::trace!(
-            "FatFile::write_at {offset:#x}, buffer len = {}",
-            ioslice_len(&buffer)
-        );
+        // log::trace!(
+        //     "FatFile::write_at {offset:#x}, buffer len = {}",
+        //     ioslice_len(&buffer)
+        // );
 
         let cluster_shift = self.cluster_shift;
         let (cluster_index, offset_in_cluster) = self.decomp(offset);

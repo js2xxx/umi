@@ -12,10 +12,14 @@ use rv39_paging::{Attr, CANONICAL_PREFIX, PAGE_MASK, PAGE_SHIFT, PAGE_SIZE};
 pub use self::user::{In, InOut, Out, UserBuffer, UserPtr, UA_FAULT};
 use crate::{rxx::KERNEL_PAGES, syscall::ScRet, task::TaskState};
 
-const USER_RANGE: Range<usize> = 0x1000..((!CANONICAL_PREFIX) + 1);
+pub const USER_RANGE: Range<usize> = 0x1000..((!CANONICAL_PREFIX) + 1);
 
 pub fn new_virt() -> Pin<Arsc<Virt>> {
     Virt::new(USER_RANGE.start.into()..USER_RANGE.end.into(), KERNEL_PAGES)
+}
+
+pub async fn deep_fork(virt: &Pin<Arsc<Virt>>) -> Result<Pin<Arsc<Virt>>, Error> {
+    virt.as_ref().deep_fork(KERNEL_PAGES).await
 }
 
 #[async_handler]
