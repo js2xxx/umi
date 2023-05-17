@@ -1,6 +1,7 @@
-use alloc::sync::Arc;
+use alloc::{sync::Arc, vec, vec::Vec};
 use core::{
-    fmt, mem,
+    fmt,
+    mem::{self, MaybeUninit},
     ops::{Bound, Range, RangeBounds},
 };
 
@@ -148,6 +149,76 @@ impl Fat {
         Ok(u32::from_le_bytes(buf))
     }
 
+    /// # Safety
+    ///
+    /// The buf must be written zeros.
+    async unsafe fn get_range_raw(
+        &self,
+        start: u32,
+        buf: &mut [MaybeUninit<u32>],
+    ) -> Result<usize, Error> {
+        let end = (start + u32::try_from(buf.len())?).min(self.allocable_range().end);
+        if start > end {
+            return Err(EINVAL);
+        }
+        if start == end {
+            return Ok(0);
+        }
+        let read_len = (end - start) as usize;
+        let bytes = MaybeUninit::slice_as_bytes_mut(&mut buf[0..read_len]);
+
+        self.device
+            .read_exact_at(self.offset(0, start), unsafe {
+                MaybeUninit::slice_assume_init_mut(bytes)
+            })
+            .await?;
+
+        Ok(read_len)
+    }
+
+    pub async fn get_range<'a>(
+        &self,
+        start: u32,
+        buf: &'a mut [u32],
+    ) -> Result<impl Iterator<Item = (u32, FatEntry)> + Send + Clone + 'a, Error> {
+        buf.fill(0);
+        // SAFETY: init to uninit is safe.
+        let len = unsafe { self.get_range_raw(start, mem::transmute(&mut *buf)) }.await?;
+
+        let zip = buf[..len].iter().zip(start..);
+        Ok(zip.map(|(&raw, cluster)| (cluster, FatEntry::from_raw(raw, cluster))))
+    }
+
+    #[allow(dead_code)]
+    pub async fn set_range(
+        &self,
+        start: u32,
+        buf: &mut [u32],
+        entry: FatEntry,
+    ) -> Result<(), Error> {
+        buf.fill(0);
+        let len = unsafe { self.get_range_raw(start, mem::transmute(&mut *buf)) }.await?;
+
+        for (raw, cluster) in buf[..len].iter_mut().zip(start..) {
+            let old = *raw & 0xf000_0000;
+            *raw = entry.into_raw(cluster, old)
+        }
+
+        // SAFETY: init to uninit is safe.
+        let buf: &[MaybeUninit<u32>] = unsafe { mem::transmute(&buf[..len]) };
+        // SAFETY: All bytes are valid.
+        let bytes: &[u8] =
+            unsafe { MaybeUninit::slice_assume_init_ref(MaybeUninit::slice_as_bytes(buf)) };
+
+        try_join_all((0..self.mirrors).map(|mirror| async move {
+            let offset = self.offset(mirror, start);
+            self.device.write_all_at(offset, bytes).await
+        }))
+        .await?;
+
+        Ok(())
+    }
+
     pub async fn get(&self, cluster: u32) -> Result<FatEntry, Error> {
         self.get_raw(cluster)
             .await
@@ -185,21 +256,21 @@ impl Fat {
             Bound::Unbounded => allocable_range.end,
         };
 
+        const BATCH_LEN: usize = 32;
+
+        let mut buf = [0; BATCH_LEN];
+
         // The range may be massive so that `try_join_all` will allocate huge amount of
         // memory, reaulting in a potential memory exhaustion.
-        let fut = stream::iter(start..end)
-            .map(Ok)
-            .try_for_each(|cluster| async move {
-                match self.get(cluster).await {
-                    Ok(entry) if entry == FatEntry::Free => Err(Ok(cluster)),
-                    Ok(_) => Ok(()),
-                    Err(err) => Err(Err(err)),
+        for start in (start..end).step_by(BATCH_LEN) {
+            let len = BATCH_LEN.min((end - start) as usize);
+            for (cluster, entry) in self.get_range(start, &mut buf[..len]).await? {
+                if entry == FatEntry::Free {
+                    return Ok(cluster);
                 }
-            });
-        match fut.await {
-            Ok(_) => Err(ENOSPC),
-            Err(res) => res,
+            }
         }
+        Err(ENOSPC)
     }
 
     pub async fn count_free(&self) -> usize {
@@ -231,16 +302,56 @@ impl Fat {
         })
     }
 
+    async fn iter_ranged_next<'a>(
+        &self,
+        start: u32,
+        buf: &'a mut [u32],
+    ) -> Result<impl Iterator<Item = u32> + Send + 'a, Error> {
+        let iter = self.get_range(start, buf).await?;
+        let last = [(u32::MAX, FatEntry::Next(start))]
+            .into_iter()
+            .chain(iter.clone());
+        let zip = last.zip(iter);
+        Ok(
+            zip.map_while(|((_last_cluster, last_entry), (cluster, entry))| {
+                if let FatEntry::Next(last_next) = last_entry {
+                    if last_next != cluster {
+                        return None;
+                    }
+                }
+                match entry {
+                    FatEntry::Next(next) => Some(next),
+                    _ => None,
+                }
+            }),
+        )
+    }
+
     pub fn cluster_chain(&self, start: u32) -> impl Stream<Item = Result<u32, Error>> + Send + '_ {
-        stream::unfold((self, Some(Ok(start))), move |(this, cluster)| async move {
+        stream::unfold((self, Some(Ok(start))), |(this, cluster)| async move {
             Some(match cluster? {
                 Ok(cluster) => {
-                    let next = self.iter_next(cluster).await;
+                    let next = this.iter_next(cluster).await;
                     (Ok(cluster), (this, next.transpose()))
                 }
                 Err(err) => (Err(err), (this, None)),
             })
         })
+    }
+
+    pub async fn all_clusters(&self, start: u32) -> Result<Vec<u32>, Error> {
+        let mut buf = [0; 32];
+        let mut ret = vec![start];
+        loop {
+            let last_len = ret.len();
+            let iter = self
+                .iter_ranged_next(*ret.last().unwrap(), &mut buf)
+                .await?;
+            ret.extend(iter);
+            if ret.len() == last_len {
+                break Ok(ret);
+            }
+        }
     }
 
     pub async fn free(&self, chain_start: u32) -> Result<u32, Error> {

@@ -2,6 +2,8 @@
 //! [`rust-fatfs`](https://github.com/rafalh/rust-fatfs).
 #![cfg_attr(not(test), no_std)]
 #![feature(split_array)]
+#![feature(maybe_uninit_as_bytes)]
+#![feature(maybe_uninit_slice)]
 
 mod dir;
 mod dirent;

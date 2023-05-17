@@ -6,7 +6,6 @@ use core::sync::atomic::{
 
 use arsc_rs::Arsc;
 use async_trait::async_trait;
-use futures_util::TryStreamExt;
 use ksc_core::Error::{self, EINVAL, EISDIR, ENOSYS, ENOTDIR};
 use ksync::{Mutex, RwLock, RwLockUpgradableReadGuard, RwLockWriteGuard};
 use umifs::{
@@ -41,8 +40,7 @@ impl<T: TimeProvider> FatFile<T> {
         let clusters = match first_cluster {
             Some(first_cluster) => {
                 fs.fat
-                    .cluster_chain(first_cluster)
-                    .try_collect::<Vec<_>>()
+                    .all_clusters(first_cluster)
                     .await?
             }
             None => Vec::new(),
