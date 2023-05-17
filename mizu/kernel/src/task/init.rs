@@ -53,7 +53,7 @@ impl InitTask {
         let addr = virt
             .map(
                 None,
-                Arc::new(Phys::new_anon(true)),
+                Arc::new(Phys::new_anon()),
                 0,
                 (stack_size >> PAGE_SHIFT) + 1,
                 stack_attr,

@@ -216,7 +216,7 @@ pub async fn load(
     virt: Pin<&Virt>,
 ) -> Result<LoadedElf, Error> {
     log::trace!("elf::load");
-    if !phys.is_write_thru() {
+    if !phys.is_cow() {
         return Err(Error::NotSupported("the Phys should be COW"));
     }
     let (header, is_dyn) = parse_header(phys, force_dyn).await?;

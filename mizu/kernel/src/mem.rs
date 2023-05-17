@@ -5,9 +5,10 @@ use core::{ops::Range, pin::Pin};
 
 use arsc_rs::Arsc;
 use co_trap::UserCx;
-use kmem::{Phys, Virt};
+use kmem::{CreateSub, Phys, Virt};
 use ksc::{async_handler, Error};
 use rv39_paging::{Attr, CANONICAL_PREFIX, PAGE_MASK, PAGE_SHIFT, PAGE_SIZE};
+use umifs::traits::IoExt;
 
 pub use self::user::{In, InOut, Out, UserBuffer, UserPtr, UA_FAULT};
 use crate::{rxx::KERNEL_PAGES, syscall::ScRet, task::TaskState};
@@ -31,7 +32,7 @@ pub async fn brk(ts: &mut TaskState, cx: UserCx<'_, fn(usize) -> Result<usize, E
                 let laddr = virt
                     .map(
                         Some(BRK_START.into()),
-                        Arc::new(Phys::new_anon(false)),
+                        Arc::new(Phys::new_anon()),
                         0,
                         1,
                         Attr::USER_RW,
@@ -46,7 +47,7 @@ pub async fn brk(ts: &mut TaskState, cx: UserCx<'_, fn(usize) -> Result<usize, E
             if count > 0 {
                 virt.map(
                     Some((old_page + PAGE_SIZE).into()),
-                    Arc::new(Phys::new_anon(false)),
+                    Arc::new(Phys::new_anon()),
                     0,
                     count,
                     Attr::USER_RW,
@@ -63,4 +64,52 @@ pub async fn brk(ts: &mut TaskState, cx: UserCx<'_, fn(usize) -> Result<usize, E
     cx.ret(res.map(|_| ts.brk));
 
     ScRet::Continue(None)
+}
+
+#[allow(dead_code)]
+pub async fn test_phys() {
+    let p = Arc::new(Phys::new_anon());
+    p.write_all_at(0, &[1, 2, 3, 4, 5]).await.unwrap();
+    p.write_all_at(PAGE_SIZE, &[6, 7, 8, 9, 10]).await.unwrap();
+
+    let mut buf = [0; 5];
+    let p1 = p
+        .clone_as(
+            true,
+            Some(CreateSub {
+                index_offset: 0,
+                fixed_count: Some(1),
+            }),
+        )
+        .await;
+    p1.read_exact_at(0, &mut buf).await.unwrap();
+    assert_eq!(buf, [1, 2, 3, 4, 5]);
+
+    let p2 = p
+        .clone_as(
+            false,
+            Some(CreateSub {
+                index_offset: 1,
+                fixed_count: Some(1),
+            }),
+        )
+        .await;
+    p2.read_exact_at(0, &mut buf).await.unwrap();
+    assert_eq!(buf, [6, 7, 8, 9, 10]);
+
+    p1.write_all_at(0, &[5, 4, 3, 2, 1]).await.unwrap();
+    p.read_exact_at(0, &mut buf).await.unwrap();
+    assert_eq!(buf, [1, 2, 3, 4, 5]);
+
+    p2.write_all_at(0, &[10, 9, 8, 7, 6]).await.unwrap();
+    p.read_exact_at(PAGE_SIZE, &mut buf).await.unwrap();
+    assert_eq!(buf, [10, 9, 8, 7, 6]);
+
+    p.write_all_at(0, &[0, 0, 0, 0, 0]).await.unwrap();
+    p1.read_exact_at(0, &mut buf).await.unwrap();
+    assert_eq!(buf, [5, 4, 3, 2, 1]);
+
+    p.write_all_at(PAGE_SIZE, &[0, 0, 0, 0, 0]).await.unwrap();
+    p2.read_exact_at(0, &mut buf).await.unwrap();
+    assert_eq!(buf, [0, 0, 0, 0, 0]);
 }

@@ -9,16 +9,19 @@ use core::{
 
 use async_trait::async_trait;
 use futures_util::future::try_join_all;
-use ksc_core::Error::{self, EINVAL, ENOMEM};
+use ksc_core::{
+    handler::Boxed,
+    Error::{self, EINVAL, ENOMEM},
+};
 use ksync::Mutex;
 use rand_riscv::RandomState;
 use rv39_paging::{PAddr, ID_OFFSET, PAGE_SHIFT, PAGE_SIZE};
 use umifs::misc::Zero;
-use umio::{advance_slices, ioslice_len, Io, IoExt, IoSlice, IoSliceMut, SeekFrom};
+use umio::{advance_slices, ioslice_len, IntoAnyExt, Io, IoExt, IoSlice, IoSliceMut, SeekFrom};
 
 use crate::lru::LruCache;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct Frame {
     base: PAddr,
     ptr: NonNull<u8>,
@@ -67,6 +70,14 @@ impl Drop for Frame {
     }
 }
 
+impl PartialEq for Frame {
+    fn eq(&self, other: &Self) -> bool {
+        self.base.eq(&other.base)
+    }
+}
+
+impl Eq for Frame {}
+
 impl Borrow<PAddr> for Frame {
     fn borrow(&self) -> &PAddr {
         &self.base
@@ -84,7 +95,7 @@ pub struct FrameInfo {
 pub struct Phys {
     frames: Mutex<LruCache<usize, FrameInfo>>,
     position: AtomicUsize,
-    write_thru: bool,
+    cow: bool,
     backend: Arc<dyn Io>,
     backend_index_offset: usize,
     backend_fixed_count: Option<usize>,
@@ -97,11 +108,11 @@ pub struct CreateSub {
 }
 
 impl Phys {
-    pub fn new(backend: Arc<dyn Io>, initial_pos: usize, write_thru: bool) -> Self {
+    pub fn new(backend: Arc<dyn Io>, initial_pos: usize, cow: bool) -> Self {
         Phys {
             frames: Mutex::new(LruCache::unbounded_with_hasher(RandomState::new())),
             position: initial_pos.into(),
-            write_thru,
+            cow,
             backend,
             backend_index_offset: 0,
             backend_fixed_count: None,
@@ -139,21 +150,32 @@ impl Phys {
         Phys {
             frames: Mutex::new(frames),
             position: Default::default(),
-            write_thru: cow,
-            backend: self.backend.clone(),
+            cow,
+            backend: self.clone(),
             backend_index_offset: offset,
             backend_fixed_count: count,
         }
     }
 
-    pub fn is_write_thru(&self) -> bool {
-        self.write_thru
+    pub fn is_cow(&self) -> bool {
+        self.cow
+    }
+
+    pub fn backend(&self) -> &Arc<dyn Io> {
+        &self.backend
     }
 }
 
 impl Phys {
-    pub fn new_anon(cow: bool) -> Phys {
-        Phys::new(Arc::new(Zero), 0, cow)
+    pub fn new_anon() -> Phys {
+        Phys {
+            frames: Mutex::new(LruCache::unbounded_with_hasher(RandomState::new())),
+            position: 0.into(),
+            cow: true,
+            backend: Arc::new(Zero),
+            backend_index_offset: 0,
+            backend_fixed_count: None,
+        }
     }
 }
 
@@ -173,10 +195,10 @@ impl Phys {
         let ret = match frames.get_mut(&index) {
             Some(fi) => Some({
                 if let Some(len) = writable {
-                    if Arc::strong_count(&fi.frame) > 1 {
+                    if Arc::strong_count(&fi.frame) > 1 && self.cow {
                         fi.frame = Arc::new(fi.frame.copy(fi.len).ok_or(ENOMEM)?);
                     }
-                    fi.dirty = !self.write_thru;
+                    fi.dirty = !self.cow;
                     fi.len = fi.len.max(len);
                 }
                 fi.pin_count += pin as usize;
@@ -188,13 +210,7 @@ impl Phys {
             return Ok(ret);
         }
 
-        let (frame, len) = commit(
-            &self.backend,
-            index,
-            self.backend_index_offset,
-            self.backend_fixed_count,
-        )
-        .await?;
+        let (frame, len) = commit_backend(self, index, writable, pin).await?;
         if len == 0 && writable.is_none() {
             return Ok((frame, len));
         }
@@ -249,7 +265,7 @@ impl Phys {
             fi.and_then(|fi| {
                 fi.pin_count = fi.pin_count.saturating_sub(unpin as _);
                 force_dirty
-                    .map(|d| d & !self.write_thru)
+                    .map(|d| d & !self.cow)
                     .unwrap_or_else(|| mem::replace(&mut fi.dirty, false))
                     .then(|| (fi.frame.clone(), fi.len))
             })
@@ -343,12 +359,14 @@ impl Phys {
 
 impl Drop for Phys {
     fn drop(&mut self) {
-        let cache = self.frames.get_mut();
-        if cache.iter().any(|(_, fi)| fi.dirty) {
-            log::warn!(
-                r"Physical memory may have not been flushed into its backend. 
+        if !self.backend.clone().into_any().is::<Phys>() {
+            let cache = self.frames.get_mut();
+            if cache.iter().any(|(_, fi)| fi.dirty) {
+                log::warn!(
+                    r"Physical memory may have not been flushed into its backend. 
 Use `spare(NonZeroUsize::MAX)` to explicit flush all the data."
-            );
+                );
+            }
         }
     }
 }
@@ -540,38 +558,50 @@ fn copy_to_frame(
         advance_slices(buffer, len);
     }
 }
-
-async fn commit(
-    io: &Arc<dyn Io>,
+fn commit_backend(
+    phys: &Phys,
     index: usize,
-    index_offset: usize,
-    fixed_count: Option<usize>,
-) -> Result<(Arc<Frame>, usize), Error> {
-    let io = io.as_ref();
-    let offset = (index + index_offset) << PAGE_SHIFT;
-    let mut end = offset + PAGE_SIZE;
-    if let Some(fixed_count) = fixed_count {
-        end = end.min((index_offset + fixed_count) << PAGE_SHIFT);
-    }
-    let len = end.saturating_sub(offset);
+    writable: Option<usize>,
+    pin: bool,
+) -> Boxed<Result<(Arc<Frame>, usize), Error>> {
+    Box::pin(async move {
+        let index_offset = phys.backend_index_offset;
+        let fixed_count = phys.backend_fixed_count;
 
-    let mut frame = Frame::new().ok_or(ENOMEM)?;
+        let offset = (index + index_offset) << PAGE_SHIFT;
+        let mut end = offset + PAGE_SIZE;
+        if let Some(fixed_count) = fixed_count {
+            end = end.min((index_offset + fixed_count) << PAGE_SHIFT);
+        }
+        let len = end.saturating_sub(offset);
 
-    let mut read_len = 0;
-    let mut offset = offset;
-    let mut buffer = &mut frame.as_mut_slice()[..len];
-    loop {
-        if buffer.is_empty() {
-            break Ok((Arc::new(frame), read_len));
+        if let Some(parent) = phys.backend.clone().downcast::<Phys>() {
+            let (mut frame, olen) = parent.commit(index + index_offset, writable, pin).await?;
+            let len = len.min(olen);
+            if writable.is_some() && phys.cow {
+                frame = Arc::new(frame.copy(len).ok_or(ENOMEM)?);
+            }
+            return Ok((frame, len));
         }
-        let len = io.read_at(offset, &mut [buffer]).await?;
-        if len == 0 {
-            break Ok((Arc::new(frame), read_len));
+
+        let mut frame = Frame::new().ok_or(ENOMEM)?;
+
+        let mut read_len = 0;
+        let mut offset = offset;
+        let mut buffer = &mut frame.as_mut_slice()[..len];
+        loop {
+            if buffer.is_empty() {
+                break Ok((Arc::new(frame), read_len));
+            }
+            let len = phys.backend.read_at(offset, &mut [buffer]).await?;
+            if len == 0 {
+                break Ok((Arc::new(frame), read_len));
+            }
+            offset += len;
+            read_len += len;
+            buffer = &mut buffer[len..];
         }
-        offset += len;
-        read_len += len;
-        buffer = &mut buffer[len..];
-    }
+    })
 }
 
 async fn flush(io: &Arc<dyn Io>, end_pos: usize, index: usize, frame: &Frame) -> Result<(), Error> {

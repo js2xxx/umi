@@ -51,7 +51,7 @@ impl<T: TimeProvider> FatFile<T> {
             .and_then(|e| e.inner().size().map(|s| s as usize))
             .unwrap_or(clusters.len() << cluster_shift);
 
-        log::trace!("FatFile::new: clusters = {clusters:?}");
+        log::trace!("FatFile::new: clusters = {clusters:#?}");
 
         Ok(FatFile {
             fs,

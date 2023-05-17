@@ -122,7 +122,7 @@ impl Mapping {
 
     async fn deep_fork(&mut self) -> Mapping {
         Mapping {
-            phys: Arc::new(self.phys.clone_as(self.phys.is_write_thru(), None).await),
+            phys: Arc::new(self.phys.clone_as(self.phys.is_cow(), None).await),
             start_index: self.start_index,
             attr: self.attr,
         }

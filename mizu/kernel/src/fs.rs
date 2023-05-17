@@ -2,6 +2,7 @@ mod dev;
 mod pipe;
 mod serial;
 mod tmp;
+mod cache;
 
 use alloc::{collections::BTreeMap, sync::Arc};
 use core::time::Duration;
@@ -104,7 +105,7 @@ pub async fn fs_init() {
         if let Ok(fs) =
             afat32::FatFileSystem::new(Arc::new(phys), block_shift, NullTimeProvider).await
         {
-            mount("".into(), fs);
+            mount("".into(), cache::CachedFs::new(fs).await.unwrap());
             break;
         }
     }

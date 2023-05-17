@@ -225,7 +225,7 @@ async fn clone_task(
 
     log::trace!(
         "clone_task: push into parent: {:?}",
-        new_ts.task.parent.upgrade()
+        new_ts.task.parent.upgrade().map(|s| s.tid)
     );
 
     if !flags.contains(Flags::THREAD) {

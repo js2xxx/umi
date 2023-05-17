@@ -50,7 +50,7 @@ impl Entry for TmpRoot {
         }
         Ok((
             Arc::new(TmpFile {
-                phys: Arc::new(Phys::new_anon(false)),
+                phys: Arc::new(Phys::new_anon()),
                 perm,
             }),
             true,

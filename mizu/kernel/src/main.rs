@@ -13,7 +13,7 @@
 
 mod dev;
 pub mod fs;
-pub mod mem;
+mod mem;
 mod rxx;
 mod syscall;
 pub mod task;
@@ -29,9 +29,8 @@ use alloc::{
     vec,
 };
 
-use afat32::{FatDir, NullTimeProvider};
 use kmem::Phys;
-use umifs::traits::IntoAnyExt;
+use umifs::types::{OpenOptions, Permissions};
 
 pub use self::rxx::executor;
 use crate::task::InitTask;
@@ -39,13 +38,13 @@ use crate::task::InitTask;
 async fn main(fdt: usize) {
     println!("Hello from UMI ^_^");
 
+    mem::test_phys().await;
+
     unsafe { dev::init(fdt as _).expect("failed to initialize devices") };
     fs::fs_init().await;
 
     let (fs, _) = fs::get("".as_ref()).unwrap();
     let rt = fs.root_dir().await.unwrap();
-
-    let rt = rt.downcast::<FatDir<NullTimeProvider>>().unwrap();
 
     let spec = [
         "argv",
@@ -160,8 +159,15 @@ async fn main(fdt: usize) {
         "wcsstr_false_negative",
     ];
 
-    let runner = rt.open_file("runtest".as_ref()).await.unwrap();
-    let runner = Arc::new(Phys::new(Arc::new(runner), 0, true));
+    let (runner, _) = rt
+        .open(
+            "runtest".as_ref(),
+            OpenOptions::RDONLY,
+            Permissions::all_same(true, false, true),
+        )
+        .await
+        .unwrap();
+    let runner = Arc::new(Phys::new(runner.to_io().unwrap(), 0, true));
 
     for case in spec {
         log::info!("Running test case {case:?}");
@@ -185,5 +191,5 @@ async fn main(fdt: usize) {
         log::info!("test case {case:?} returned with {code}\n");
     }
 
-    log::info!("Goodbye!");
+    log::warn!("Goodbye!");
 }
