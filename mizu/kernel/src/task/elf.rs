@@ -7,10 +7,10 @@ use core::{
 
 use futures_util::{stream, stream::StreamExt};
 use goblin::elf64::{header::*, program_header::*, section_header::*};
-use kmem::{Phys, Virt};
+use kmem::{CreateSub, Phys, Virt};
 use ksc::Error::{ENOEXEC, ENOSYS};
 use rv39_paging::{Attr, LAddr, PAGE_MASK, PAGE_SHIFT};
-use umifs::traits::{Io, IoExt};
+use umifs::traits::IoExt;
 
 #[derive(Debug)]
 pub enum Error {
@@ -58,8 +58,6 @@ fn parse_attr(flags: u32) -> Attr {
         .executable(flags & PF_X != 0)
         .build()
 }
-
-static ZEROS: [u8; 256] = [0; 256];
 
 async fn parse_header(phys: &Phys, force_dyn: Option<bool>) -> Result<(Header, bool), Error> {
     let mut data = [0; mem::size_of::<Header>()];
@@ -146,38 +144,43 @@ async fn map_segment(
     let aligned_offset = offset & !PAGE_MASK;
     let aligned_address = address & !PAGE_MASK;
     let aligned_file_size = file_end - aligned_offset;
-    let zero_size = memory_end - data_end;
+    let copy_size = data_end - file_end;
     let aligned_alloc_size = memory_end.saturating_sub(file_end);
 
     let attr = parse_attr(segment.p_flags);
 
     if aligned_file_size + aligned_alloc_size > 0 {
         log::trace!(
-            "elf::load: Map {:#x}~{:#x} -> {:?}, zero {:#x} bytes before end",
+            "elf::load: Map {:#x}~{:#x} -> {:?}, copy {:#x} size trailing data",
             aligned_offset,
             aligned_offset + aligned_file_size + aligned_alloc_size,
             base + aligned_address,
-            zero_size
+            copy_size,
         );
 
-        let len = phys.stream_len().await.map_err(Error::PhysRead)?;
-        let segment = phys.clone_as(true).await;
+        let segment = phys
+            .clone_as(
+                true,
+                Some(CreateSub {
+                    index_offset: aligned_offset >> PAGE_SHIFT,
+                    fixed_count: Some(aligned_file_size >> PAGE_SHIFT),
+                }),
+            )
+            .await;
 
-        let mut zero_offset = data_end;
-        let mut zero_size = zero_size.min(len);
-        while zero_size > 0 {
-            let s = zero_size.min(ZEROS.len());
-            segment
-                .write_all_at(zero_offset, &ZEROS[..s])
-                .await
-                .map_err(Error::PhysWrite)?;
-            zero_offset += s;
-            zero_size -= s;
-        }
+        let mut buffer = vec![0; copy_size];
+        phys.read_exact_at(file_end, &mut buffer)
+            .await
+            .map_err(Error::PhysRead)?;
+        segment
+            .write_all_at(aligned_file_size, &buffer)
+            .await
+            .map_err(Error::PhysWrite)?;
+
         virt.map(
             Some(base + aligned_address),
             Arc::new(segment),
-            aligned_offset >> PAGE_SHIFT,
+            0,
             (aligned_file_size + aligned_alloc_size) >> PAGE_SHIFT,
             attr,
         )
@@ -213,7 +216,7 @@ pub async fn load(
     virt: Pin<&Virt>,
 ) -> Result<LoadedElf, Error> {
     log::trace!("elf::load");
-    if !phys.is_cow() {
+    if !phys.is_write_thru() {
         return Err(Error::NotSupported("the Phys should be COW"));
     }
     let (header, is_dyn) = parse_header(phys, force_dyn).await?;

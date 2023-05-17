@@ -12,6 +12,6 @@ mod virt;
 
 pub use self::{
     frame::{frames, init_frames, Arena},
-    phys::{Frame, Phys},
+    phys::{Frame, Phys, CreateSub},
     virt::Virt,
 };
