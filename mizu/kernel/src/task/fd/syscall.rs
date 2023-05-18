@@ -488,7 +488,7 @@ fssc!(
 
         let cow = flags.contains(Flags::PRIVATE);
         let phys = if flags.contains(Flags::ANONYMOUS) {
-            Phys::new_anon()
+            Phys::new_anon(cow)
         } else {
             let entry = files.get(fd).await?;
             match entry.clone().downcast::<Phys>() {

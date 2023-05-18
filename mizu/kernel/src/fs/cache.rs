@@ -187,8 +187,7 @@ impl Io for CachedFile {
     }
 
     async fn flush(&self) -> Result<(), Error> {
-        self.phys.flush_all().await?;
-        self.phys.backend().flush().await
+        self.phys.flush_all().await
     }
 }
 

@@ -38,11 +38,7 @@ impl<T: TimeProvider> FatFile<T> {
         let cluster_shift = fs.bpb.cluster_size().ilog2();
 
         let clusters = match first_cluster {
-            Some(first_cluster) => {
-                fs.fat
-                    .all_clusters(first_cluster)
-                    .await?
-            }
+            Some(first_cluster) => fs.fat.all_clusters(first_cluster).await?,
             None => Vec::new(),
         };
 

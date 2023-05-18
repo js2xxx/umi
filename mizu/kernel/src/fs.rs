@@ -1,8 +1,8 @@
+mod cache;
 mod dev;
 mod pipe;
 mod serial;
 mod tmp;
-mod cache;
 
 use alloc::{collections::BTreeMap, sync::Arc};
 use core::time::Duration;

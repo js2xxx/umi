@@ -1,25 +1,25 @@
-use alloc::{boxed::Box, collections::VecDeque, sync::Arc, vec::Vec};
+use alloc::{boxed::Box, sync::Arc};
 use core::{
     borrow::Borrow,
-    mem,
+    fmt, mem,
     num::NonZeroUsize,
     ptr::NonNull,
     sync::atomic::{AtomicUsize, Ordering::SeqCst},
 };
 
 use async_trait::async_trait;
-use futures_util::future::try_join_all;
+use hashbrown::{hash_map::Entry, HashMap};
 use ksc_core::{
     handler::Boxed,
-    Error::{self, EINVAL, ENOMEM},
+    Error::{self, EINVAL, ENOENT, ENOMEM},
 };
 use ksync::Mutex;
 use rand_riscv::RandomState;
 use rv39_paging::{PAddr, ID_OFFSET, PAGE_SHIFT, PAGE_SIZE};
-use umifs::misc::Zero;
-use umio::{advance_slices, ioslice_len, IntoAnyExt, Io, IoExt, IoSlice, IoSliceMut, SeekFrom};
+use spin::Lazy;
+use umio::{advance_slices, ioslice_len, Io, IoSlice, IoSliceMut, SeekFrom};
 
-use crate::lru::LruCache;
+static ZERO: Lazy<Arc<Frame>> = Lazy::new(|| Arc::new(Frame::new().unwrap()));
 
 #[derive(Debug)]
 pub struct Frame {
@@ -31,10 +31,12 @@ unsafe impl Send for Frame {}
 unsafe impl Sync for Frame {}
 
 impl Frame {
-    pub fn new() -> Option<Self> {
-        let laddr = crate::frame::frames().allocate(NonZeroUsize::MIN)?;
+    pub fn new() -> Result<Self, Error> {
+        let laddr = crate::frame::frames()
+            .allocate(NonZeroUsize::MIN)
+            .ok_or(ENOMEM)?;
         unsafe { laddr.write_bytes(0, PAGE_SIZE) };
-        Some(Frame {
+        Ok(Frame {
             base: laddr.to_paddr(ID_OFFSET),
             ptr: laddr.as_non_null().unwrap(),
         })
@@ -56,10 +58,10 @@ impl Frame {
         unsafe { self.as_ptr().as_mut() }
     }
 
-    pub fn copy(&self, len: usize) -> Option<Frame> {
+    pub fn copy(&self, len: usize) -> Result<Frame, Error> {
         let mut f = Self::new()?;
         f.as_mut_slice()[..len].copy_from_slice(&self.as_slice()[..len]);
-        Some(f)
+        Ok(f)
     }
 }
 
@@ -85,20 +87,292 @@ impl Borrow<PAddr> for Frame {
 }
 
 #[derive(Debug, Clone)]
-pub struct FrameInfo {
-    frame: Arc<Frame>,
-    len: usize,
-    dirty: bool,
-    pin_count: usize,
+enum FrameState {
+    Shared(Arc<Frame>, usize),
+    Unique(Arc<Frame>, usize),
 }
 
+impl FrameState {
+    fn frame(&mut self, write: Option<usize>) -> (Arc<Frame>, usize) {
+        let (frame, len) = match self {
+            FrameState::Shared(frame, len) => (frame, len),
+            FrameState::Unique(frame, len) => (frame, len),
+        };
+        if let Some(new_len) = write {
+            *len = (*len).max(new_len);
+        }
+        (frame.clone(), *len)
+    }
+}
+
+enum Commit {
+    Shared(Arc<Frame>, usize),
+    Unique(FrameInfo),
+}
+
+#[derive(Debug)]
+struct FrameInfo {
+    state: Option<FrameState>,
+    dirty: bool,
+    pin: usize,
+}
+
+impl FrameInfo {
+    fn new(frame: Arc<Frame>, len: usize, dirty: bool, pin: bool) -> Self {
+        FrameInfo {
+            state: Some(FrameState::Shared(frame, len)),
+            dirty,
+            pin: pin as usize,
+        }
+    }
+
+    fn branch(
+        &mut self,
+        write: Option<usize>,
+        pin: bool,
+        cow: bool,
+    ) -> Result<(Commit, bool), Error> {
+        match mem::take(&mut self.state) {
+            Some(FrameState::Shared(frame, len)) => match write {
+                None => {
+                    self.state = Some(FrameState::Shared(frame.clone(), len));
+                    self.pin += pin as usize;
+                    Ok((Commit::Shared(frame, len), false))
+                }
+                Some(new_len) if !cow => {
+                    let len = len.max(new_len);
+                    self.state = Some(FrameState::Shared(frame.clone(), len));
+                    self.pin += pin as usize;
+                    Ok((Commit::Shared(frame, len), false))
+                }
+                Some(new_len) => {
+                    let new_len = len.max(new_len);
+                    let new_frame = frame.copy(new_len)?;
+                    self.state = Some(FrameState::Unique(frame, new_len));
+                    Ok((
+                        Commit::Unique(FrameInfo {
+                            state: Some(FrameState::Shared(Arc::new(new_frame), new_len)),
+                            dirty: self.dirty,
+                            pin: pin as usize,
+                        }),
+                        false,
+                    ))
+                }
+            },
+            Some(FrameState::Unique(frame, len)) => Ok((
+                Commit::Unique(FrameInfo {
+                    state: Some(FrameState::Shared(frame, len)),
+                    dirty: self.dirty,
+                    pin: self.pin + pin as usize,
+                }),
+                true,
+            )),
+            None => Err(ENOENT),
+        }
+    }
+
+    fn leaf(&mut self, write: Option<usize>, pin: bool) -> Result<(Arc<Frame>, usize), Error> {
+        self.dirty |= write.is_some();
+        self.pin += pin as usize;
+        match &mut self.state {
+            Some(s) => Ok(s.frame(write)),
+            None => match write {
+                Some(new_len) => {
+                    let frame = Arc::new(Frame::new()?);
+                    self.state = Some(FrameState::Shared(frame.clone(), new_len));
+                    Ok((frame, new_len))
+                }
+                None => Ok((ZERO.clone(), 0)),
+            },
+        }
+    }
+}
+
+#[derive(Clone)]
+enum Parent {
+    Phys {
+        phys: Arc<Phys>,
+        start: usize,
+        end: Option<usize>,
+    },
+    Backend(Arc<dyn Io>),
+}
+
+impl fmt::Debug for Parent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Parent::Phys { phys, start, end } => f
+                .debug_struct("Phys")
+                .field("phys", phys)
+                .field("start", start)
+                .field("end", end)
+                .finish(),
+            Parent::Backend(..) => f.debug_struct("Backend").finish_non_exhaustive(),
+        }
+    }
+}
+
+impl Parent {
+    async fn stream_len(&self) -> Result<usize, Error> {
+        match *self {
+            Parent::Phys {
+                ref phys, start, ..
+            } => {
+                let len = phys.stream_len().await?;
+                Ok(len.saturating_sub(start))
+            }
+            Parent::Backend(ref b) => b.stream_len().await,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct FrameList {
+    branch: bool,
+    parent: Option<Parent>,
+    frames: HashMap<usize, FrameInfo, RandomState>,
+}
+
+impl FrameList {
+    fn commit_impl(
+        &mut self,
+        index: usize,
+        write: Option<usize>,
+        pin: bool,
+        cow: bool,
+    ) -> Boxed<Result<Commit, Error>> {
+        Box::pin(async move {
+            let entry = match self.frames.entry(index) {
+                Entry::Occupied(mut ent) => {
+                    return Ok(if self.branch {
+                        let (ret, remove) = ent.get_mut().branch(write, pin, cow)?;
+                        if remove {
+                            ent.remove();
+                        }
+                        ret
+                    } else {
+                        let (frame, len) = ent.get_mut().leaf(write, pin)?;
+                        Commit::Shared(frame, len)
+                    })
+                }
+                Entry::Vacant(ent) => ent,
+            };
+
+            if let Some(ref parent) = self.parent {
+                match parent {
+                    Parent::Phys { phys, start, end } => {
+                        let mut list = phys.list.lock().await;
+                        if end.map_or(true, |end| (0..(end - start)).contains(&index)) {
+                            let parent_index = start + index;
+                            let cow = cow || phys.cow;
+                            return match list.commit_impl(parent_index, write, pin, cow).await {
+                                Ok(s @ Commit::Shared(..)) => Ok(s),
+                                Ok(Commit::Unique(mut fi)) => Ok(if self.branch {
+                                    Commit::Unique(fi)
+                                } else {
+                                    let (frame, len) = fi.state.as_mut().unwrap().frame(None);
+                                    entry.insert(fi);
+                                    Commit::Shared(frame, len)
+                                }),
+                                Err(err) => Err(err),
+                            };
+                        }
+                    }
+                    Parent::Backend(backend) => {
+                        let mut frame = Frame::new()?;
+
+                        let len = {
+                            let mut read_len = 0;
+                            let mut offset = index << PAGE_SHIFT;
+                            let mut buffer = frame.as_mut_slice();
+                            loop {
+                                if buffer.is_empty() {
+                                    break read_len;
+                                }
+                                let len = backend.read_at(offset, &mut [buffer]).await?;
+                                if len == 0 {
+                                    break read_len;
+                                }
+                                offset += len;
+                                read_len += len;
+                                buffer = &mut buffer[len..];
+                            }
+                        };
+                        let frame = Arc::new(frame);
+                        entry.insert(FrameInfo::new(frame.clone(), len, write.is_some(), pin));
+                        return Ok(Commit::Shared(frame, len));
+                    }
+                }
+            }
+
+            let Some(new_len) = write else {
+                return Ok(Commit::Shared(ZERO.clone(), 0));
+            };
+
+            let frame = Arc::new(Frame::new()?);
+            let fi = FrameInfo::new(frame.clone(), new_len, write.is_some(), pin);
+            Ok(if self.branch {
+                Commit::Unique(fi)
+            } else {
+                entry.insert(fi);
+                Commit::Shared(frame, new_len)
+            })
+        })
+    }
+
+    async fn commit(
+        &mut self,
+        index: usize,
+        write: Option<usize>,
+        pin: bool,
+        cow: bool,
+    ) -> Result<(Arc<Frame>, usize), Error> {
+        assert!(!self.branch);
+        match self.commit_impl(index, write, pin, cow).await {
+            Ok(Commit::Shared(frame, len)) => Ok((frame, len)),
+            Ok(Commit::Unique(..)) => unreachable!(),
+            Err(err) => Err(err),
+        }
+    }
+
+    fn clone_as(&mut self, cow: bool, start: usize, end: Option<usize>) -> Phys {
+        let branch = Arc::new(Phys {
+            position: Default::default(),
+            list: Mutex::new(FrameList {
+                branch: true,
+                parent: self.parent.clone(),
+                frames: mem::take(&mut self.frames),
+            }),
+            cow: false,
+        });
+
+        self.parent = Some(Parent::Phys {
+            phys: branch.clone(),
+            start: 0,
+            end: None,
+        });
+
+        Phys {
+            position: Default::default(),
+            list: Mutex::new(FrameList {
+                branch: false,
+                parent: Some(Parent::Phys {
+                    phys: branch,
+                    start,
+                    end,
+                }),
+                frames: Default::default(),
+            }),
+            cow,
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct Phys {
-    frames: Mutex<LruCache<usize, FrameInfo>>,
+    list: Mutex<FrameList>,
     position: AtomicUsize,
     cow: bool,
-    backend: Arc<dyn Io>,
-    backend_index_offset: usize,
-    backend_fixed_count: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -110,72 +384,37 @@ pub struct CreateSub {
 impl Phys {
     pub fn new(backend: Arc<dyn Io>, initial_pos: usize, cow: bool) -> Self {
         Phys {
-            frames: Mutex::new(LruCache::unbounded_with_hasher(RandomState::new())),
+            list: Mutex::new(FrameList {
+                branch: false,
+                parent: Some(Parent::Backend(backend)),
+                frames: Default::default(),
+            }),
             position: initial_pos.into(),
             cow,
-            backend,
-            backend_index_offset: 0,
-            backend_fixed_count: None,
+        }
+    }
+
+    pub fn new_anon(cow: bool) -> Phys {
+        Phys {
+            list: Mutex::new(FrameList {
+                branch: false,
+                parent: None,
+                frames: Default::default(),
+            }),
+            position: Default::default(),
+            cow,
         }
     }
 
     pub async fn clone_as(self: &Arc<Self>, cow: bool, create_sub: Option<CreateSub>) -> Self {
-        let (offset, count) = match create_sub {
-            Some(cs) => (
-                cs.index_offset + self.backend_index_offset,
-                cs.fixed_count.map(|c| {
-                    self.backend_fixed_count
-                        .map(|s| c.min(s.saturating_sub(cs.index_offset)))
-                        .unwrap_or(c)
-                }),
-            ),
-            None => (self.backend_index_offset, self.backend_fixed_count),
-        };
-
-        let frames = if cow {
-            let frames = self.frames.lock().await;
-            frames.iter().rev().fold(
-                LruCache::unbounded_with_hasher(RandomState::new()),
-                |mut new, (&index, fi)| {
-                    if index >= offset && count.map_or(true, |c| index < offset + c) {
-                        new.put(index - offset, fi.clone());
-                    }
-                    new
-                },
-            )
-        } else {
-            LruCache::unbounded_with_hasher(RandomState::new())
-        };
-
-        Phys {
-            frames: Mutex::new(frames),
-            position: Default::default(),
-            cow,
-            backend: self.clone(),
-            backend_index_offset: offset,
-            backend_fixed_count: count,
-        }
+        let (start, end) = create_sub.map_or((0, None), |cs| {
+            (cs.index_offset, cs.fixed_count.map(|c| c + cs.index_offset))
+        });
+        self.list.lock().await.clone_as(!cow, start, end)
     }
 
     pub fn is_cow(&self) -> bool {
         self.cow
-    }
-
-    pub fn backend(&self) -> &Arc<dyn Io> {
-        &self.backend
-    }
-}
-
-impl Phys {
-    pub fn new_anon() -> Phys {
-        Phys {
-            frames: Mutex::new(LruCache::unbounded_with_hasher(RandomState::new())),
-            position: 0.into(),
-            cow: true,
-            backend: Arc::new(Zero),
-            backend_index_offset: 0,
-            backend_fixed_count: None,
-        }
     }
 }
 
@@ -187,187 +426,27 @@ impl Phys {
         pin: bool,
     ) -> Result<(Arc<Frame>, usize), Error> {
         log::trace!(
-            "Phys::commit index = {index} {writable:?} {}",
-            if pin { "pin" } else { "" }
+            "Phys::commit index = {index} {writable:?} {} {}",
+            if pin { "pin" } else { "" },
+            if self.cow { "cow" } else { "" }
         );
-        let mut frames = self.frames.lock().await;
-
-        let ret = match frames.get_mut(&index) {
-            Some(fi) => Some({
-                if let Some(len) = writable {
-                    if Arc::strong_count(&fi.frame) > 1 && self.cow {
-                        fi.frame = Arc::new(fi.frame.copy(fi.len).ok_or(ENOMEM)?);
-                    }
-                    fi.dirty = !self.cow;
-                    fi.len = fi.len.max(len);
-                }
-                fi.pin_count += pin as usize;
-                (fi.frame.clone(), fi.len)
-            }),
-            None => None,
-        };
-        if let Some(ret) = ret {
-            return Ok(ret);
-        }
-
-        let (frame, len) = commit_backend(self, index, writable, pin).await?;
-        if len == 0 && writable.is_none() {
-            return Ok((frame, len));
-        }
-
-        let fi = FrameInfo {
-            frame: frame.clone(),
-            len: writable.map_or(len, |w| w.max(len)),
-            dirty: false,
-            pin_count: pin as usize,
-        };
-
-        let old_entry = {
-            let mut data = frames.push(index, fi);
-
-            let index = match data.as_ref() {
-                None => return Ok((frame, len)),
-                Some(&(index, _)) => index,
-            };
-            let mut looped = false;
-
-            loop {
-                data = match data {
-                    Some((i, _)) if i == index && looped => return Err(ENOMEM),
-                    // Find a frame that is not pinned.
-                    Some((index, fi)) if fi.pin_count > 0 => frames.push(index, fi),
-                    Some(data) => break Some(data),
-                    None => break None,
-                };
-                looped = true;
-            }
-        };
-
-        if let Some((index, fi)) = old_entry {
-            debug_assert!(fi.pin_count == 0);
-            if fi.dirty {
-                flush(&self.backend, fi.len, index, &fi.frame).await?;
-            }
-        }
-        Ok((frame, len))
+        let mut list = self.list.lock().await;
+        list.commit(index, writable, pin, self.cow).await
     }
 
     pub async fn flush(
         &self,
-        index: usize,
-        force_dirty: Option<bool>,
-        unpin: bool,
+        _index: usize,
+        _force_dirty: Option<bool>,
+        _unpin: bool,
     ) -> Result<(), Error> {
-        let ret = {
-            let mut frames = self.frames.lock().await;
-
-            let fi = frames.get_mut(&index);
-            fi.and_then(|fi| {
-                fi.pin_count = fi.pin_count.saturating_sub(unpin as _);
-                force_dirty
-                    .map(|d| d & !self.cow)
-                    .unwrap_or_else(|| mem::replace(&mut fi.dirty, false))
-                    .then(|| (fi.frame.clone(), fi.len))
-            })
-        };
-        if let Some((frame, len)) = ret {
-            flush(&self.backend, len, index, &frame).await?;
-        }
+        // TODO: flush.
         Ok(())
     }
 
     pub async fn flush_all(&self) -> Result<(), Error> {
-        let frames = {
-            let mut frames = self.frames.lock().await;
-
-            let iter = frames.iter_mut();
-            iter.filter_map(|(&index, fi)| {
-                mem::replace(&mut fi.dirty, false).then(|| (index, fi.frame.clone()))
-            })
-            .collect::<Vec<_>>()
-        };
-
-        let end_pos = self.position.load(SeqCst);
-        let flush_fn = |(index, frame): (usize, Arc<Frame>)| async move {
-            flush(&self.backend, end_pos, index, &frame).await
-        };
-        try_join_all(frames.into_iter().map(flush_fn)).await?;
+        // TODO: flush all.
         Ok(())
-    }
-
-    pub async fn spare(&self, max_count: NonZeroUsize) -> Result<Vec<Frame>, Error> {
-        let mut ret = Vec::new();
-        let mut dirties = VecDeque::new();
-
-        {
-            let mut frames = self.frames.lock().await;
-            let max_trial = frames.len();
-            let mut trial = 0;
-            while let Some((index, mut fi)) = frames.pop_lru() {
-                let (frame, len, dirty, pinc) = match Arc::try_unwrap(fi.frame) {
-                    Ok(frame) => (frame, fi.len, fi.dirty, fi.pin_count),
-                    Err(frame) => {
-                        fi.frame = frame;
-                        frames.push(index, fi);
-                        continue;
-                    }
-                };
-
-                if fi.dirty {
-                    dirties.push_back((index, frame, len, dirty, pinc))
-                } else {
-                    ret.push(frame)
-                }
-                if ret.len() >= max_count.get() {
-                    break;
-                }
-                trial += 1;
-                if trial >= max_trial {
-                    break;
-                }
-            }
-        };
-
-        while ret.len() < max_count.get() {
-            match dirties.pop_front() {
-                Some((index, frame, len, ..)) => {
-                    flush(&self.backend, len, index, &frame).await?;
-                    ret.push(frame)
-                }
-                None => break,
-            }
-        }
-
-        {
-            let mut frames = self.frames.lock().await;
-            dirties
-                .into_iter()
-                .for_each(|(index, frame, len, dirty, pinc)| {
-                    let fi = FrameInfo {
-                        frame: Arc::new(frame),
-                        len,
-                        dirty,
-                        pin_count: pinc,
-                    };
-                    frames.push(index, fi);
-                })
-        };
-
-        Ok(ret)
-    }
-}
-
-impl Drop for Phys {
-    fn drop(&mut self) {
-        if !self.backend.clone().into_any().is::<Phys>() {
-            let cache = self.frames.get_mut();
-            if cache.iter().any(|(_, fi)| fi.dirty) {
-                log::warn!(
-                    r"Physical memory may have not been flushed into its backend. 
-Use `spare(NonZeroUsize::MAX)` to explicit flush all the data."
-                );
-            }
-        }
     }
 }
 
@@ -377,7 +456,10 @@ impl Io for Phys {
         let pos = match whence {
             SeekFrom::Start(pos) => pos,
             SeekFrom::End(pos) => {
-                let len = self.backend.seek(umio::SeekFrom::End(0)).await?;
+                let mut len = self.position.load(SeqCst);
+                if let Some(ref parent) = self.list.lock().await.parent {
+                    len = len.max(parent.stream_len().await?)
+                }
                 let pos = pos.checked_add(len.try_into()?);
                 pos.ok_or(EINVAL)?.try_into()?
             }
@@ -393,8 +475,9 @@ impl Io for Phys {
 
     async fn read_at(&self, offset: usize, mut buffer: &mut [IoSliceMut]) -> Result<usize, Error> {
         log::trace!(
-            "Phys::read_at {offset:#x}, buffer len = {}",
-            ioslice_len(&buffer)
+            "Phys::read_at {offset:#x}, buffer len = {} {}",
+            ioslice_len(&buffer),
+            if self.cow { "cow" } else { "" }
         );
 
         let ioslice_len = ioslice_len(&buffer);
@@ -441,8 +524,9 @@ impl Io for Phys {
 
     async fn write_at(&self, offset: usize, mut buffer: &mut [IoSlice]) -> Result<usize, Error> {
         log::trace!(
-            "Phys::write_at {offset:#x}, buffer len = {}",
-            ioslice_len(&buffer)
+            "Phys::write_at {offset:#x}, buffer len = {} {}",
+            ioslice_len(&buffer),
+            if self.cow { "cow" } else { "" }
         );
 
         let ioslice_len = ioslice_len(&buffer);
@@ -557,56 +641,4 @@ fn copy_to_frame(
         start += len;
         advance_slices(buffer, len);
     }
-}
-fn commit_backend(
-    phys: &Phys,
-    index: usize,
-    writable: Option<usize>,
-    pin: bool,
-) -> Boxed<Result<(Arc<Frame>, usize), Error>> {
-    Box::pin(async move {
-        let index_offset = phys.backend_index_offset;
-        let fixed_count = phys.backend_fixed_count;
-
-        let offset = (index + index_offset) << PAGE_SHIFT;
-        let mut end = offset + PAGE_SIZE;
-        if let Some(fixed_count) = fixed_count {
-            end = end.min((index_offset + fixed_count) << PAGE_SHIFT);
-        }
-        let len = end.saturating_sub(offset);
-
-        if let Some(parent) = phys.backend.clone().downcast::<Phys>() {
-            let (mut frame, olen) = parent.commit(index + index_offset, writable, pin).await?;
-            let len = len.min(olen);
-            if writable.is_some() && phys.cow {
-                frame = Arc::new(frame.copy(len).ok_or(ENOMEM)?);
-            }
-            return Ok((frame, len));
-        }
-
-        let mut frame = Frame::new().ok_or(ENOMEM)?;
-
-        let mut read_len = 0;
-        let mut offset = offset;
-        let mut buffer = &mut frame.as_mut_slice()[..len];
-        loop {
-            if buffer.is_empty() {
-                break Ok((Arc::new(frame), read_len));
-            }
-            let len = phys.backend.read_at(offset, &mut [buffer]).await?;
-            if len == 0 {
-                break Ok((Arc::new(frame), read_len));
-            }
-            offset += len;
-            read_len += len;
-            buffer = &mut buffer[len..];
-        }
-    })
-}
-
-async fn flush(io: &Arc<dyn Io>, end_pos: usize, index: usize, frame: &Frame) -> Result<(), Error> {
-    let io = io.as_ref();
-    let len = end_pos.saturating_sub(index << PAGE_SHIFT);
-    io.write_all_at(index << PAGE_SHIFT, &frame.as_slice()[..len])
-        .await
 }

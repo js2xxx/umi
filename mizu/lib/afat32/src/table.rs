@@ -256,8 +256,6 @@ impl Fat {
             Bound::Unbounded => allocable_range.end,
         };
 
-        const BATCH_LEN: usize = 32;
-
         let mut buf = [0; BATCH_LEN];
 
         // The range may be massive so that `try_join_all` will allocate huge amount of
@@ -340,7 +338,7 @@ impl Fat {
     }
 
     pub async fn all_clusters(&self, start: u32) -> Result<Vec<u32>, Error> {
-        let mut buf = [0; 32];
+        let mut buf = [0; BATCH_LEN];
         let mut ret = vec![start];
         loop {
             let last_len = ret.len();
@@ -371,3 +369,5 @@ impl Fat {
         }
     }
 }
+
+const BATCH_LEN: usize = 64;
