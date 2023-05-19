@@ -363,7 +363,7 @@ pub async fn execve(
             args,
         )
         .await?;
-        init.reset(ts, tf);
+        init.reset(ts, tf).await;
 
         Ok(())
     }

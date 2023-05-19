@@ -187,9 +187,9 @@ impl InitTask {
         Ok(task)
     }
 
-    pub fn reset(self, ts: &mut TaskState, tf: &mut TrapFrame) {
+    pub async fn reset(self, ts: &mut TaskState, tf: &mut TrapFrame) {
         ts.virt = self.virt;
-        // TODO: ts.files.append_afterlife(self.files);
+        ts.files.append_afterlife(&self.files).await;
         *tf = self.tf;
     }
 }

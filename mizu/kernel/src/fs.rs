@@ -97,7 +97,7 @@ pub async fn open_dir(
 
 pub async fn fs_init() {
     mount("dev".into(), Arsc::new(dev::DevFs));
-    mount("tmp".into(), Arsc::new(tmp::TmpFs));
+    mount("tmp".into(), Arsc::new(tmp::TmpFs::new()));
     for block in blocks() {
         let block_shift = block.block_shift();
         let phys = crate::mem::new_phys(block.to_io().unwrap(), false);

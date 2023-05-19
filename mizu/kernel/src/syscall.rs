@@ -59,12 +59,14 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         .map(OPENAT, fd::openat)
         .map(MKDIRAT, fd::mkdirat)
         .map(FSTAT, fd::fstat)
+        .map(NEWFSTATAT, fd::fstatat)
         .map(GETDENTS64, fd::getdents64)
         .map(UNLINKAT, fd::unlinkat)
         .map(CLOSE, fd::close)
         .map(PIPE2, fd::pipe)
         .map(MOUNT, fd::mount)
         .map(UMOUNT2, fd::umount)
+        .map(IOCTL, fd::ioctl)
         // Time
         .map(GETTIMEOFDAY, gettimeofday)
         .map(CLOCK_GETTIME, clock_gettime)
@@ -72,6 +74,9 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         // Miscellaneous
         .map(UNAME, uname)
         .map(PRLIMIT64, prlimit)
+        .map(GETEUID, geteuid)
+        .map(GETEGID, getegid)
+        .map(GETUID, getuid)
 });
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -208,5 +213,23 @@ async fn prlimit(
         Ok(())
     };
     cx.ret(fut.await);
+    ScRet::Continue(None)
+}
+
+#[async_handler]
+async fn geteuid(_: &mut TaskState, cx: UserCx<'_, fn() -> usize>) -> ScRet {
+    cx.ret(0);
+    ScRet::Continue(None)
+}
+
+#[async_handler]
+async fn getegid(_: &mut TaskState, cx: UserCx<'_, fn() -> usize>) -> ScRet {
+    cx.ret(0);
+    ScRet::Continue(None)
+}
+
+#[async_handler]
+async fn getuid(_: &mut TaskState, cx: UserCx<'_, fn() -> usize>) -> ScRet {
+    cx.ret(0);
     ScRet::Continue(None)
 }

@@ -181,6 +181,30 @@ pub async fn lseek(
     ScRet::Continue(None)
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+#[repr(C, packed)]
+pub struct Kstat {
+    dev: u64,
+    inode: u64,
+    perm: Permissions,
+    link_count: u32,
+    uid: u32,
+    gid: u32,
+    rdev: u64,
+    __pad: u64,
+    size: usize,
+    blksize: u32,
+    __pad2: u32,
+    blocks: u64,
+    atime_sec: u64,
+    atime_nsec: u64,
+    mtime_sec: u64,
+    mtime_nsec: u64,
+    ctime_sec: u64,
+    ctime_nsec: u64,
+    __pad3: [u32; 2],
+}
+
 macro_rules! fssc {
     (
         $(pub async fn $name:ident(
@@ -256,8 +280,7 @@ fssc!(
     pub async fn dup(_v: Pin<&Virt>, files: &Files, fd: i32) -> Result<i32, Error> {
         log::trace!("user dup fd = {fd}");
 
-        let entry = files.get(fd).await?;
-        files.open(entry).await
+        files.dup(fd).await
     }
 
     pub async fn dup3(
@@ -265,12 +288,12 @@ fssc!(
         files: &Files,
         old: i32,
         new: i32,
-        _flags: i32,
+        flags: i32,
     ) -> Result<i32, Error> {
-        log::trace!("user dup old = {old}, new = {new}, flags = {_flags}");
+        log::trace!("user dup old = {old}, new = {new}, flags = {flags}");
 
         let entry = files.get(old).await?;
-        files.reopen(new, entry).await;
+        files.reopen(new, entry, flags != 0).await;
         Ok(new)
     }
 
@@ -298,7 +321,8 @@ fssc!(
             Err(ENOENT) if files.cwd() == "" => crate::fs::open(path, options, perm).await?.0,
             Err(err) => return Err(err),
         };
-        files.open(entry).await
+        let close_on_exec = options.contains(OpenOptions::CLOEXEC);
+        files.open(entry, close_on_exec).await
     }
 
     pub async fn mkdirat(
@@ -321,41 +345,52 @@ fssc!(
         if !created {
             return Err(EEXIST);
         }
-        files.open(entry).await
+        files.open(entry, false).await
     }
 
     pub async fn fstat(
         virt: Pin<&Virt>,
         files: &Files,
         fd: i32,
-        out: UserPtr<u8, Out>,
+        out: UserPtr<Kstat, Out>,
     ) -> Result<(), Error> {
-        #[derive(Debug, Clone, Copy, Default)]
-        #[repr(C, packed)]
-        struct Kstat {
-            dev: u64,
-            inode: u64,
-            perm: Permissions,
-            link_count: u32,
-            uid: u32,
-            gid: u32,
-            rdev: u64,
-            __pad: u64,
-            size: usize,
-            blksize: u32,
-            __pad2: u32,
-            blocks: u64,
-            atime_sec: u64,
-            atime_nsec: u64,
-            mtime_sec: u64,
-            mtime_nsec: u64,
-            ctime_sec: u64,
-            ctime_nsec: u64,
-            __pad3: [u32; 2],
-        }
-        let mut out = out.cast::<Kstat>();
-
         let file = files.get(fd).await?;
+        let metadata = file.metadata().await;
+
+        out.write(
+            virt,
+            Kstat {
+                dev: 1,
+                inode: metadata.offset,
+                perm: metadata.perm,
+                link_count: 1,
+                size: metadata.len,
+                blksize: metadata.block_size as u32,
+                blocks: metadata.block_count as u64,
+                ..Default::default()
+            },
+        )
+        .await
+    }
+
+    pub async fn fstatat(
+        virt: Pin<&Virt>,
+        files: &Files,
+        fd: i32,
+        path: UserPtr<u8, In>,
+        out: UserPtr<Kstat, Out>,
+    ) -> Result<(), Error> {
+        let mut buf = [0; MAX_PATH_LEN];
+        let path = path.read_path(virt, &mut buf).await?;
+
+        let base = files.get(fd).await?;
+        let (file, _) = base
+            .open(
+                path,
+                OpenOptions::RDONLY,
+                Permissions::all_same(true, false, false),
+            )
+            .await?;
         let metadata = file.metadata().await;
 
         out.write(
@@ -534,8 +569,8 @@ fssc!(
 
     pub async fn pipe(virt: Pin<&Virt>, files: &Files, fd: UserPtr<i32, Out>) -> Result<(), Error> {
         let (tx, rx) = crate::fs::pipe();
-        let tx = files.open(tx).await?;
-        let rx = files.open(rx).await?;
+        let tx = files.open(tx, false).await?;
+        let rx = files.open(rx, false).await?;
         fd.write_slice(virt, &[rx, tx], false).await
     }
 
@@ -591,6 +626,11 @@ fssc!(
         let mut buf = [9; MAX_PATH_LEN];
         let target = target.read_path(virt, &mut buf).await?;
         crate::fs::unmount(target);
+        Ok(())
+    }
+
+    pub async fn ioctl(_v: Pin<&Virt>, files: &Files, fd: i32) -> Result<(), Error> {
+        files.get(fd).await?;
         Ok(())
     }
 );

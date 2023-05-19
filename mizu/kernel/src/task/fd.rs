@@ -1,7 +1,10 @@
 mod syscall;
 
 use alloc::sync::Arc;
-use core::sync::atomic::{AtomicI32, AtomicUsize, Ordering::SeqCst};
+use core::{
+    mem,
+    sync::atomic::{AtomicI32, AtomicUsize, Ordering::SeqCst},
+};
 
 use arsc_rs::Arsc;
 use futures_util::future::join_all;
@@ -19,8 +22,14 @@ pub use self::syscall::*;
 
 pub const MAX_FDS: usize = 65536;
 
+#[derive(Clone)]
+struct FdInfo {
+    entry: Arc<dyn Entry>,
+    close_on_exec: bool,
+}
+
 struct Fds {
-    map: RwLock<HashMap<i32, Arc<dyn Entry>, RandomState>>,
+    map: RwLock<HashMap<i32, FdInfo, RandomState>>,
     id_alloc: AtomicI32,
     limit: AtomicUsize,
 }
@@ -40,7 +49,13 @@ impl Files {
                     stdio
                         .into_iter()
                         .enumerate()
-                        .map(|(i, e)| (i as i32, e))
+                        .map(|(i, entry)| {
+                            let fd_info = FdInfo {
+                                entry,
+                                close_on_exec: true,
+                            };
+                            (i as i32, fd_info)
+                        })
                         .collect(),
                 ),
                 id_alloc: AtomicI32::new(3),
@@ -58,9 +73,13 @@ impl Files {
         self.fds.limit.load(SeqCst)
     }
 
-    pub async fn reopen(&self, fd: i32, entry: Arc<dyn Entry>) {
-        if let Some(old) = self.fds.map.write().await.insert(fd, entry) {
-            if let Some(io) = old.to_io() {
+    pub async fn reopen(&self, fd: i32, entry: Arc<dyn Entry>, close_on_exec: bool) {
+        let fi = FdInfo {
+            entry,
+            close_on_exec,
+        };
+        if let Some(old) = self.fds.map.write().await.insert(fd, fi) {
+            if let Some(io) = old.entry.to_io() {
                 let _ = io.flush().await;
             }
         }
@@ -74,34 +93,51 @@ impl Files {
         ksync::critical(|| self.cwd.read().clone())
     }
 
-    pub async fn open(&self, entry: Arc<dyn Entry>) -> Result<i32, Error> {
+    pub async fn open(&self, entry: Arc<dyn Entry>, close_on_exec: bool) -> Result<i32, Error> {
+        let fi = FdInfo {
+            entry,
+            close_on_exec,
+        };
         let mut map = self.fds.map.write().await;
         if map.len() >= self.fds.limit.load(SeqCst) {
             return Err(EMFILE);
         }
         let fd = self.fds.id_alloc.fetch_add(1, SeqCst);
-        map.insert_unique_unchecked(fd, entry);
+        map.insert_unique_unchecked(fd, fi);
         Ok(fd)
     }
 
-    pub async fn get(&self, fd: i32) -> Result<Arc<dyn Entry>, Error> {
+    async fn get_fi(&self, fd: i32) -> Result<FdInfo, Error> {
         const CWD: i32 = -100;
         match fd {
             CWD => {
-                crate::fs::open_dir(
+                let entry = crate::fs::open_dir(
                     &self.cwd(),
                     OpenOptions::RDONLY | OpenOptions::DIRECTORY,
                     Permissions::SELF_R,
                 )
-                .await
+                .await?;
+                Ok(FdInfo {
+                    entry,
+                    close_on_exec: false,
+                })
             }
-            _ => self.fds.map.read().await.get(&fd).cloned().ok_or(EBADF),
+            _ => (self.fds.map.read().await).get(&fd).cloned().ok_or(EBADF),
         }
+    }
+
+    pub async fn dup(&self, fd: i32) -> Result<i32, Error> {
+        let fi = self.get_fi(fd).await?;
+        self.open(fi.entry, fi.close_on_exec).await
+    }
+
+    pub async fn get(&self, fd: i32) -> Result<Arc<dyn Entry>, Error> {
+        self.get_fi(fd).await.map(|fi| fi.entry)
     }
 
     pub async fn close(&self, fd: i32) -> Result<(), Error> {
         match self.fds.map.write().await.remove(&fd) {
-            Some(entry) => match entry.to_io() {
+            Some(fi) => match fi.entry.to_io() {
                 Some(io) => io.flush().await,
                 None => Ok(()),
             },
@@ -111,8 +147,8 @@ impl Files {
 
     pub async fn flush_all(&self) {
         let map = self.fds.map.write().await;
-        let iter = map.values().filter_map(|e| {
-            e.clone().to_io().map(|io| async move {
+        let iter = map.values().filter_map(|fi| {
+            fi.entry.clone().to_io().map(|io| async move {
                 let _ = io.flush().await;
             })
         });
@@ -136,6 +172,13 @@ impl Files {
                 })
             },
         }
+    }
+
+    pub async fn append_afterlife(&self, afterlife: &Self) {
+        let afterlife = mem::take(&mut *afterlife.fds.map.write().await);
+        let mut map = self.fds.map.write().await;
+        map.retain(|_, fi| !fi.close_on_exec);
+        map.extend(afterlife.into_iter());
     }
 }
 

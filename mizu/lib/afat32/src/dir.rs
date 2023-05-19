@@ -432,7 +432,17 @@ impl<T: TimeProvider> Entry for FatDir<T> {
                 options.contains(OpenOptions::CREAT),
                 options.contains(OpenOptions::DIRECTORY),
             ) {
-                (false, false) => (Arc::new(self.open_file(path).await?), false),
+                (false, false) => {
+                    let dirent = (*self).open(path).await?;
+                    (
+                        if dirent.is_dir() {
+                            Arc::new(dirent.to_dir().await?)
+                        } else {
+                            Arc::new(dirent.to_file().await?)
+                        },
+                        false,
+                    )
+                }
                 (false, true) => (Arc::new(self.open_dir(path).await?), false),
                 (true, false) => {
                     let (file, created) = self.create_file(path).await?;

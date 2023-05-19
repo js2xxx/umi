@@ -1,21 +1,33 @@
-use alloc::{boxed::Box, sync::Arc};
+use alloc::{
+    boxed::Box,
+    sync::{Arc, Weak},
+};
 
 use arsc_rs::Arsc;
 use async_trait::async_trait;
+use hashbrown::{hash_map::Entry as H, HashMap};
 use kmem::Phys;
-use ksc::Error::{self, EEXIST, ENOSYS, ENOTDIR, EPERM};
+use ksc::Error::{self, EEXIST, ENOENT, ENOSYS, ENOTDIR, EPERM};
+use rand_riscv::RandomState;
+use spin::Mutex;
 use umifs::{
-    path::Path,
+    path::{Path, PathBuf},
     traits::{Directory, DirectoryMut, Entry, FileSystem, Io, ToIo},
     types::{DirEntry, FileType, Metadata, OpenOptions, Permissions},
 };
 
-pub struct TmpFs;
+pub struct TmpFs(Arc<TmpRoot>);
+
+impl TmpFs {
+    pub fn new() -> Self {
+        TmpFs(Arc::new(TmpRoot(Default::default())))
+    }
+}
 
 #[async_trait]
 impl FileSystem for TmpFs {
     async fn root_dir(self: Arsc<Self>) -> Result<Arc<dyn Entry>, Error> {
-        Ok(Arc::new(TmpRoot))
+        Ok(self.0.clone())
     }
 
     async fn flush(&self) -> Result<(), Error> {
@@ -23,7 +35,7 @@ impl FileSystem for TmpFs {
     }
 }
 
-struct TmpRoot;
+struct TmpRoot(Mutex<HashMap<PathBuf, Weak<TmpFile>, RandomState>>);
 
 impl ToIo for TmpRoot {}
 
@@ -45,16 +57,31 @@ impl Entry for TmpRoot {
         if options.contains(OpenOptions::DIRECTORY) {
             return Err(ENOTDIR);
         }
-        if !options.contains(OpenOptions::CREAT) {
-            return Err(EPERM);
-        }
-        Ok((
-            Arc::new(TmpFile {
+        if options.contains(OpenOptions::CREAT) {
+            let file = Arc::new(TmpFile {
                 phys: Arc::new(Phys::new_anon(true)),
                 perm,
-            }),
-            true,
-        ))
+            });
+            ksync::critical(|| {
+                let mut list = self.0.lock();
+                match list.entry(path.to_path_buf()) {
+                    H::Occupied(mut ent) => {
+                        if ent.get().upgrade().is_none() {
+                            ent.insert(Arc::downgrade(&file));
+                        } else {
+                            return Err(EEXIST);
+                        }
+                    }
+                    H::Vacant(ent) => {
+                        ent.insert(Arc::downgrade(&file));
+                    }
+                }
+                Ok((file as _, true))
+            })
+        } else {
+            let weak = ksync::critical(|| self.0.lock().get(path).cloned());
+            Ok((weak.and_then(|w| w.upgrade()).ok_or(ENOENT)?, false))
+        }
     }
 
     async fn metadata(&self) -> Metadata {
