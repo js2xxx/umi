@@ -767,7 +767,8 @@ fn copy_from_frame(
         let buf = &mut buffer[0];
         let len = buf.len().min(end - start);
         if len == 0 {
-            break read_len;
+            *buffer = &mut mem::take(buffer)[1..];
+            continue;
         }
         unsafe {
             let src = frame.as_ptr();
@@ -793,7 +794,8 @@ fn copy_to_frame(
         let buf = buffer[0];
         let len = buf.len().min(end - start);
         if len == 0 {
-            break written_len;
+            *buffer = &mut mem::take(buffer)[1..];
+            continue;
         }
         unsafe {
             let mut src = frame.as_ptr();

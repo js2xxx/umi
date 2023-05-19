@@ -68,7 +68,7 @@ impl Entry for TmpRoot {
         }
         if options.contains(OpenOptions::CREAT) {
             let file = Arc::new(TmpFile {
-                phys: Arc::new(Phys::new_anon(true)),
+                phys: Arc::new(Phys::new_anon(false)),
                 perm,
                 times: Mutex::new({
                     let now = Instant::now();

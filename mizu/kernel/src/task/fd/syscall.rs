@@ -301,7 +301,7 @@ impl From<Metadata> for Kstat {
         fn mode(ty: FileType, perm: Permissions) -> i32 {
             perm.bits() as i32 | ((ty.bits() as i32) << 12)
         }
-        
+
         fn time(i: Option<Instant>) -> Ts {
             i.map_or(Default::default(), |i| {
                 let (s, u) = i.to_su();
