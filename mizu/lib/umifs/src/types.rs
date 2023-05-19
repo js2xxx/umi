@@ -122,8 +122,8 @@ pub struct DirEntry {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct FsStat {
-	pub ty: &'static str,
-	pub block_size: usize,
+    pub ty: &'static str,
+    pub block_size: usize,
     pub block_count: usize,
     pub block_free: usize,
     pub file_count: usize,

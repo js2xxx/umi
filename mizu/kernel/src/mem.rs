@@ -6,7 +6,10 @@ use core::{ops::Range, pin::Pin};
 use arsc_rs::Arsc;
 use co_trap::UserCx;
 use kmem::{CreateSub, Phys, Virt};
-use ksc::{async_handler, Error::{self, ENOMEM}};
+use ksc::{
+    async_handler,
+    Error::{self, ENOMEM},
+};
 use rv39_paging::{Attr, CANONICAL_PREFIX, PAGE_MASK, PAGE_SHIFT, PAGE_SIZE};
 use umifs::traits::{IntoAnyExt, Io, IoExt};
 
@@ -54,7 +57,7 @@ pub async fn brk(ts: &mut TaskState, cx: UserCx<'_, fn(usize) -> Result<usize, E
             let old_page = *brk & !PAGE_MASK;
             let new_page = (addr + PAGE_MASK) & !PAGE_MASK;
             if new_page >= BRK_END {
-                return Err(ENOMEM)
+                return Err(ENOMEM);
             }
             let count = (new_page - old_page) >> PAGE_SHIFT;
             if count > 0 {

@@ -57,7 +57,7 @@ impl Entry for Null {
 
     async fn metadata(&self) -> Metadata {
         Metadata {
-            ty: FileType::FILE,
+            ty: FileType::CHR,
             len: 0,
             offset: 0,
             perm: Permissions::all_same(true, true, false),
@@ -120,7 +120,7 @@ impl Entry for Zero {
 
     async fn metadata(&self) -> Metadata {
         Metadata {
-            ty: FileType::FILE,
+            ty: FileType::CHR,
             len: 0,
             offset: 0,
             perm: Permissions::all_same(true, true, false),

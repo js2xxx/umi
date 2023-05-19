@@ -1,9 +1,9 @@
 mod syscall;
 
-use alloc::sync::Arc;
+use alloc::{sync::Arc, vec::Vec};
 use core::{
     mem,
-    sync::atomic::{AtomicI32, AtomicUsize, Ordering::SeqCst},
+    sync::atomic::{AtomicUsize, Ordering::SeqCst},
 };
 
 use arsc_rs::Arsc;
@@ -12,6 +12,7 @@ use hashbrown::HashMap;
 use ksc::Error::{self, EBADF, EMFILE};
 use ksync::RwLock;
 use rand_riscv::RandomState;
+use spin::Mutex;
 use umifs::{
     path::{Path, PathBuf},
     traits::Entry,
@@ -29,9 +30,29 @@ pub struct FdInfo {
     pub close_on_exec: bool,
 }
 
+#[derive(Clone)]
+struct IdAlloc {
+    reuse: Vec<i32>,
+    next: i32,
+}
+
+impl IdAlloc {
+    fn alloc(&mut self) -> i32 {
+        self.reuse.pop().unwrap_or_else(|| {
+            let ret = self.next;
+            self.next += 1;
+            ret
+        })
+    }
+
+    fn dealloc(&mut self, id: i32) {
+        self.reuse.push(id)
+    }
+}
+
 struct Fds {
     map: RwLock<HashMap<i32, FdInfo, RandomState>>,
-    id_alloc: AtomicI32,
+    id_alloc: Mutex<IdAlloc>,
     limit: AtomicUsize,
 }
 
@@ -59,7 +80,10 @@ impl Files {
                         })
                         .collect(),
                 ),
-                id_alloc: AtomicI32::new(3),
+                id_alloc: Mutex::new(IdAlloc {
+                    reuse: Vec::new(),
+                    next: 3,
+                }),
                 limit: LIMIT_DEFAULT.into(),
             }),
             cwd: Arsc::new(spin::RwLock::new(cwd)),
@@ -103,7 +127,7 @@ impl Files {
         if map.len() >= self.fds.limit.load(SeqCst) {
             return Err(EMFILE);
         }
-        let fd = self.fds.id_alloc.fetch_add(1, SeqCst);
+        let fd = ksync::critical(|| self.fds.id_alloc.lock().alloc());
         map.insert_unique_unchecked(fd, fi);
         Ok(fd)
     }
@@ -137,7 +161,8 @@ impl Files {
 
     pub async fn dup(&self, fd: i32, close_on_exec: Option<bool>) -> Result<i32, Error> {
         let fi = self.get_fi(fd).await?;
-        self.open(fi.entry, close_on_exec.unwrap_or(fi.close_on_exec)).await
+        self.open(fi.entry, close_on_exec.unwrap_or(fi.close_on_exec))
+            .await
     }
 
     pub async fn get(&self, fd: i32) -> Result<Arc<dyn Entry>, Error> {
@@ -146,10 +171,13 @@ impl Files {
 
     pub async fn close(&self, fd: i32) -> Result<(), Error> {
         match self.fds.map.write().await.remove(&fd) {
-            Some(fi) => match fi.entry.to_io() {
-                Some(io) => io.flush().await,
-                None => Ok(()),
-            },
+            Some(fi) => {
+                ksync::critical(|| self.fds.id_alloc.lock().dealloc(fd));
+                match fi.entry.to_io() {
+                    Some(io) => io.flush().await,
+                    None => Ok(()),
+                }
+            }
             None => Err(EBADF),
         }
     }
@@ -176,7 +204,7 @@ impl Files {
             } else {
                 Arsc::new(Fds {
                     map: RwLock::new(self.fds.map.read().await.clone()),
-                    id_alloc: AtomicI32::new(self.fds.id_alloc.load(SeqCst)),
+                    id_alloc: Mutex::new(ksync::critical(|| self.fds.id_alloc.lock().clone())),
                     limit: LIMIT_DEFAULT.into(),
                 })
             },

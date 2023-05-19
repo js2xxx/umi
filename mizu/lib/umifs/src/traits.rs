@@ -7,7 +7,7 @@ pub use umio::{IntoAny, IntoAnyExt, Io, IoExt, ToIo};
 
 use crate::{
     path::Path,
-    types::{DirEntry, Metadata, OpenOptions, Permissions, FsStat},
+    types::{DirEntry, FsStat, Metadata, OpenOptions, Permissions},
 };
 
 #[async_trait]

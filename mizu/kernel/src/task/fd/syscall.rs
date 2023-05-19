@@ -31,13 +31,10 @@ use crate::{
 #[async_handler]
 pub async fn read(
     ts: &mut TaskState,
-    cx: UserCx<'_, fn(i32, UserBuffer, usize) -> isize>,
+    cx: UserCx<'_, fn(i32, UserBuffer, usize) -> Result<usize, Error>>,
 ) -> ScRet {
-    async fn read_inner(
-        ts: &mut TaskState,
-        (fd, mut buffer, len): (i32, UserBuffer, usize),
-    ) -> Result<usize, Error> {
-        log::trace!("user read fd = {fd}, buffer = {buffer:?}, len = {len}");
+    let (fd, mut buffer, len) = cx.args();
+    let fut = async move {
         if len == 0 {
             return Ok(0);
         }
@@ -47,14 +44,8 @@ pub async fn read(
         let io = entry.to_io().ok_or(EBADF)?;
 
         io.read(&mut bufs).await
-    }
-
-    let ret = match read_inner(ts, cx.args()).await {
-        Ok(len) => len as isize,
-        Err(err) => err as isize,
     };
-    cx.ret(ret);
-
+    cx.ret(fut.await);
     ScRet::Continue(None)
 }
 
@@ -63,11 +54,8 @@ pub async fn write(
     ts: &mut TaskState,
     cx: UserCx<'_, fn(i32, UserBuffer, usize) -> Result<usize, Error>>,
 ) -> ScRet {
-    async fn write_inner(
-        ts: &mut TaskState,
-        (fd, buffer, len): (i32, UserBuffer, usize),
-    ) -> Result<usize, Error> {
-        log::trace!("user write fd = {fd}, buffer = {buffer:?}, len = {len}");
+    let (fd, buffer, len) = cx.args();
+    let fut = async move {
         if len == 0 {
             return Ok(0);
         }
@@ -77,11 +65,50 @@ pub async fn write(
         let io = entry.to_io().ok_or(EBADF)?;
 
         io.write(&mut bufs).await
-    }
+    };
+    cx.ret(fut.await);
+    ScRet::Continue(None)
+}
 
-    let ret = write_inner(ts, cx.args()).await;
-    cx.ret(ret);
+#[async_handler]
+pub async fn pread(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(i32, UserBuffer, usize, usize) -> Result<usize, Error>>,
+) -> ScRet {
+    let (fd, mut buffer, len, offset) = cx.args();
+    let fut = async move {
+        if len == 0 {
+            return Ok(0);
+        }
+        let mut bufs = buffer.as_mut_slice(ts.virt.as_ref(), len).await?;
 
+        let entry = ts.files.get(fd).await?;
+        let io = entry.to_io().ok_or(EBADF)?;
+
+        io.read_at(offset, &mut bufs).await
+    };
+    cx.ret(fut.await);
+    ScRet::Continue(None)
+}
+
+#[async_handler]
+pub async fn pwrite(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(i32, UserBuffer, usize, usize) -> Result<usize, Error>>,
+) -> ScRet {
+    let (fd, buffer, len, offset) = cx.args();
+    let fut = async move {
+        if len == 0 {
+            return Ok(0);
+        }
+        let mut bufs = buffer.as_slice(ts.virt.as_ref(), len).await?;
+
+        let entry = ts.files.get(fd).await?;
+        let io = entry.to_io().ok_or(EBADF)?;
+
+        io.write_at(offset, &mut bufs).await
+    };
+    cx.ret(fut.await);
     ScRet::Continue(None)
 }
 
@@ -158,6 +185,70 @@ pub async fn writev(
 }
 
 #[async_handler]
+pub async fn preadv(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(i32, UserPtr<IoVec, In>, usize, usize) -> Result<usize, Error>>,
+) -> ScRet {
+    let (fd, iov, vlen, offset) = cx.args();
+    let fut = async move {
+        if vlen == 0 {
+            return Ok(0);
+        }
+        let vlen = vlen.min(MAX_IOV_LEN);
+        let entry = ts.files.get(fd).await?;
+        let io = entry.to_io().ok_or(EBADF)?;
+
+        let mut iov_buf = [Default::default(); MAX_IOV_LEN];
+        iov.read_slice(ts.virt.as_ref(), &mut iov_buf[..vlen])
+            .await?;
+        let virt = ts.virt.as_ref();
+        let mut bufs = stream::iter(iov_buf[..vlen].iter_mut())
+            .then(|iov| iov.buffer.as_mut_slice(virt, iov.len))
+            .try_fold(Vec::new(), |mut acc, mut iov| async move {
+                acc.append(&mut iov);
+                Ok(acc)
+            })
+            .await?;
+
+        io.read_at(offset, &mut bufs).await
+    };
+    cx.ret(fut.await);
+    ScRet::Continue(None)
+}
+
+#[async_handler]
+pub async fn pwritev(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(i32, UserPtr<IoVec, In>, usize, usize) -> Result<usize, Error>>,
+) -> ScRet {
+    let (fd, iov, vlen, offset) = cx.args();
+    let fut = async move {
+        if vlen == 0 {
+            return Ok(0);
+        }
+        let vlen = vlen.min(MAX_IOV_LEN);
+        let entry = ts.files.get(fd).await?;
+        let io = entry.to_io().ok_or(EBADF)?;
+
+        let mut iov_buf = [Default::default(); MAX_IOV_LEN];
+        iov.read_slice(ts.virt.as_ref(), &mut iov_buf[..vlen])
+            .await?;
+        let virt = ts.virt.as_ref();
+        let mut bufs = stream::iter(iov_buf[..vlen].iter())
+            .then(|iov| iov.buffer.as_slice(virt, iov.len))
+            .try_fold(Vec::new(), |mut acc, mut iov| async move {
+                acc.append(&mut iov);
+                Ok(acc)
+            })
+            .await?;
+
+        io.write_at(offset, &mut bufs).await
+    };
+    cx.ret(fut.await);
+    ScRet::Continue(None)
+}
+
+#[async_handler]
 pub async fn lseek(
     ts: &mut TaskState,
     cx: UserCx<'_, fn(i32, isize, isize) -> Result<usize, Error>>,
@@ -188,7 +279,7 @@ pub async fn lseek(
 pub struct Kstat {
     dev: u64,
     inode: u64,
-    perm: Permissions,
+    mode: i32,
     link_count: u32,
     uid: u32,
     gid: u32,
@@ -392,7 +483,7 @@ fssc!(
             Kstat {
                 dev: 1,
                 inode: metadata.offset,
-                perm: metadata.perm,
+                mode: mode(metadata.ty, metadata.perm),
                 link_count: 1,
                 size: metadata.len,
                 blksize: metadata.block_size as u32,
@@ -413,21 +504,27 @@ fssc!(
         let mut buf = [0; MAX_PATH_LEN];
         let (path, root) = path.read_path(virt, &mut buf).await?;
 
-        let (file, _) = if root {
+        let file = if root {
             crate::fs::open(
                 path,
                 OpenOptions::RDONLY,
                 Permissions::all_same(true, false, false),
             )
             .await?
+            .0
         } else {
             let base = files.get(fd).await?;
-            base.open(
-                path,
-                OpenOptions::RDONLY,
-                Permissions::all_same(true, false, false),
-            )
-            .await?
+            if path == "" {
+                base
+            } else {
+                base.open(
+                    path,
+                    OpenOptions::RDONLY,
+                    Permissions::all_same(true, false, false),
+                )
+                .await?
+                .0
+            }
         };
         let metadata = file.metadata().await;
 
@@ -436,7 +533,7 @@ fssc!(
             Kstat {
                 dev: 1,
                 inode: metadata.offset,
-                perm: metadata.perm,
+                mode: mode(metadata.ty, metadata.perm),
                 link_count: 1,
                 size: metadata.len,
                 blksize: metadata.block_size as u32,
@@ -740,3 +837,7 @@ fssc!(
         Ok(())
     }
 );
+
+fn mode(ty: FileType, perm: Permissions) -> i32 {
+    perm.bits() as i32 | ((ty.bits() as i32) << 12)
+}

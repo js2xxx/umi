@@ -463,7 +463,10 @@ impl<T: TimeProvider> Entry for FatDir<T> {
     }
 
     async fn metadata(&self) -> Metadata {
-        todo!()
+        Metadata {
+            ty: FileType::DIR,
+            ..self.file.metadata().await
+        }
     }
 
     fn to_dir(self: Arc<Self>) -> Option<Arc<dyn Directory>> {
