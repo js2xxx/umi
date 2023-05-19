@@ -4,6 +4,7 @@ use arsc_rs::Arsc;
 use async_trait::async_trait;
 use kmem::Phys;
 use ksc::Error::{self, EEXIST, ENOENT, ENOTDIR, EPERM};
+use rv39_paging::PAGE_SIZE;
 use umifs::{
     misc::{Null, Zero},
     path::Path,
@@ -23,6 +24,16 @@ impl FileSystem for DevFs {
 
     async fn flush(&self) -> Result<(), Error> {
         Ok(())
+    }
+
+    async fn stat(&self) -> FsStat {
+        FsStat {
+            ty: "devfs",
+            block_size: PAGE_SIZE,
+            block_count: 0xdeadbeef,
+            block_free: 0,
+            file_count: 3 + crate::dev::blocks().len(),
+        }
     }
 }
 
@@ -61,6 +72,7 @@ impl Entry for DevRoot {
                         let dev_blocks = Arc::new(DevBlocks);
                         dev_blocks.open(next, options, perm).await
                     }
+                    "null" | "zero" | "serial" => Err(ENOTDIR),
                     _ => Err(ENOENT),
                 }
             }
@@ -90,10 +102,10 @@ impl Entry for DevBlocks {
         let block = crate::dev::block(n).ok_or(ENOENT)?;
         let block_shift = block.block_shift();
         let block_count = block.capacity_blocks();
-        let phys = Arc::new(Phys::new(block.to_io().unwrap(), 0, false));
+        let phys = crate::mem::new_phys(block.to_io().unwrap(), false);
         Ok((
             Arc::new(BlockEntry {
-                io: phys,
+                io: Arc::new(phys),
                 block_shift,
                 block_count,
             }),

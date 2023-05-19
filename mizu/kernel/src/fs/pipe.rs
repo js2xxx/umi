@@ -57,6 +57,7 @@ impl Io for PipeBackend {
 struct Pipe {
     phys: Phys,
     readable: Event,
+    end_pos: AtomicUsize,
 }
 
 struct Receiver {
@@ -161,12 +162,13 @@ impl Io for Sender {
     }
 
     async fn write(&self, buffer: &mut [IoSlice]) -> Result<usize, Error> {
-        let written_len = self.pipe.phys.write(buffer).await?;
+        let pos = self.pipe.end_pos.load(SeqCst);
+        let written_len = self.pipe.phys.write_at(pos, buffer).await?;
 
         log::trace!("Pipe::write: Attempt to write, written len = {written_len}");
         if written_len > 0 {
+            self.pipe.end_pos.fetch_add(written_len, SeqCst);
             self.pipe.readable.notify(usize::MAX);
-            self.pipe.phys.flush_all().await?;
         }
         Ok(written_len)
     }
@@ -230,10 +232,11 @@ impl Drop for Sender {
 }
 
 pub fn pipe() -> (Arc<dyn Entry>, Arc<dyn Entry>) {
-    let phys = Phys::new(Arc::new(PipeBackend(Default::default())), 0, true);
+    let phys = Phys::new_anon(true);
     let pipe = Arsc::new(Pipe {
         phys,
         readable: Event::new(),
+        end_pos: Default::default(),
     });
     let tx = Arc::new(Sender { pipe: pipe.clone() });
     let rx = Arc::new(Receiver {

@@ -6,15 +6,13 @@ use core::sync::atomic::{
 
 use arsc_rs::Arsc;
 use async_trait::async_trait;
-use futures_util::TryStreamExt;
 use ksc_core::Error::{self, EINVAL, EISDIR, ENOSYS, ENOTDIR};
 use ksync::{Mutex, RwLock, RwLockUpgradableReadGuard, RwLockWriteGuard};
 use umifs::{
     path::Path,
     traits::{Entry, Io},
     types::{
-        advance_slices, ioslice_len, FileType, IoSlice, IoSliceMut, Metadata, OpenOptions,
-        Permissions, SeekFrom,
+        advance_slices, FileType, IoSlice, IoSliceMut, Metadata, OpenOptions, Permissions, SeekFrom,
     },
 };
 
@@ -40,12 +38,7 @@ impl<T: TimeProvider> FatFile<T> {
         let cluster_shift = fs.bpb.cluster_size().ilog2();
 
         let clusters = match first_cluster {
-            Some(first_cluster) => {
-                fs.fat
-                    .cluster_chain(first_cluster)
-                    .try_collect::<Vec<_>>()
-                    .await?
-            }
+            Some(first_cluster) => fs.fat.all_clusters(first_cluster).await?,
             None => Vec::new(),
         };
 
@@ -54,7 +47,7 @@ impl<T: TimeProvider> FatFile<T> {
             .and_then(|e| e.inner().size().map(|s| s as usize))
             .unwrap_or(clusters.len() << cluster_shift);
 
-        log::trace!("FatFile::new: clusters = {clusters:?}");
+        log::trace!("FatFile::new: clusters = {clusters:#?}");
 
         Ok(FatFile {
             fs,
@@ -170,7 +163,7 @@ impl<T: TimeProvider> FatFile<T> {
 #[async_trait]
 impl<T: TimeProvider> Io for FatFile<T> {
     async fn seek(&self, whence: SeekFrom) -> Result<usize, Error> {
-        log::trace!("FatFile::seek {whence:?}");
+        // log::trace!("FatFile::seek {whence:?}");
 
         let offset = match whence {
             SeekFrom::Start(offset) => offset,
@@ -202,10 +195,10 @@ impl<T: TimeProvider> Io for FatFile<T> {
         mut offset: usize,
         mut buffer: &mut [IoSliceMut],
     ) -> Result<usize, Error> {
-        log::trace!(
-            "FatFile::read_at {offset:#x}, buffer len = {}",
-            ioslice_len(&buffer)
-        );
+        // log::trace!(
+        //     "FatFile::read_at {offset:#x}, buffer len = {}",
+        //     ioslice_len(&buffer)
+        // );
 
         let cluster_shift = self.cluster_shift;
         let (cluster_index, offset_in_cluster) = self.decomp(offset);
@@ -248,10 +241,10 @@ impl<T: TimeProvider> Io for FatFile<T> {
         mut offset: usize,
         mut buffer: &mut [IoSlice],
     ) -> Result<usize, Error> {
-        log::trace!(
-            "FatFile::write_at {offset:#x}, buffer len = {}",
-            ioslice_len(&buffer)
-        );
+        // log::trace!(
+        //     "FatFile::write_at {offset:#x}, buffer len = {}",
+        //     ioslice_len(&buffer)
+        // );
 
         let cluster_shift = self.cluster_shift;
         let (cluster_index, offset_in_cluster) = self.decomp(offset);
@@ -264,7 +257,7 @@ impl<T: TimeProvider> Io for FatFile<T> {
                 Some(cluster) => (cluster, clusters),
                 None => {
                     let mut clusters = RwLockUpgradableReadGuard::upgrade(clusters).await;
-                    let mut times = clusters.len() + 1 - cluster_index;
+                    let mut times = cluster_index + 1 - clusters.len();
                     let mut prev = clusters.last().cloned();
                     loop {
                         let new = self.fs.fat.allocate(prev, None).await?;

@@ -17,7 +17,7 @@ use riscv::register::{
 use sygnal::{Sig, SigCode, SigInfo};
 
 use super::TaskState;
-use crate::syscall::ScRet;
+use crate::{syscall::ScRet, task::signal::SIGRETURN_GUARD};
 
 #[pin_project]
 pub struct TaskFut<F> {
@@ -47,14 +47,19 @@ impl<F: Future> Future for TaskFut<F> {
 const TASK_GRAN: u64 = 20000;
 
 pub async fn user_loop(mut ts: TaskState, mut tf: TrapFrame) {
-    log::debug!("task {} startup, tf.a0 = {}", ts.task.tid, tf.gpr.tx.a[0]);
+    log::debug!(
+        "task {} startup, tf.a0 = {}, sepc = {:#x}",
+        ts.task.tid,
+        tf.gpr.tx.a[0],
+        tf.sepc
+    );
 
     let mut stat_time = time::read64();
     let mut sched_time = stat_time;
     let (code, sig) = 'life: loop {
-        match ts.handle_signals().await {
-            Continue(()) => {}
-            Break((code, sig)) => break 'life (code, Some(sig)),
+        match ts.handle_signals(&mut tf).await {
+            Ok(()) => {}
+            Err((code, sig)) => break 'life (code, Some(sig)),
         }
 
         let sys = time::read64();
@@ -70,7 +75,7 @@ pub async fn user_loop(mut ts: TaskState, mut tf: TrapFrame) {
         match fr {
             FastResult::Continue => {}
             FastResult::Pending => continue,
-            FastResult::Break => break 'life (-1, None),
+            FastResult::Break => break 'life (0, None),
             FastResult::Yield => unreachable!(),
         }
 
@@ -85,6 +90,7 @@ pub async fn user_loop(mut ts: TaskState, mut tf: TrapFrame) {
             sched_time = now;
             log::trace!("task {} yield", ts.task.tid);
             yield_now().await;
+            log::trace!("task {} yielded", ts.task.tid);
         }
     };
     ts.cleanup(code, sig).await
@@ -96,21 +102,25 @@ async fn handle_scause(scause: Scause, ts: &mut TaskState, tf: &mut TrapFrame) -
         Trap::Exception(excep) => match excep {
             Exception::UserEnvCall => {
                 let res = async {
-                    let scn = tf.scn().ok_or(ENOSYS)?;
+                    let scn = tf.scn().ok_or(None)?;
                     if scn != Scn::WRITE {
-                        log::info!("task {} syscall {scn:?}", ts.task.tid);
+                        log::info!(
+                            "task {} syscall {scn:?}, sepc = {:#x}",
+                            ts.task.tid,
+                            tf.sepc
+                        );
                     }
                     crate::syscall::SYSCALL
                         .handle(scn, (ts, tf))
                         .await
-                        .ok_or(ENOSYS)
+                        .ok_or(Some(scn))
                 }
                 .await;
                 match res {
                     Ok(res) => return res,
-                    Err(err) => {
-                        log::warn!("error in syscall: {err}");
-                        tf.set_syscall_ret(err.into_raw())
+                    Err(scn) => {
+                        log::warn!("SYSCALL not implemented: {scn:?}");
+                        tf.set_syscall_ret(ENOSYS.into_raw())
                     }
                 }
             }
@@ -123,12 +133,16 @@ async fn handle_scause(scause: Scause, ts: &mut TaskState, tf: &mut TrapFrame) -
                     tf.sepc,
                     tf.stval
                 );
+                if tf.stval == SIGRETURN_GUARD {
+                    return TaskState::resume_from_signal(ts, tf).await;
+                }
+
                 let res = ts.virt.commit(tf.stval.into()).await;
                 if let Err(err) = res {
                     log::error!("failing to commit pages at address {:#x}: {err}", tf.stval);
                     return Continue(Some(SigInfo {
                         sig: Sig::SIGSEGV,
-                        code: SigCode::KERNEL,
+                        code: SigCode::KERNEL as _,
                         fields: sygnal::SigFields::SigSys {
                             addr: tf.stval.into(),
                             num: 0,

@@ -19,7 +19,7 @@ use crate::Virt;
 static mut CUR_VIRT: *const Virt = ptr::null();
 
 pub fn set_virt(virt: Pin<Arsc<Virt>>) -> Option<impl Future<Output = ()> + Send + 'static> {
-    let addr = unsafe { ptr::addr_of_mut!(**virt.root.as_ptr()) };
+    let addr = unsafe { ptr::addr_of_mut!(*virt.root.as_ptr()) };
 
     virt.cpu_mask.fetch_or(1 << hart_id::hart_id(), SeqCst);
     let new = Arsc::into_raw(unsafe { Pin::into_inner_unchecked(virt) });
@@ -29,13 +29,15 @@ pub fn set_virt(virt: Pin<Arsc<Virt>>) -> Option<impl Future<Output = ()> + Send
 
     if old != new {
         let paddr = *LAddr::from(addr).to_paddr(ID_OFFSET);
-        log::debug!("tlb::set_virt: {old:p} => {new:p}");
         unsafe {
             satp::set(Sv39, 0, paddr >> PAGE_SHIFT);
             sfence_vma_all()
         }
         if let Some(ref old) = ret {
+            log::debug!("tlb::set_virt: {:p} => {:p}", old.root.as_ptr(), addr);
             old.cpu_mask.fetch_and(!(1 << hart_id::hart_id()), SeqCst);
+        } else {
+            log::debug!("tlb::set_virt: K => {:p}", addr);
         }
     }
     ret.and_then(|ret| (Arsc::count(&ret) == 1).then_some(async move { ret.clear().await }))

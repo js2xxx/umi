@@ -2,7 +2,7 @@ mod elf;
 pub mod fd;
 mod future;
 mod init;
-mod signal;
+pub mod signal;
 mod syscall;
 
 use alloc::{
@@ -23,11 +23,11 @@ use rv39_paging::{Attr, PAGE_SIZE};
 use spin::{Lazy, Mutex};
 use sygnal::{ActionSet, Sig, SigInfo, SigSet, Signals};
 
-use self::fd::Files;
+use self::{fd::Files, signal::SigStack};
 pub use self::{future::yield_now, init::InitTask, syscall::*};
 use crate::mem::{Out, UserPtr};
 
-const DEFAULT_STACK_SIZE: usize = PAGE_SIZE * 32;
+const DEFAULT_STACK_SIZE: usize = PAGE_SIZE * 8;
 const DEFAULT_STACK_ATTR: Attr = Attr::USER_ACCESS
     .union(Attr::READABLE)
     .union(Attr::WRITABLE);
@@ -63,7 +63,7 @@ impl Task {
         rx
     }
 
-    pub async fn wait(&self) -> i32 {
+    pub async fn wait(&self) -> (i32, Option<Sig>) {
         let event = self.event();
         let msg = "Task returned without sending a break code";
         loop {
@@ -71,8 +71,8 @@ impl Task {
                 Ok(e) => e,
                 Err(err) => err.data().expect(msg),
             };
-            if let TaskEvent::Exited(code, _) = e {
-                break code;
+            if let TaskEvent::Exited(code, sig) = e {
+                break (code, sig);
             }
         }
     }
@@ -83,6 +83,7 @@ pub struct TaskState {
     tgroup: Arsc<(usize, spin::RwLock<Vec<Arc<Task>>>)>,
 
     sig_mask: SigSet,
+    sig_stack: Option<SigStack>,
     pub(crate) brk: usize,
 
     system_times: u64,
@@ -90,32 +91,32 @@ pub struct TaskState {
 
     pub(crate) virt: Pin<Arsc<Virt>>,
     sig_actions: Arsc<ActionSet>,
-    files: Files,
+    pub(crate) files: Files,
     tid_clear: Option<UserPtr<usize, Out>>,
     exit_signal: Option<Sig>,
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum WaitPid {
+pub enum PidSelection {
     Group(Option<usize>),
     Task(Option<usize>),
 }
 
-impl From<isize> for WaitPid {
+impl From<isize> for PidSelection {
     fn from(value: isize) -> Self {
         match value {
-            -1 => WaitPid::Task(None),
-            0 => WaitPid::Group(None),
-            x if x > 0 => WaitPid::Task(Some(x as usize)),
-            x => WaitPid::Group(Some(-x as usize)),
+            -1 => PidSelection::Task(None),
+            0 => PidSelection::Group(None),
+            x if x > 0 => PidSelection::Task(Some(x as usize)),
+            x => PidSelection::Group(Some(-x as usize)),
         }
     }
 }
 
 impl TaskState {
-    async fn wait(&self, pid: WaitPid) -> Result<(TaskEvent, usize), Error> {
+    async fn wait(&self, pid: PidSelection) -> Result<(TaskEvent, usize), Error> {
         let (res, tid) = match pid {
-            WaitPid::Task(None) => {
+            PidSelection::Task(None) => {
                 let children = ksync::critical(|| self.task.children.lock().clone());
                 log::trace!("task::wait found {} child(ren)", children.len());
 
@@ -133,7 +134,7 @@ impl TaskState {
                     }
                 }
             }
-            WaitPid::Task(Some(tid)) => {
+            PidSelection::Task(Some(tid)) => {
                 let child = ksync::critical(|| {
                     let children = self.task.children.lock();
                     children.iter().find(|c| c.task.tid == tid).cloned()
@@ -169,7 +170,7 @@ impl TaskState {
             if let (Some(sig), Some(parent)) = (exit_signal, self.task.parent.upgrade()) {
                 parent.sig.push(SigInfo {
                     sig,
-                    code: sygnal::SigCode::USER,
+                    code: sygnal::SigCode::USER as _,
                     fields: sygnal::SigFields::SigChld {
                         pid: self.task.tid,
                         uid: 0,

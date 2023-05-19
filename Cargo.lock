@@ -15,6 +15,7 @@ dependencies = [
  "ksync",
  "log",
  "nom",
+ "spin",
  "umifs",
 ]
 
@@ -143,6 +144,7 @@ dependencies = [
  "enum-primitive-derive",
  "ksc-core",
  "ksync-core",
+ "log",
  "num-traits",
  "riscv",
  "static_assertions",
@@ -217,6 +219,7 @@ dependencies = [
  "kmem",
  "ksc",
  "ksync",
+ "ktime",
  "log",
  "rand-riscv",
  "rv39-paging",
@@ -382,6 +385,7 @@ version = "0.1.0"
 dependencies = [
  "arsc-rs",
  "async-trait",
+ "crossbeam-queue",
  "futures-util",
  "hart-id",
  "hashbrown",

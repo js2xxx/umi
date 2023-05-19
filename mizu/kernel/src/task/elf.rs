@@ -7,7 +7,7 @@ use core::{
 
 use futures_util::{stream, stream::StreamExt};
 use goblin::elf64::{header::*, program_header::*, section_header::*};
-use kmem::{Phys, Virt};
+use kmem::{CreateSub, Phys, Virt, ZERO};
 use ksc::Error::{ENOEXEC, ENOSYS};
 use rv39_paging::{Attr, LAddr, PAGE_MASK, PAGE_SHIFT};
 use umifs::traits::IoExt;
@@ -58,8 +58,6 @@ fn parse_attr(flags: u32) -> Attr {
         .executable(flags & PF_X != 0)
         .build()
 }
-
-static ZEROS: [u8; 256] = [0; 256];
 
 async fn parse_header(phys: &Phys, force_dyn: Option<bool>) -> Result<(Header, bool), Error> {
     let mut data = [0; mem::size_of::<Header>()];
@@ -124,6 +122,24 @@ fn get_addr_range_info(segments: &[ProgramHeader]) -> (usize, usize) {
         })
 }
 
+/// # Mapping details
+///
+///     page boundaries
+///      +......................+......................+......................+
+///
+///         offset
+///         +------------------------------+---------------------------+
+///         |         file_size            |                           |
+///         +------------------------------+             memory_size   |
+///         +----------------------------------------------------------+
+///
+///     aligned_offset                data_end    file_end           memory_end
+///      +----------------------+----------+-----------+----------------------+
+///      |      aligned_data_size          | zero_size |                      |
+///      +---------------------------------+-----------+                      |
+///      |            aligned_file_size                |       map_size       |
+///      +---------------------------------------------+                      |
+///      +--------------------------------------------------------------------+
 async fn map_segment(
     segment: &ProgramHeader,
     phys: &Arc<Phys>,
@@ -140,44 +156,44 @@ async fn map_segment(
             "Offset of segments must be page aligned",
         ));
     }
-    let file_end = (offset + file_size) & !PAGE_MASK;
+    let file_end = (offset + file_size + PAGE_MASK) & !PAGE_MASK;
     let data_end = offset + file_size;
     let memory_end = (offset + memory_size + PAGE_MASK) & !PAGE_MASK;
     let aligned_offset = offset & !PAGE_MASK;
     let aligned_address = address & !PAGE_MASK;
     let aligned_file_size = file_end - aligned_offset;
-    let zero_size = memory_end - data_end;
-    let aligned_alloc_size = memory_end.saturating_sub(file_end);
+    let aligned_data_size = data_end - aligned_offset;
+    let zero_size = file_end - data_end;
+    let map_size = memory_end - aligned_offset;
 
     let attr = parse_attr(segment.p_flags);
 
-    if aligned_file_size + aligned_alloc_size > 0 {
+    if map_size > 0 {
         log::trace!(
-            "elf::load: Map {:#x}~{:#x} -> {:?}, zero {:#x} bytes before end",
+            "elf::load: Map {:#x}~{:#x} -> {:?}, zero {:#x} size extra data",
             aligned_offset,
-            aligned_offset + aligned_file_size + aligned_alloc_size,
+            aligned_offset + map_size,
             base + aligned_address,
-            zero_size
+            zero_size,
         );
 
-        let segment = phys.clone_as(true);
+        let segment = phys.clone_as(
+            true,
+            Some(CreateSub {
+                index_offset: aligned_offset >> PAGE_SHIFT,
+                fixed_count: Some(aligned_file_size >> PAGE_SHIFT),
+            }),
+        );
+        segment
+            .write_all_at(aligned_data_size, &ZERO[..zero_size])
+            .await
+            .map_err(Error::PhysWrite)?;
 
-        let mut zero_offset = data_end;
-        let mut zero_size = zero_size;
-        while zero_size > 0 {
-            let s = zero_size.min(ZEROS.len());
-            segment
-                .write_all_at(zero_offset, &ZEROS[..s])
-                .await
-                .map_err(Error::PhysWrite)?;
-            zero_offset += s;
-            zero_size -= s;
-        }
         virt.map(
             Some(base + aligned_address),
             Arc::new(segment),
-            aligned_offset >> PAGE_SHIFT,
-            (aligned_file_size + aligned_alloc_size) >> PAGE_SHIFT,
+            0,
+            map_size >> PAGE_SHIFT,
             attr,
         )
         .await

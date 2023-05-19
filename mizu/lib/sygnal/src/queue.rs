@@ -12,7 +12,7 @@ use ksc_core::handler::Param;
 use ksync::event::{Event, EventListener};
 use rv39_paging::LAddr;
 
-use crate::{Sig, SigCode, SigSet, NR_SIGNALS};
+use crate::{Sig, SigSet, NR_SIGNALS};
 
 const CAP_PER_SIG: usize = 8;
 
@@ -31,7 +31,7 @@ pub struct Signals {
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SigInfo {
     pub sig: Sig,
-    pub code: SigCode,
+    pub code: i32,
     pub fields: SigFields,
 }
 

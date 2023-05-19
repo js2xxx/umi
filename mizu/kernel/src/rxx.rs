@@ -156,6 +156,7 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
         sie::set_stimer();
         sie::set_ssoft();
         sstatus::set_spie();
+        sstatus::set_sum();
 
         ksync::enable(true);
     }

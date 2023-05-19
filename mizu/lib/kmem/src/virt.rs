@@ -40,6 +40,28 @@ pub struct Virt {
 unsafe impl Send for Virt {}
 unsafe impl Sync for Virt {}
 
+struct TlbFlushOnDrop {
+    cpu_mask: usize,
+    addr: LAddr,
+    count: usize,
+}
+
+impl TlbFlushOnDrop {
+    fn new(cpu_mask: usize, addr: LAddr) -> Self {
+        TlbFlushOnDrop {
+            cpu_mask,
+            addr,
+            count: 0,
+        }
+    }
+}
+
+impl Drop for TlbFlushOnDrop {
+    fn drop(&mut self) {
+        tlb::flush(self.cpu_mask, self.addr, self.count)
+    }
+}
+
 impl Mapping {
     async fn commit(
         &mut self,
@@ -51,6 +73,9 @@ impl Mapping {
     ) -> Result<Vec<Range<PAddr>>, Error> {
         let writable = self.attr.contains(Attr::WRITABLE);
         let mut p = Vec::new();
+
+        let mut flush = TlbFlushOnDrop::new(cpu_mask, addr);
+
         for (index, addr) in
             (0..count.get()).map(|c| (c + self.start_index + offset, addr + (c << PAGE_SHIFT)))
         {
@@ -60,7 +85,7 @@ impl Mapping {
                 let (frame, _) = self.phys.commit(index, writable, true).await?;
                 let base = frame.base();
                 *entry = rv39_paging::Entry::new(base, self.attr, rv39_paging::Level::pt());
-                tlb::flush(cpu_mask, addr, 1);
+                flush.count += 1;
                 base
             } else {
                 entry.addr(rv39_paging::Level::pt())
@@ -78,6 +103,8 @@ impl Mapping {
         table: &mut Table,
         cpu_mask: usize,
     ) -> Result<(), Error> {
+        let mut flush = TlbFlushOnDrop::new(cpu_mask, addr);
+
         for (index, addr) in
             (0..count.get()).map(|c| (c + self.start_index + offset, addr + (c << PAGE_SHIFT)))
         {
@@ -85,15 +112,17 @@ impl Mapping {
                 let dirty = entry.get(rv39_paging::Level::pt()).1.contains(Attr::DIRTY);
                 self.phys.flush(index, Some(dirty), true).await?;
                 entry.reset();
-                tlb::flush(cpu_mask, addr, 1)
+                flush.count += 1;
+            } else {
+                flush = TlbFlushOnDrop::new(cpu_mask, addr + PAGE_SIZE);
             }
         }
         Ok(())
     }
 
-    async fn deep_fork(&self) -> Mapping {
+    fn deep_fork(&mut self) -> Mapping {
         Mapping {
-            phys: Arc::new(self.phys.clone_as(self.phys.is_cow())),
+            phys: Arc::new(self.phys.clone_as(self.phys.is_cow(), None)),
             start_index: self.start_index,
             attr: self.attr,
         }
@@ -147,6 +176,7 @@ impl Virt {
                     start_index,
                     attr: attr | Attr::VALID,
                 };
+                log::trace!("Virt::map result = {start:?}..{end:?}");
                 map.try_insert(start..end, mapping).map_err(|_| ENOSPC)?;
                 Ok(start)
             }
@@ -156,6 +186,7 @@ impl Virt {
 
                 let ent = map.allocate_with_aslr(aslr_key, LAddr::val).ok_or(ENOSPC)?;
                 let addr = *ent.key().start;
+                log::trace!("Virt::map result = {:?}", ent.key());
                 ent.insert(Mapping {
                     phys,
                     start_index,
@@ -393,21 +424,30 @@ impl Virt {
         }
     }
 
-    pub async fn deep_fork(self: Pin<&Self>) -> Result<Pin<Arsc<Virt>>, Error> {
-        let map = self.map.lock().await;
-        let table = self.root.lock().await;
+    pub async fn deep_fork(self: Pin<&Self>, init_root: Table) -> Result<Pin<Arsc<Virt>>, Error> {
+        let mut map = self.map.lock().await;
+        let mut table = self.root.lock().await;
 
         let range = map.root_range();
         let mut new_map = RangeMap::new(*range.start..*range.end);
 
-        for (addr, mapping) in map.iter() {
-            let new_mapping = mapping.deep_fork().await;
+        for (addr, mapping) in map.iter_mut() {
+            log::trace!("Virt::deep_fork: cloning mapping {addr:?}");
+            if mapping.attr.contains(Attr::WRITABLE) {
+                let count = (addr.end.val() - addr.start.val()) >> PAGE_SHIFT;
+                if let Some(count) = NonZeroUsize::new(count) {
+                    let cpu_mask = self.cpu_mask.load(SeqCst);
+                    mapping
+                        .decommit(*addr.start, 0, count, &mut table, cpu_mask)
+                        .await?;
+                }
+            }
+            let new_mapping = mapping.deep_fork();
             let _ = new_map.try_insert(*addr.start..*addr.end, new_mapping);
         }
 
-        let new_table = *table;
         Ok(Arsc::pin(Virt {
-            root: Mutex::new(new_table),
+            root: Mutex::new(init_root),
             map: Mutex::new(new_map),
             cpu_mask: AtomicUsize::new(0),
             _marker: PhantomPinned,

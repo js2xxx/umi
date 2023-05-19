@@ -1,4 +1,4 @@
-use alloc::{boxed::Box, sync::Arc};
+use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use core::{
     alloc::Layout,
     mem::{self, MaybeUninit},
@@ -6,35 +6,36 @@ use core::{
 };
 
 use afat32::NullTimeProvider;
+use arsc_rs::Arsc;
 use co_trap::UserCx;
+use futures_util::{stream, StreamExt, TryStreamExt};
 use kmem::{Phys, Virt};
 use ksc::{
     async_handler,
-    Error::{self, EBADF, EEXIST, EINVAL, EISDIR, ENODEV, ENOSYS, ENOTBLK, ENOTDIR, EPERM, ERANGE},
+    Error::{self, *},
 };
+use ktime::{Instant, InstantExt};
+use rand_riscv::RandomState;
 use rv39_paging::{Attr, LAddr, PAGE_MASK, PAGE_SHIFT};
 use umifs::{
     traits::IntoAnyExt,
-    types::{FileType, OpenOptions, Permissions},
+    types::{FileType, Metadata, OpenOptions, Permissions, SeekFrom},
 };
 
 use super::Files;
 use crate::{
     mem::{In, Out, UserBuffer, UserPtr},
-    syscall::ScRet,
+    syscall::{ScRet, Ts},
     task::TaskState,
 };
 
 #[async_handler]
 pub async fn read(
     ts: &mut TaskState,
-    cx: UserCx<'_, fn(i32, UserBuffer, usize) -> isize>,
+    cx: UserCx<'_, fn(i32, UserBuffer, usize) -> Result<usize, Error>>,
 ) -> ScRet {
-    async fn read_inner(
-        ts: &mut TaskState,
-        (fd, mut buffer, len): (i32, UserBuffer, usize),
-    ) -> Result<usize, Error> {
-        log::trace!("user read fd = {fd}, buffer = {buffer:?}, len = {len}");
+    let (fd, mut buffer, len) = cx.args();
+    let fut = async move {
         if len == 0 {
             return Ok(0);
         }
@@ -44,14 +45,8 @@ pub async fn read(
         let io = entry.to_io().ok_or(EBADF)?;
 
         io.read(&mut bufs).await
-    }
-
-    let ret = match read_inner(ts, cx.args()).await {
-        Ok(len) => len as isize,
-        Err(err) => err as isize,
     };
-    cx.ret(ret);
-
+    cx.ret(fut.await);
     ScRet::Continue(None)
 }
 
@@ -60,11 +55,8 @@ pub async fn write(
     ts: &mut TaskState,
     cx: UserCx<'_, fn(i32, UserBuffer, usize) -> Result<usize, Error>>,
 ) -> ScRet {
-    async fn write_inner(
-        ts: &mut TaskState,
-        (fd, buffer, len): (i32, UserBuffer, usize),
-    ) -> Result<usize, Error> {
-        log::trace!("user write fd = {fd}, buffer = {buffer:?}, len = {len}");
+    let (fd, buffer, len) = cx.args();
+    let fut = async move {
         if len == 0 {
             return Ok(0);
         }
@@ -74,12 +66,266 @@ pub async fn write(
         let io = entry.to_io().ok_or(EBADF)?;
 
         io.write(&mut bufs).await
-    }
+    };
+    cx.ret(fut.await);
+    ScRet::Continue(None)
+}
 
-    let ret = write_inner(ts, cx.args()).await;
-    cx.ret(ret);
+#[async_handler]
+pub async fn pread(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(i32, UserBuffer, usize, usize) -> Result<usize, Error>>,
+) -> ScRet {
+    let (fd, mut buffer, len, offset) = cx.args();
+    let fut = async move {
+        if len == 0 {
+            return Ok(0);
+        }
+        let mut bufs = buffer.as_mut_slice(ts.virt.as_ref(), len).await?;
+
+        let entry = ts.files.get(fd).await?;
+        let io = entry.to_io().ok_or(EBADF)?;
+
+        io.read_at(offset, &mut bufs).await
+    };
+    cx.ret(fut.await);
+    ScRet::Continue(None)
+}
+
+#[async_handler]
+pub async fn pwrite(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(i32, UserBuffer, usize, usize) -> Result<usize, Error>>,
+) -> ScRet {
+    let (fd, buffer, len, offset) = cx.args();
+    let fut = async move {
+        if len == 0 {
+            return Ok(0);
+        }
+        let mut bufs = buffer.as_slice(ts.virt.as_ref(), len).await?;
+
+        let entry = ts.files.get(fd).await?;
+        let io = entry.to_io().ok_or(EBADF)?;
+
+        io.write_at(offset, &mut bufs).await
+    };
+    cx.ret(fut.await);
+    ScRet::Continue(None)
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+#[repr(C)]
+pub struct IoVec {
+    buffer: UserBuffer,
+    len: usize,
+}
+const MAX_IOV_LEN: usize = 8;
+
+#[async_handler]
+pub async fn readv(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(i32, UserPtr<IoVec, In>, usize) -> Result<usize, Error>>,
+) -> ScRet {
+    let (fd, iov, vlen) = cx.args();
+    let fut = async move {
+        if vlen == 0 {
+            return Ok(0);
+        }
+        let vlen = vlen.min(MAX_IOV_LEN);
+        let entry = ts.files.get(fd).await?;
+        let io = entry.to_io().ok_or(EBADF)?;
+
+        let mut iov_buf = [Default::default(); MAX_IOV_LEN];
+        iov.read_slice(ts.virt.as_ref(), &mut iov_buf[..vlen])
+            .await?;
+        let virt = ts.virt.as_ref();
+        let mut bufs = stream::iter(iov_buf[..vlen].iter_mut())
+            .then(|iov| iov.buffer.as_mut_slice(virt, iov.len))
+            .try_fold(Vec::new(), |mut acc, mut iov| async move {
+                acc.append(&mut iov);
+                Ok(acc)
+            })
+            .await?;
+
+        io.read(&mut bufs).await
+    };
+    cx.ret(fut.await);
+    ScRet::Continue(None)
+}
+
+#[async_handler]
+pub async fn writev(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(i32, UserPtr<IoVec, In>, usize) -> Result<usize, Error>>,
+) -> ScRet {
+    let (fd, iov, vlen) = cx.args();
+    let fut = async move {
+        if vlen == 0 {
+            return Ok(0);
+        }
+        let vlen = vlen.min(MAX_IOV_LEN);
+        let entry = ts.files.get(fd).await?;
+        let io = entry.to_io().ok_or(EBADF)?;
+
+        let mut iov_buf = [Default::default(); MAX_IOV_LEN];
+        iov.read_slice(ts.virt.as_ref(), &mut iov_buf[..vlen])
+            .await?;
+        let virt = ts.virt.as_ref();
+        let mut bufs = stream::iter(iov_buf[..vlen].iter())
+            .then(|iov| iov.buffer.as_slice(virt, iov.len))
+            .try_fold(Vec::new(), |mut acc, mut iov| async move {
+                acc.append(&mut iov);
+                Ok(acc)
+            })
+            .await?;
+
+        io.write(&mut bufs).await
+    };
+    cx.ret(fut.await);
+    ScRet::Continue(None)
+}
+
+#[async_handler]
+pub async fn preadv(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(i32, UserPtr<IoVec, In>, usize, usize) -> Result<usize, Error>>,
+) -> ScRet {
+    let (fd, iov, vlen, offset) = cx.args();
+    let fut = async move {
+        if vlen == 0 {
+            return Ok(0);
+        }
+        let vlen = vlen.min(MAX_IOV_LEN);
+        let entry = ts.files.get(fd).await?;
+        let io = entry.to_io().ok_or(EBADF)?;
+
+        let mut iov_buf = [Default::default(); MAX_IOV_LEN];
+        iov.read_slice(ts.virt.as_ref(), &mut iov_buf[..vlen])
+            .await?;
+        let virt = ts.virt.as_ref();
+        let mut bufs = stream::iter(iov_buf[..vlen].iter_mut())
+            .then(|iov| iov.buffer.as_mut_slice(virt, iov.len))
+            .try_fold(Vec::new(), |mut acc, mut iov| async move {
+                acc.append(&mut iov);
+                Ok(acc)
+            })
+            .await?;
+
+        io.read_at(offset, &mut bufs).await
+    };
+    cx.ret(fut.await);
+    ScRet::Continue(None)
+}
+
+#[async_handler]
+pub async fn pwritev(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(i32, UserPtr<IoVec, In>, usize, usize) -> Result<usize, Error>>,
+) -> ScRet {
+    let (fd, iov, vlen, offset) = cx.args();
+    let fut = async move {
+        if vlen == 0 {
+            return Ok(0);
+        }
+        let vlen = vlen.min(MAX_IOV_LEN);
+        let entry = ts.files.get(fd).await?;
+        let io = entry.to_io().ok_or(EBADF)?;
+
+        let mut iov_buf = [Default::default(); MAX_IOV_LEN];
+        iov.read_slice(ts.virt.as_ref(), &mut iov_buf[..vlen])
+            .await?;
+        let virt = ts.virt.as_ref();
+        let mut bufs = stream::iter(iov_buf[..vlen].iter())
+            .then(|iov| iov.buffer.as_slice(virt, iov.len))
+            .try_fold(Vec::new(), |mut acc, mut iov| async move {
+                acc.append(&mut iov);
+                Ok(acc)
+            })
+            .await?;
+
+        io.write_at(offset, &mut bufs).await
+    };
+    cx.ret(fut.await);
+    ScRet::Continue(None)
+}
+
+#[async_handler]
+pub async fn lseek(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(i32, isize, isize) -> Result<usize, Error>>,
+) -> ScRet {
+    const SEEK_SET: isize = 0;
+    const SEEK_CUR: isize = 1;
+    const SEEK_END: isize = 2;
+
+    let (fd, offset, whence) = cx.args();
+    let fut = async move {
+        let whence = match whence {
+            SEEK_SET => SeekFrom::Start(offset as usize),
+            SEEK_CUR => SeekFrom::Current(offset),
+            SEEK_END => SeekFrom::End(offset),
+            _ => return Err(EINVAL),
+        };
+        let entry = ts.files.get(fd).await?;
+        let io = entry.to_io().ok_or(EISDIR)?;
+        io.seek(whence).await
+    };
+    cx.ret(fut.await);
 
     ScRet::Continue(None)
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+#[repr(C, packed)]
+pub struct Kstat {
+    dev: u64,
+    inode: u64,
+    mode: i32,
+    link_count: u32,
+    uid: u32,
+    gid: u32,
+    rdev: u64,
+    __pad: u64,
+    size: usize,
+    blksize: u32,
+    __pad2: u32,
+    blocks: u64,
+    atime: Ts,
+    mtime: Ts,
+    ctime: Ts,
+    __pad3: [u32; 2],
+}
+
+impl From<Metadata> for Kstat {
+    fn from(metadata: Metadata) -> Self {
+        fn mode(ty: FileType, perm: Permissions) -> i32 {
+            perm.bits() as i32 | ((ty.bits() as i32) << 12)
+        }
+
+        fn time(i: Option<Instant>) -> Ts {
+            i.map_or(Default::default(), |i| {
+                let (s, u) = i.to_su();
+                Ts {
+                    sec: s,
+                    nsec: u * 1000,
+                }
+            })
+        }
+
+        Kstat {
+            dev: 1,
+            inode: metadata.offset,
+            mode: mode(metadata.ty, metadata.perm),
+            link_count: 1,
+            size: metadata.len,
+            blksize: metadata.block_size as u32,
+            blocks: metadata.block_count as u64,
+            atime: time(metadata.last_access),
+            mtime: time(metadata.last_modified),
+            ctime: time(metadata.last_created),
+            ..Default::default()
+        }
+    }
 }
 
 macro_rules! fssc {
@@ -121,18 +367,18 @@ fssc!(
         path: UserPtr<u8, In>,
     ) -> Result<(), Error> {
         let mut buf = [0; MAX_PATH_LEN];
-        let path = path.read_path(virt, &mut buf).await?;
+        let (path, root) = path.read_path(virt, &mut buf).await?;
 
         log::trace!("user chdir path = {path:?}");
+        if root {
+            crate::fs::open_dir(path, OpenOptions::RDONLY, Permissions::SELF_R).await?;
 
-        crate::fs::open_dir(
-            path,
-            OpenOptions::RDONLY | OpenOptions::DIRECTORY,
-            Permissions::SELF_R,
-        )
-        .await?;
-
-        files.chdir(path).await;
+            files.chdir(path).await;
+        } else {
+            let path = files.cwd().join(path);
+            crate::fs::open_dir(&path, OpenOptions::RDONLY, Permissions::SELF_R).await?;
+            files.chdir(&path).await;
+        }
         Ok(())
     }
 
@@ -157,8 +403,7 @@ fssc!(
     pub async fn dup(_v: Pin<&Virt>, files: &Files, fd: i32) -> Result<i32, Error> {
         log::trace!("user dup fd = {fd}");
 
-        let entry = files.get(fd).await?;
-        files.open(entry).await
+        files.dup(fd, None).await
     }
 
     pub async fn dup3(
@@ -166,13 +411,34 @@ fssc!(
         files: &Files,
         old: i32,
         new: i32,
-        _flags: i32,
+        flags: i32,
     ) -> Result<i32, Error> {
-        log::trace!("user dup old = {old}, new = {new}, flags = {_flags}");
+        log::trace!("user dup old = {old}, new = {new}, flags = {flags}");
 
         let entry = files.get(old).await?;
-        files.reopen(new, entry).await;
+        files.reopen(new, entry, flags != 0).await;
         Ok(new)
+    }
+
+    pub async fn fcntl(
+        _v: Pin<&Virt>,
+        files: &Files,
+        fd: i32,
+        cmd: usize,
+        arg: usize,
+    ) -> Result<i32, Error> {
+        const F_DUPFD: usize = 0;
+        const F_GETFD: usize = 1;
+        const F_SETFD: usize = 2;
+        const F_DUPFD_CLOEXEC: usize = 1030;
+
+        match cmd {
+            F_DUPFD => files.dup(fd, None).await,
+            F_DUPFD_CLOEXEC => files.dup(fd, Some(arg != 0)).await,
+            F_GETFD => files.get_fi(fd).await.map(|fi| fi.close_on_exec as i32),
+            F_SETFD => files.set_fi(fd, arg != 0).await.map(|_| 0),
+            _ => Err(EINVAL),
+        }
     }
 
     pub async fn openat(
@@ -184,7 +450,7 @@ fssc!(
         perm: u32,
     ) -> Result<i32, Error> {
         let mut buf = [0; MAX_PATH_LEN];
-        let path = path.read_path(virt, &mut buf).await?;
+        let (path, root) = path.read_path(virt, &mut buf).await?;
 
         let options = OpenOptions::from_bits_truncate(options);
         let perm = Permissions::from_bits(perm).ok_or(EPERM)?;
@@ -193,9 +459,18 @@ fssc!(
             "user openat fd = {fd}, path = {path:?}, options = {options:?}, perm = {perm:?}"
         );
 
-        let base = files.get(fd).await?;
-        let (entry, _) = base.open(path, options, perm).await?;
-        files.open(entry).await
+        let entry = if root {
+            crate::fs::open(path, options, perm).await?.0
+        } else {
+            let base = files.get(fd).await?;
+            match base.open(path, options, perm).await {
+                Ok((entry, _)) => entry,
+                Err(ENOENT) if files.cwd() == "" => crate::fs::open(path, options, perm).await?.0,
+                Err(err) => return Err(err),
+            }
+        };
+        let close_on_exec = options.contains(OpenOptions::CLOEXEC);
+        files.open(entry, close_on_exec).await
     }
 
     pub async fn mkdirat(
@@ -206,69 +481,128 @@ fssc!(
         perm: u32,
     ) -> Result<i32, Error> {
         let mut buf = [0; MAX_PATH_LEN];
-        let path = path.read_path(virt, &mut buf).await?;
+        let (path, root) = path.read_path(virt, &mut buf).await?;
         let perm = Permissions::from_bits(perm).ok_or(EPERM)?;
-        let base = files.get(fd).await?;
 
         log::trace!("user mkdir fd = {fd}, path = {path:?}, perm = {perm:?}");
 
-        let (entry, created) = base
-            .open(path, OpenOptions::DIRECTORY | OpenOptions::CREAT, perm)
-            .await?;
+        let (entry, created) = if root {
+            crate::fs::open(path, OpenOptions::DIRECTORY | OpenOptions::CREAT, perm).await?
+        } else {
+            let base = files.get(fd).await?;
+            base.open(path, OpenOptions::DIRECTORY | OpenOptions::CREAT, perm)
+                .await?
+        };
         if !created {
             return Err(EEXIST);
         }
-        files.open(entry).await
+        files.open(entry, false).await
     }
 
     pub async fn fstat(
         virt: Pin<&Virt>,
         files: &Files,
         fd: i32,
-        out: UserPtr<u8, Out>,
+        out: UserPtr<Kstat, Out>,
     ) -> Result<(), Error> {
-        #[derive(Debug, Clone, Copy, Default)]
-        #[repr(C, packed)]
-        struct Kstat {
-            dev: u64,
-            inode: u64,
-            perm: Permissions,
-            link_count: u32,
-            uid: u32,
-            gid: u32,
-            rdev: u64,
-            __pad: u64,
-            size: usize,
-            blksize: u32,
-            __pad2: u32,
-            blocks: u64,
-            atime_sec: u64,
-            atime_nsec: u64,
-            mtime_sec: u64,
-            mtime_nsec: u64,
-            ctime_sec: u64,
-            ctime_nsec: u64,
-            __pad3: [u32; 2],
-        }
-        let mut out = out.cast::<Kstat>();
-
         let file = files.get(fd).await?;
         let metadata = file.metadata().await;
+        out.write(virt, metadata.into()).await
+    }
 
-        out.write(
-            virt,
-            Kstat {
-                dev: 1,
-                inode: metadata.offset,
-                perm: metadata.perm,
-                link_count: 1,
-                size: metadata.len,
-                blksize: metadata.block_size as u32,
-                blocks: metadata.block_count as u64,
-                ..Default::default()
-            },
-        )
-        .await
+    pub async fn fstatat(
+        virt: Pin<&Virt>,
+        files: &Files,
+        fd: i32,
+        path: UserPtr<u8, In>,
+        out: UserPtr<Kstat, Out>,
+    ) -> Result<(), Error> {
+        let mut buf = [0; MAX_PATH_LEN];
+        let (path, root) = path.read_path(virt, &mut buf).await?;
+
+        let file = if root {
+            crate::fs::open(
+                path,
+                OpenOptions::RDONLY,
+                Permissions::all_same(true, false, false),
+            )
+            .await?
+            .0
+        } else {
+            let base = files.get(fd).await?;
+            if path == "" {
+                base
+            } else {
+                base.open(
+                    path,
+                    OpenOptions::RDONLY,
+                    Permissions::all_same(true, false, false),
+                )
+                .await?
+                .0
+            }
+        };
+        let metadata = file.metadata().await;
+        out.write(virt, metadata.into()).await
+    }
+
+    pub async fn utimensat(
+        virt: Pin<&Virt>,
+        files: &Files,
+        fd: i32,
+        path: UserPtr<u8, In>,
+        times: UserPtr<Ts, In>,
+    ) -> Result<(), Error> {
+        const UTIME_NOW: u64 = 0x3fffffff;
+        const UTIME_OMIT: u64 = 0x3ffffffe;
+
+        let mut buf = [0; MAX_PATH_LEN];
+        let (path, root) = path.read_path(virt, &mut buf).await?;
+
+        let file = if root {
+            crate::fs::open(
+                path,
+                OpenOptions::WRONLY,
+                Permissions::all_same(true, false, false),
+            )
+            .await?
+            .0
+        } else {
+            let base = files.get(fd).await?;
+            if path == "" {
+                base
+            } else {
+                base.open(
+                    path,
+                    OpenOptions::WRONLY,
+                    Permissions::all_same(true, false, false),
+                )
+                .await?
+                .0
+            }
+        };
+
+        let now = Instant::now();
+        let (a, m) = if times.is_null() {
+            (Some(now), Some(now))
+        } else {
+            let mut buf = [Ts::default(); 2];
+            times.read_slice(virt, &mut buf).await?;
+            let [a, m] = buf;
+            let a = match a.nsec {
+                UTIME_NOW => Some(now),
+                UTIME_OMIT => None,
+                _ => Some(Instant::from_su(a.sec, a.nsec / 1000)),
+            };
+            let m = match m.nsec {
+                UTIME_NOW => Some(now),
+                UTIME_OMIT => None,
+                _ => Some(Instant::from_su(m.sec, m.nsec / 1000)),
+            };
+            (a, m)
+        };
+        file.set_times(None, m, a).await;
+        Ok(())
     }
 
     pub async fn getdents64(
@@ -334,15 +668,21 @@ fssc!(
         flags: i32,
     ) -> Result<(), Error> {
         let mut buf = [0; MAX_PATH_LEN];
-        let path = path.read_path(virt, &mut buf).await?;
+        let (path, root) = path.read_path(virt, &mut buf).await?;
 
         log::trace!("user mkdir fd = {fd}, path = {path:?}, flags = {flags}");
 
-        let base = files.get(fd).await?;
-        let base = base.to_dir_mut().ok_or(ENOTDIR)?;
-        base.unlink(path, (flags != 0).then_some(true)).await?;
-
-        Ok(())
+        if root {
+            crate::fs::unlink(path).await
+        } else {
+            let base = files.get(fd).await?;
+            let base = base.to_dir_mut().ok_or(ENOTDIR)?;
+            match base.unlink(path, (flags != 0).then_some(true)).await {
+                Ok(()) => Ok(()),
+                Err(ENOENT) if files.cwd() == "" => crate::fs::unlink(path).await,
+                Err(err) => Err(err),
+            }
+        }
     }
 
     pub async fn close(_v: Pin<&Virt>, files: &Files, fd: i32) -> Result<(), Error> {
@@ -389,8 +729,8 @@ fssc!(
         } else {
             let entry = files.get(fd).await?;
             match entry.clone().downcast::<Phys>() {
-                Some(phys) => phys.clone_as(cow),
-                None => Phys::new(entry.to_io().ok_or(EISDIR)?, 0, cow),
+                Some(phys) => phys.clone_as(cow, None),
+                None => crate::mem::new_phys(entry.to_io().ok_or(EISDIR)?, cow),
             }
         };
 
@@ -431,14 +771,14 @@ fssc!(
 
     pub async fn pipe(virt: Pin<&Virt>, files: &Files, fd: UserPtr<i32, Out>) -> Result<(), Error> {
         let (tx, rx) = crate::fs::pipe();
-        let tx = files.open(tx).await?;
-        let rx = files.open(rx).await?;
+        let tx = files.open(tx, false).await?;
+        let rx = files.open(rx, false).await?;
         fd.write_slice(virt, &[rx, tx], false).await
     }
 
     pub async fn mount(
         virt: Pin<&Virt>,
-        _f: &Files,
+        files: &Files,
         src: UserPtr<u8, In>,
         dst: UserPtr<u8, In>,
         ty: UserPtr<u8, In>,
@@ -448,17 +788,35 @@ fssc!(
         let mut src_buf = [0; MAX_PATH_LEN];
         let mut dst_buf = [0; MAX_PATH_LEN];
         let mut ty_buf = [0; 64];
-        let src = src.read_path(virt, &mut src_buf).await?;
-        let dst = dst.read_path(virt, &mut dst_buf).await?;
+        let (src, root_src) = src.read_path(virt, &mut src_buf).await?;
+        let (dst, root_dst) = dst.read_path(virt, &mut dst_buf).await?;
         let ty = ty.read_str(virt, &mut ty_buf).await?;
 
-        let (src, _) = crate::fs::open(
-            src,
-            Default::default(),
-            Permissions::all_same(true, true, true),
-        )
-        .await?;
-        crate::fs::open_dir(dst, Default::default(), Default::default()).await?;
+        let (src, _) = if root_src {
+            crate::fs::open(
+                src,
+                Default::default(),
+                Permissions::all_same(true, true, true),
+            )
+            .await?
+        } else {
+            crate::fs::open(
+                &files.cwd().join(src),
+                Default::default(),
+                Permissions::all_same(true, true, true),
+            )
+            .await?
+        };
+        if root_dst {
+            crate::fs::open_dir(dst, Default::default(), Default::default()).await?;
+        } else {
+            crate::fs::open_dir(
+                &files.cwd().join(dst),
+                Default::default(),
+                Default::default(),
+            )
+            .await?;
+        }
 
         let metadata = src.metadata().await;
         if metadata.ty != FileType::BLK {
@@ -482,12 +840,61 @@ fssc!(
 
     pub async fn umount(
         virt: Pin<&Virt>,
-        _f: &Files,
+        files: &Files,
         target: UserPtr<u8, In>,
     ) -> Result<(), Error> {
         let mut buf = [9; MAX_PATH_LEN];
-        let target = target.read_path(virt, &mut buf).await?;
-        crate::fs::unmount(target);
+        let (target, root) = target.read_path(virt, &mut buf).await?;
+        if root {
+            crate::fs::unmount(target);
+        } else {
+            crate::fs::unmount(&files.cwd().join(target));
+        }
+        Ok(())
+    }
+
+    pub async fn statfs(
+        virt: Pin<&Virt>,
+        files: &Files,
+        path: UserPtr<u8, In>,
+        out: UserPtr<u64, Out>,
+    ) -> Result<(), Error> {
+        let mut buf = [0; MAX_PATH_LEN];
+        let (path, root) = path.read_path(virt, &mut buf).await?;
+        let fs = if root {
+            crate::fs::get(path).ok_or(EINVAL)?.0
+        } else {
+            crate::fs::get(&files.cwd().join(path)).ok_or(EINVAL)?.0
+        };
+        let hasher = RandomState::new();
+        let stat = fs.stat().await;
+        let fsid = Arsc::as_ptr(&fs) as *const () as _;
+        out.write_slice(
+            virt,
+            &[
+                hasher.hash_one(stat.ty),
+                stat.block_size as u64,
+                stat.block_count as u64,
+                stat.block_free as u64,
+                stat.block_free as u64,
+                stat.file_count as u64,
+                0xdeadbeef,
+                fsid,
+                i16::MAX as _,
+                0xbeef,
+                0xbeef,
+                0,
+                0,
+                0,
+                0,
+            ],
+            false,
+        )
+        .await
+    }
+
+    pub async fn ioctl(_v: Pin<&Virt>, files: &Files, fd: i32) -> Result<(), Error> {
+        files.get(fd).await?;
         Ok(())
     }
 );

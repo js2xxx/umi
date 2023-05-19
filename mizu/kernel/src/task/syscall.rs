@@ -7,7 +7,6 @@ use core::{
 
 use arsc_rs::Arsc;
 use co_trap::{TrapFrame, UserCx};
-use kmem::Phys;
 use ksc::{
     async_handler,
     Error::{self, EINVAL, ENOTDIR},
@@ -19,7 +18,7 @@ use umifs::types::Permissions;
 
 use crate::{
     executor,
-    mem::{In, Out, UserPtr},
+    mem::{deep_fork, In, Out, UserPtr},
     syscall::ScRet,
     task::{
         fd::MAX_PATH_LEN,
@@ -66,6 +65,16 @@ pub async fn times(
 }
 
 #[async_handler]
+pub async fn set_tid_addr(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(UserPtr<usize, Out>) -> usize>,
+) -> ScRet {
+    ts.tid_clear = Some(cx.args());
+    cx.ret(ts.task.tid);
+    Continue(None)
+}
+
+#[async_handler]
 pub async fn exit(_: &mut TaskState, cx: UserCx<'_, fn(i32)>) -> ScRet {
     Break(cx.args())
 }
@@ -75,7 +84,7 @@ pub async fn exit_group(ts: &mut TaskState, cx: UserCx<'_, fn(i32)>) -> ScRet {
     ts.sig_fatal(
         SigInfo {
             sig: Sig::SIGKILL,
-            code: SigCode::USER,
+            code: SigCode::USER as _,
             fields: SigFields::None,
         },
         false,
@@ -169,7 +178,7 @@ async fn clone_task(
     let virt = if flags.contains(Flags::VM) {
         ts.virt.clone()
     } else {
-        ts.virt.as_ref().deep_fork().await?
+        deep_fork(&ts.virt).await?
     };
 
     let mut new_tf = *tf;
@@ -177,12 +186,9 @@ async fn clone_task(
     log::trace!("clone_task: setting up TrapFrame");
 
     new_tf.set_syscall_ret(0);
-    new_tf.gpr.tx.sp = match stack {
-        Some(stack) => stack.get(),
-        None => InitTask::load_stack(virt.as_ref(), None, Default::default())
-            .await?
-            .val(),
-    };
+    if let Some(stack) = stack {
+        new_tf.gpr.tx.sp = stack.get();
+    }
     if flags.contains(Flags::SETTLS) {
         new_tf.gpr.tx.tp = tls;
     }
@@ -198,6 +204,7 @@ async fn clone_task(
             Arsc::new((new_tid, spin::RwLock::new(vec![task.clone()])))
         },
         sig_mask: SigSet::EMPTY,
+        sig_stack: None,
         brk: ts.brk,
         system_times: 0,
         user_times: 0,
@@ -217,7 +224,7 @@ async fn clone_task(
 
     log::trace!(
         "clone_task: push into parent: {:?}",
-        new_ts.task.parent.upgrade()
+        new_ts.task.parent.upgrade().map(|s| s.tid)
     );
 
     if !flags.contains(Flags::THREAD) {
@@ -304,10 +311,12 @@ pub async fn execve(
         let mut ptrs = [0; 64];
         let mut data = [0; MAX_PATH_LEN];
 
-        let name = name
-            .read_path(ts.virt.as_ref(), &mut data)
-            .await?
-            .to_path_buf();
+        let (name, root) = name.read_path(ts.virt.as_ref(), &mut data).await?;
+        let name = if root {
+            name.to_path_buf()
+        } else {
+            ts.files.cwd().join(name)
+        };
 
         let argc = args
             .read_slice_with_zero(ts.virt.as_ref(), &mut ptrs)
@@ -336,7 +345,7 @@ pub async fn execve(
         ts.sig_fatal(
             SigInfo {
                 sig: Sig::SIGKILL,
-                code: SigCode::DETHREAD,
+                code: SigCode::DETHREAD as _,
                 fields: SigFields::None,
             },
             true,
@@ -344,15 +353,19 @@ pub async fn execve(
         ts.virt.clear().await;
         ts.task.shared_sig.swap(Default::default(), SeqCst);
 
+        let phys = crate::mem::new_phys(file.to_io().ok_or(ENOTDIR)?, true);
+
+        log::trace!("task::execve: start loading ELF. No way back.");
+
         let init = InitTask::from_elf(
             ts.task.parent.clone(),
-            Phys::new(file.to_io().ok_or(ENOTDIR)?, 0, true),
+            &Arc::new(phys),
             ts.virt.clone(),
             Default::default(),
             args,
         )
         .await?;
-        init.reset(ts, tf);
+        init.reset(ts, tf).await;
 
         Ok(())
     }

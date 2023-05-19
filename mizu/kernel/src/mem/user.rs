@@ -53,6 +53,13 @@ impl<T: Copy, D: PtrType> fmt::Debug for UserPtr<T, D> {
 }
 
 impl<T: Copy, D> UserPtr<T, D> {
+    pub fn new(addr: LAddr) -> Self {
+        UserPtr {
+            addr,
+            _marker: PhantomData,
+        }
+    }
+
     pub fn addr(&self) -> LAddr {
         self.addr
     }
@@ -226,11 +233,13 @@ impl<D: InPtr> UserPtr<u8, D> {
         &self,
         virt: Pin<&Virt>,
         buf: &'a mut [u8],
-    ) -> Result<&'a Path, Error> {
+    ) -> Result<(&'a Path, bool), Error> {
         let path = self.read_str(virt, buf).await?;
-        let path = path.strip_prefix('/').unwrap_or(path);
         let path = path.strip_prefix('.').unwrap_or(path);
-        Ok(Path::new(path))
+        Ok(match path.strip_prefix('/') {
+            Some(path) => (Path::new(path), true),
+            None => (Path::new(path), false),
+        })
     }
 }
 
@@ -276,7 +285,7 @@ impl<T: Copy, D: OutPtr> UserPtr<T, D> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct UserBuffer {
     addr: LAddr,
 }
@@ -288,6 +297,14 @@ impl RawReg for UserBuffer {
 
     fn into_raw(self) -> usize {
         self.addr.val()
+    }
+}
+
+impl Default for UserBuffer {
+    fn default() -> Self {
+        UserBuffer {
+            addr: 0usize.into(),
+        }
     }
 }
 
