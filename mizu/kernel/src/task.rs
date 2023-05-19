@@ -27,7 +27,7 @@ use self::{fd::Files, signal::SigStack};
 pub use self::{future::yield_now, init::InitTask, syscall::*};
 use crate::mem::{Out, UserPtr};
 
-const DEFAULT_STACK_SIZE: usize = PAGE_SIZE * 4;
+const DEFAULT_STACK_SIZE: usize = PAGE_SIZE * 8;
 const DEFAULT_STACK_ATTR: Attr = Attr::USER_ACCESS
     .union(Attr::READABLE)
     .union(Attr::WRITABLE);
@@ -63,7 +63,7 @@ impl Task {
         rx
     }
 
-    pub async fn wait(&self) -> i32 {
+    pub async fn wait(&self) -> (i32, Option<Sig>) {
         let event = self.event();
         let msg = "Task returned without sending a break code";
         loop {
@@ -71,8 +71,8 @@ impl Task {
                 Ok(e) => e,
                 Err(err) => err.data().expect(msg),
             };
-            if let TaskEvent::Exited(code, _) = e {
-                break code;
+            if let TaskEvent::Exited(code, sig) = e {
+                break (code, sig);
             }
         }
     }

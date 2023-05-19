@@ -492,8 +492,8 @@ fssc!(
         } else {
             let entry = files.get(fd).await?;
             match entry.clone().downcast::<Phys>() {
-                Some(phys) => phys.clone_as(cow, None).await,
-                None => Phys::new(entry.to_io().ok_or(EISDIR)?, 0, cow),
+                Some(phys) => phys.clone_as(cow, None),
+                None => crate::mem::new_phys(entry.to_io().ok_or(EISDIR)?, cow),
             }
         };
 

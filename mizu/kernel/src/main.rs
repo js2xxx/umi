@@ -29,7 +29,6 @@ use alloc::{
     vec,
 };
 
-use kmem::Phys;
 use umifs::types::{OpenOptions, Permissions};
 
 pub use self::rxx::executor;
@@ -159,16 +158,18 @@ async fn main(fdt: usize) {
         "wcsstr_false_negative",
     ];
 
-    let (runner, _) = rt
-        .open(
-            "runtest".as_ref(),
-            OpenOptions::RDONLY,
-            Permissions::all_same(true, false, true),
-        )
+    let oo = OpenOptions::RDONLY;
+    let perm = Permissions::all_same(true, false, true);
+
+    rt.clone()
+        .open("entry-static".as_ref(), oo, perm)
         .await
         .unwrap();
-    let runner = Arc::new(Phys::new(runner.to_io().unwrap(), 0, true));
 
+    let (runner, _) = rt.open("runtest".as_ref(), oo, perm).await.unwrap();
+    let runner = Arc::new(mem::new_phys(runner.to_io().unwrap(), true));
+
+    log::warn!("Start testing");
     for case in spec {
         log::info!("Running test case {case:?}");
 
@@ -188,7 +189,7 @@ async fn main(fdt: usize) {
         .unwrap();
         let task = task.spawn().unwrap();
         let code = task.wait().await;
-        log::info!("test case {case:?} returned with {code}\n");
+        log::info!("test case {case:?} returned with {code:?}\n");
     }
 
     log::warn!("Goodbye!");

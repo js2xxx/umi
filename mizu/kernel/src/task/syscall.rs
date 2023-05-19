@@ -7,7 +7,6 @@ use core::{
 
 use arsc_rs::Arsc;
 use co_trap::{TrapFrame, UserCx};
-use kmem::Phys;
 use ksc::{
     async_handler,
     Error::{self, EINVAL, ENOTDIR},
@@ -352,9 +351,13 @@ pub async fn execve(
         ts.virt.clear().await;
         ts.task.shared_sig.swap(Default::default(), SeqCst);
 
+        let phys = crate::mem::new_phys(file.to_io().ok_or(ENOTDIR)?, true);
+
+        log::trace!("task::execve: start loading ELF. No way back.");
+
         let init = InitTask::from_elf(
             ts.task.parent.clone(),
-            &Arc::new(Phys::new(file.to_io().ok_or(ENOTDIR)?, 0, true)),
+            &Arc::new(phys),
             ts.virt.clone(),
             Default::default(),
             args,

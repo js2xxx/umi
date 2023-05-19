@@ -90,10 +90,10 @@ impl Entry for DevBlocks {
         let block = crate::dev::block(n).ok_or(ENOENT)?;
         let block_shift = block.block_shift();
         let block_count = block.capacity_blocks();
-        let phys = Arc::new(Phys::new(block.to_io().unwrap(), 0, false));
+        let phys = crate::mem::new_phys(block.to_io().unwrap(), false);
         Ok((
             Arc::new(BlockEntry {
-                io: phys,
+                io: Arc::new(phys),
                 block_shift,
                 block_count,
             }),

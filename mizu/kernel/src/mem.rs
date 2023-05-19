@@ -8,7 +8,7 @@ use co_trap::UserCx;
 use kmem::{CreateSub, Phys, Virt};
 use ksc::{async_handler, Error};
 use rv39_paging::{Attr, CANONICAL_PREFIX, PAGE_MASK, PAGE_SHIFT, PAGE_SIZE};
-use umifs::traits::IoExt;
+use umifs::traits::{IntoAnyExt, Io, IoExt};
 
 pub use self::user::{In, InOut, Out, UserBuffer, UserPtr, UA_FAULT};
 use crate::{rxx::KERNEL_PAGES, syscall::ScRet, task::TaskState};
@@ -17,6 +17,15 @@ pub const USER_RANGE: Range<usize> = 0x1000..((!CANONICAL_PREFIX) + 1);
 
 pub fn new_virt() -> Pin<Arsc<Virt>> {
     Virt::new(USER_RANGE.start.into()..USER_RANGE.end.into(), KERNEL_PAGES)
+}
+
+pub fn new_phys(from: Arc<dyn Io>, cow: bool) -> Phys {
+    if let Some(phys) = from.clone().downcast::<Phys>() {
+        return phys.clone_as(cow, None);
+    }
+    let (phys, flusher) = Phys::new(from, 0, cow);
+    crate::executor().spawn(flusher).detach();
+    phys
 }
 
 pub async fn deep_fork(virt: &Pin<Arsc<Virt>>) -> Result<Pin<Arsc<Virt>>, Error> {
@@ -74,29 +83,25 @@ pub async fn test_phys() {
     // log::debug!("#1: p = {p:#?}");
 
     let mut buf = [0; 5];
-    let p1 = p
-        .clone_as(
-            false,
-            Some(CreateSub {
-                index_offset: 0,
-                fixed_count: Some(1),
-            }),
-        )
-        .await;
+    let p1 = p.clone_as(
+        true,
+        Some(CreateSub {
+            index_offset: 0,
+            fixed_count: Some(1),
+        }),
+    );
     // log::debug!("#2: p = {p:#?}");
     // log::debug!("#2: p1 = {p1:#?}");
     p1.read_exact_at(0, &mut buf).await.unwrap();
     assert_eq!(buf, [1, 2, 3, 4, 5]);
 
-    let p2 = p
-        .clone_as(
-            true,
-            Some(CreateSub {
-                index_offset: 1,
-                fixed_count: Some(1),
-            }),
-        )
-        .await;
+    let p2 = p.clone_as(
+        false,
+        Some(CreateSub {
+            index_offset: 1,
+            fixed_count: Some(1),
+        }),
+    );
 
     // log::debug!("#3: p = {p:#?}");
     // log::debug!("#3: p1 = {p1:#?}");

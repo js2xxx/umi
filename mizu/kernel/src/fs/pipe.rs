@@ -238,9 +238,7 @@ pub fn pipe() -> (Arc<dyn Entry>, Arc<dyn Entry>) {
         readable: Event::new(),
         end_pos: Default::default(),
     });
-    let tx = Arc::new(Sender {
-        pipe: pipe.clone(),
-    });
+    let tx = Arc::new(Sender { pipe: pipe.clone() });
     let rx = Arc::new(Receiver {
         pipe,
         pos: Default::default(),

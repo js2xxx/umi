@@ -10,7 +10,6 @@ use core::time::Duration;
 use afat32::NullTimeProvider;
 use arsc_rs::Arsc;
 use crossbeam_queue::ArrayQueue;
-use kmem::Phys;
 use ksc::Error::{self, ENOENT};
 use ksync::{Sender, TryRecvError};
 use ktime::sleep;
@@ -101,7 +100,7 @@ pub async fn fs_init() {
     mount("tmp".into(), Arsc::new(tmp::TmpFs));
     for block in blocks() {
         let block_shift = block.block_shift();
-        let phys = Phys::new(block.to_io().unwrap(), 0, false);
+        let phys = crate::mem::new_phys(block.to_io().unwrap(), false);
         if let Ok(fs) =
             afat32::FatFileSystem::new(Arc::new(phys), block_shift, NullTimeProvider).await
         {

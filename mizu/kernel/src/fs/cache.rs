@@ -9,6 +9,7 @@ use ksc::{
     Error::{self, *},
 };
 use rand_riscv::RandomState;
+use rv39_paging::{PAGE_MASK, PAGE_SHIFT};
 use spin::RwLock;
 use umifs::{path::*, traits::*, types::*};
 
@@ -87,9 +88,14 @@ impl Entry for CachedDir {
             (EntryCache::Dir(dir.clone()), dir)
         } else {
             let io = entry.clone().to_io().ok_or(EISDIR)?;
+            let stream_len = io.stream_len().await?;
+            let phys = crate::mem::new_phys(io, false);
+            for index in 0..(stream_len + PAGE_MASK) >> PAGE_SHIFT {
+                phys.commit(index, None, false).await?;
+            }
             let file = Arc::new(CachedFile {
                 entry,
-                phys: Arc::new(Phys::new(io, 0, false)),
+                phys: Arc::new(phys),
             });
             (EntryCache::File(file.clone()), file)
         };
@@ -146,48 +152,9 @@ impl DirectoryMut for CachedDir {
     }
 }
 
-#[async_trait]
-impl Io for CachedFile {
-    fn read<'a: 'r, 'b: 'r, 'r>(
-        &'a self,
-        buffer: &'b mut [IoSliceMut],
-    ) -> Boxed<'r, Result<usize, Error>> {
-        self.phys.read(buffer)
-    }
-
-    fn write<'a: 'r, 'b: 'r, 'r>(
-        &'a self,
-        buffer: &'b mut [IoSlice],
-    ) -> Boxed<'r, Result<usize, Error>> {
-        self.phys.write(buffer)
-    }
-
-    fn seek<'a: 'r, 'r>(&'a self, whence: SeekFrom) -> Boxed<'r, Result<usize, Error>> {
-        self.phys.seek(whence)
-    }
-
-    fn stream_len<'a: 'r, 'r>(&'a self) -> Boxed<'r, Result<usize, Error>> {
-        self.phys.stream_len()
-    }
-
-    fn read_at<'a: 'r, 'b: 'r, 'r>(
-        &'a self,
-        offset: usize,
-        buffer: &'b mut [IoSliceMut],
-    ) -> Boxed<'r, Result<usize, Error>> {
-        self.phys.read_at(offset, buffer)
-    }
-
-    fn write_at<'a: 'r, 'b: 'r, 'r>(
-        &'a self,
-        offset: usize,
-        buffer: &'b mut [IoSlice],
-    ) -> Boxed<'r, Result<usize, Error>> {
-        self.phys.write_at(offset, buffer)
-    }
-
-    async fn flush(&self) -> Result<(), Error> {
-        self.phys.flush_all().await
+impl ToIo for CachedFile {
+    fn to_io(self: Arc<Self>) -> Option<Arc<dyn Io>> {
+        Some(self.phys.clone())
     }
 }
 

@@ -120,9 +120,9 @@ impl Mapping {
         Ok(())
     }
 
-    async fn deep_fork(&mut self) -> Mapping {
+    fn deep_fork(&mut self) -> Mapping {
         Mapping {
-            phys: Arc::new(self.phys.clone_as(self.phys.is_cow(), None).await),
+            phys: Arc::new(self.phys.clone_as(self.phys.is_cow(), None)),
             start_index: self.start_index,
             attr: self.attr,
         }
@@ -442,7 +442,7 @@ impl Virt {
                         .await?;
                 }
             }
-            let new_mapping = mapping.deep_fork().await;
+            let new_mapping = mapping.deep_fork();
             let _ = new_map.try_insert(*addr.start..*addr.end, new_mapping);
         }
 

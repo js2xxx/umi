@@ -257,7 +257,7 @@ impl<T: TimeProvider> Io for FatFile<T> {
                 Some(cluster) => (cluster, clusters),
                 None => {
                     let mut clusters = RwLockUpgradableReadGuard::upgrade(clusters).await;
-                    let mut times = clusters.len() + 1 - cluster_index;
+                    let mut times = cluster_index + 1 - clusters.len();
                     let mut prev = clusters.last().cloned();
                     loop {
                         let new = self.fs.fat.allocate(prev, None).await?;
