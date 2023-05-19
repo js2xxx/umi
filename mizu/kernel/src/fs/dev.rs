@@ -4,6 +4,7 @@ use arsc_rs::Arsc;
 use async_trait::async_trait;
 use kmem::Phys;
 use ksc::Error::{self, EEXIST, ENOENT, ENOTDIR, EPERM};
+use rv39_paging::PAGE_SIZE;
 use umifs::{
     misc::{Null, Zero},
     path::Path,
@@ -23,6 +24,16 @@ impl FileSystem for DevFs {
 
     async fn flush(&self) -> Result<(), Error> {
         Ok(())
+    }
+
+    async fn stat(&self) -> FsStat {
+        FsStat {
+            ty: "devfs",
+            block_size: PAGE_SIZE,
+            block_count: 0xdeadbeef,
+            block_free: 0,
+            file_count: 3 + crate::dev::blocks().len(),
+        }
     }
 }
 

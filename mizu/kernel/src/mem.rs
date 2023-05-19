@@ -6,7 +6,7 @@ use core::{ops::Range, pin::Pin};
 use arsc_rs::Arsc;
 use co_trap::UserCx;
 use kmem::{CreateSub, Phys, Virt};
-use ksc::{async_handler, Error};
+use ksc::{async_handler, Error::{self, ENOMEM}};
 use rv39_paging::{Attr, CANONICAL_PREFIX, PAGE_MASK, PAGE_SHIFT, PAGE_SIZE};
 use umifs::traits::{IntoAnyExt, Io, IoExt};
 
@@ -36,6 +36,7 @@ pub async fn deep_fork(virt: &Pin<Arsc<Virt>>) -> Result<Pin<Arsc<Virt>>, Error>
 pub async fn brk(ts: &mut TaskState, cx: UserCx<'_, fn(usize) -> Result<usize, Error>>) -> ScRet {
     async fn inner(virt: Pin<&Virt>, brk: &mut usize, addr: usize) -> Result<(), Error> {
         const BRK_START: usize = 0x12345000;
+        const BRK_END: usize = 0x56789000;
         if addr == 0 {
             if (*brk) == 0 {
                 let laddr = virt
@@ -51,7 +52,10 @@ pub async fn brk(ts: &mut TaskState, cx: UserCx<'_, fn(usize) -> Result<usize, E
             }
         } else {
             let old_page = *brk & !PAGE_MASK;
-            let new_page = addr & !PAGE_MASK;
+            let new_page = (addr + PAGE_MASK) & !PAGE_MASK;
+            if new_page >= BRK_END {
+                return Err(ENOMEM)
+            }
             let count = (new_page - old_page) >> PAGE_SHIFT;
             if count > 0 {
                 virt.map(

@@ -40,6 +40,10 @@ impl FileSystem for CachedFs {
     fn flush<'a: 'r, 'r>(&'a self) -> Boxed<'r, Result<(), Error>> {
         self.inner.flush()
     }
+
+    fn stat<'a: 'r, 'r>(&'a self) -> Boxed<'r, FsStat> {
+        self.inner.stat()
+    }
 }
 
 #[derive(Clone)]

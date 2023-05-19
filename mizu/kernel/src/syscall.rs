@@ -56,6 +56,7 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         .map(GETCWD, fd::getcwd)
         .map(DUP, fd::dup)
         .map(DUP3, fd::dup3)
+        .map(FCNTL, fd::fcntl)
         .map(OPENAT, fd::openat)
         .map(MKDIRAT, fd::mkdirat)
         .map(FSTAT, fd::fstat)
@@ -66,6 +67,7 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         .map(PIPE2, fd::pipe)
         .map(MOUNT, fd::mount)
         .map(UMOUNT2, fd::umount)
+        .map(STATFS, fd::statfs)
         .map(IOCTL, fd::ioctl)
         // Time
         .map(GETTIMEOFDAY, gettimeofday)

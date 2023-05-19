@@ -6,6 +6,7 @@ use core::{
 };
 
 use afat32::NullTimeProvider;
+use arsc_rs::Arsc;
 use co_trap::UserCx;
 use futures_util::{stream, StreamExt, TryStreamExt};
 use kmem::{Phys, Virt};
@@ -13,6 +14,7 @@ use ksc::{
     async_handler,
     Error::{self, *},
 };
+use rand_riscv::RandomState;
 use rv39_paging::{Attr, LAddr, PAGE_MASK, PAGE_SHIFT};
 use umifs::{
     traits::IntoAnyExt,
@@ -280,7 +282,7 @@ fssc!(
     pub async fn dup(_v: Pin<&Virt>, files: &Files, fd: i32) -> Result<i32, Error> {
         log::trace!("user dup fd = {fd}");
 
-        files.dup(fd).await
+        files.dup(fd, None).await
     }
 
     pub async fn dup3(
@@ -295,6 +297,27 @@ fssc!(
         let entry = files.get(old).await?;
         files.reopen(new, entry, flags != 0).await;
         Ok(new)
+    }
+
+    pub async fn fcntl(
+        _v: Pin<&Virt>,
+        files: &Files,
+        fd: i32,
+        cmd: usize,
+        arg: usize,
+    ) -> Result<i32, Error> {
+        const F_DUPFD: usize = 0;
+        const F_GETFD: usize = 1;
+        const F_SETFD: usize = 2;
+        const F_DUPFD_CLOEXEC: usize = 1030;
+
+        match cmd {
+            F_DUPFD => files.dup(fd, None).await,
+            F_DUPFD_CLOEXEC => files.dup(fd, Some(arg != 0)).await,
+            F_GETFD => files.get_fi(fd).await.map(|fi| fi.close_on_exec as i32),
+            F_SETFD => files.set_fi(fd, arg != 0).await.map(|_| 0),
+            _ => Err(EINVAL),
+        }
     }
 
     pub async fn openat(
@@ -670,6 +693,46 @@ fssc!(
             crate::fs::unmount(&files.cwd().join(target));
         }
         Ok(())
+    }
+
+    pub async fn statfs(
+        virt: Pin<&Virt>,
+        files: &Files,
+        path: UserPtr<u8, In>,
+        out: UserPtr<u64, Out>,
+    ) -> Result<(), Error> {
+        let mut buf = [0; MAX_PATH_LEN];
+        let (path, root) = path.read_path(virt, &mut buf).await?;
+        let fs = if root {
+            crate::fs::get(path).ok_or(EINVAL)?.0
+        } else {
+            crate::fs::get(&files.cwd().join(path)).ok_or(EINVAL)?.0
+        };
+        let hasher = RandomState::new();
+        let stat = fs.stat().await;
+        let fsid = Arsc::as_ptr(&fs) as *const () as _;
+        out.write_slice(
+            virt,
+            &[
+                hasher.hash_one(stat.ty),
+                stat.block_size as u64,
+                stat.block_count as u64,
+                stat.block_free as u64,
+                stat.block_free as u64,
+                stat.file_count as u64,
+                0xdeadbeef,
+                fsid,
+                i16::MAX as _,
+                0xbeef,
+                0xbeef,
+                0,
+                0,
+                0,
+                0,
+            ],
+            false,
+        )
+        .await
     }
 
     pub async fn ioctl(_v: Pin<&Virt>, files: &Files, fd: i32) -> Result<(), Error> {

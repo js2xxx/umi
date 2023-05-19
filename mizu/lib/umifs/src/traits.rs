@@ -7,7 +7,7 @@ pub use umio::{IntoAny, IntoAnyExt, Io, IoExt, ToIo};
 
 use crate::{
     path::Path,
-    types::{DirEntry, Metadata, OpenOptions, Permissions},
+    types::{DirEntry, Metadata, OpenOptions, Permissions, FsStat},
 };
 
 #[async_trait]
@@ -15,6 +15,8 @@ pub trait FileSystem: IntoAny + Send + Sync + 'static {
     async fn root_dir(self: Arsc<Self>) -> Result<Arc<dyn Entry>, Error>;
 
     async fn flush(&self) -> Result<(), Error>;
+
+    async fn stat(&self) -> FsStat;
 }
 
 #[async_trait]

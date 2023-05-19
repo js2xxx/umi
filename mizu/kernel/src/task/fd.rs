@@ -21,11 +21,12 @@ use umifs::{
 pub use self::syscall::*;
 
 pub const MAX_FDS: usize = 65536;
+const CWD: i32 = -100;
 
 #[derive(Clone)]
-struct FdInfo {
-    entry: Arc<dyn Entry>,
-    close_on_exec: bool,
+pub struct FdInfo {
+    pub entry: Arc<dyn Entry>,
+    pub close_on_exec: bool,
 }
 
 struct Fds {
@@ -107,8 +108,7 @@ impl Files {
         Ok(fd)
     }
 
-    async fn get_fi(&self, fd: i32) -> Result<FdInfo, Error> {
-        const CWD: i32 = -100;
+    pub async fn get_fi(&self, fd: i32) -> Result<FdInfo, Error> {
         match fd {
             CWD => {
                 let entry = crate::fs::open_dir(
@@ -126,9 +126,18 @@ impl Files {
         }
     }
 
-    pub async fn dup(&self, fd: i32) -> Result<i32, Error> {
+    pub async fn set_fi(&self, fd: i32, close_on_exec: bool) -> Result<(), Error> {
+        if fd == CWD {
+            return Ok(());
+        }
+        let mut map = self.fds.map.write().await;
+        map.get_mut(&fd).ok_or(EBADF)?.close_on_exec = close_on_exec;
+        Ok(())
+    }
+
+    pub async fn dup(&self, fd: i32, close_on_exec: Option<bool>) -> Result<i32, Error> {
         let fi = self.get_fi(fd).await?;
-        self.open(fi.entry, fi.close_on_exec).await
+        self.open(fi.entry, close_on_exec.unwrap_or(fi.close_on_exec)).await
     }
 
     pub async fn get(&self, fd: i32) -> Result<Arc<dyn Entry>, Error> {

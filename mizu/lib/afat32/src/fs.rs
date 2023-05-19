@@ -8,7 +8,10 @@ use arsc_rs::Arsc;
 use async_trait::async_trait;
 use ksc_core::Error::{self, ENOSYS};
 use spin::RwLock;
-use umifs::traits::{Entry, FileSystem, Io, IoExt};
+use umifs::{
+    traits::{Entry, FileSystem, Io, IoExt},
+    types::FsStat,
+};
 
 use crate::{
     raw::{BiosParameterBlock, BootSector, FsInfoSector},
@@ -183,13 +186,13 @@ impl<T: TimeProvider> FatFileSystem<T> {
         Ok(())
     }
 
-    async fn recalc_free_clusters(&self) -> Result<u32, Error> {
-        let free_cluster_count = u32::try_from(self.fat.count_free().await)?;
+    async fn recalc_free_clusters(&self) -> u32 {
+        let free_cluster_count = self.fat.count_free().await as u32;
         ksync::critical(|| {
             let mut fs_info_sector = self.fs_info.write();
             fs_info_sector.set_free_cluster_count(free_cluster_count);
         });
-        Ok(free_cluster_count)
+        free_cluster_count
     }
 
     pub async fn flush(&self) -> Result<(), Error> {
@@ -204,18 +207,18 @@ impl<T: TimeProvider> FatFileSystem<T> {
             .map(FatDir::new)
     }
 
-    pub async fn stats(&self) -> Result<FatStats, Error> {
+    pub async fn stats(&self) -> FatStats {
         let free_clusters_option = ksync::critical(|| self.fs_info.read().free_cluster_count);
         let free_clusters = if let Some(n) = free_clusters_option {
             n
         } else {
-            self.recalc_free_clusters().await?
+            self.recalc_free_clusters().await
         };
-        Ok(FatStats {
+        FatStats {
             cluster_size: self.bpb.cluster_size(),
             total_clusters: self.fat.cluster_count(),
             free_clusters,
-        })
+        }
     }
 
     pub fn status(&self) -> FsStatusFlags {
@@ -231,6 +234,17 @@ impl<T: TimeProvider> FileSystem for FatFileSystem<T> {
 
     async fn flush(&self) -> Result<(), Error> {
         (*self).flush().await
+    }
+
+    async fn stat(&self) -> FsStat {
+        let s = (*self).stats().await;
+        FsStat {
+            ty: "fat32",
+            block_size: s.cluster_size() as usize,
+            block_count: s.total_clusters() as usize,
+            block_free: s.free_clusters() as usize,
+            file_count: 0xdeadbeef,
+        }
     }
 }
 

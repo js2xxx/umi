@@ -11,7 +11,7 @@ use spin::Mutex;
 use umifs::{
     path::{Path, PathBuf},
     traits::{Directory, DirectoryMut, Entry, FileSystem, Io, ToIo},
-    types::{DirEntry, FileType, Metadata, OpenOptions, Permissions},
+    types::{DirEntry, FileType, FsStat, Metadata, OpenOptions, Permissions},
 };
 
 pub struct TmpFs(Arc<TmpRoot>);
@@ -30,6 +30,16 @@ impl FileSystem for TmpFs {
 
     async fn flush(&self) -> Result<(), Error> {
         Ok(())
+    }
+
+    async fn stat(&self) -> FsStat {
+        FsStat {
+            ty: "tmpfs",
+            block_size: PAGE_SIZE,
+            block_count: 0xdeadbeef,
+            block_free: 0,
+            file_count: ksync::critical(|| self.0 .0.lock().len()),
+        }
     }
 }
 
