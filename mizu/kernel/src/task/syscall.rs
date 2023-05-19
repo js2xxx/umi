@@ -311,10 +311,12 @@ pub async fn execve(
         let mut ptrs = [0; 64];
         let mut data = [0; MAX_PATH_LEN];
 
-        let name = name
-            .read_path(ts.virt.as_ref(), &mut data)
-            .await?
-            .to_path_buf();
+        let (name, root) = name.read_path(ts.virt.as_ref(), &mut data).await?;
+        let name = if root {
+            name.to_path_buf()
+        } else {
+            ts.files.cwd().join(name)
+        };
 
         let argc = args
             .read_slice_with_zero(ts.virt.as_ref(), &mut ptrs)

@@ -244,18 +244,18 @@ fssc!(
         path: UserPtr<u8, In>,
     ) -> Result<(), Error> {
         let mut buf = [0; MAX_PATH_LEN];
-        let path = path.read_path(virt, &mut buf).await?;
+        let (path, root) = path.read_path(virt, &mut buf).await?;
 
         log::trace!("user chdir path = {path:?}");
+        if root {
+            crate::fs::open_dir(path, OpenOptions::RDONLY, Permissions::SELF_R).await?;
 
-        crate::fs::open_dir(
-            path,
-            OpenOptions::RDONLY | OpenOptions::DIRECTORY,
-            Permissions::SELF_R,
-        )
-        .await?;
-
-        files.chdir(path).await;
+            files.chdir(path).await;
+        } else {
+            let path = files.cwd().join(path);
+            crate::fs::open_dir(&path, OpenOptions::RDONLY, Permissions::SELF_R).await?;
+            files.chdir(&path).await;
+        }
         Ok(())
     }
 
@@ -306,7 +306,7 @@ fssc!(
         perm: u32,
     ) -> Result<i32, Error> {
         let mut buf = [0; MAX_PATH_LEN];
-        let path = path.read_path(virt, &mut buf).await?;
+        let (path, root) = path.read_path(virt, &mut buf).await?;
 
         let options = OpenOptions::from_bits_truncate(options);
         let perm = Permissions::from_bits(perm).ok_or(EPERM)?;
@@ -315,11 +315,15 @@ fssc!(
             "user openat fd = {fd}, path = {path:?}, options = {options:?}, perm = {perm:?}"
         );
 
-        let base = files.get(fd).await?;
-        let entry = match base.open(path, options, perm).await {
-            Ok((entry, _)) => entry,
-            Err(ENOENT) if files.cwd() == "" => crate::fs::open(path, options, perm).await?.0,
-            Err(err) => return Err(err),
+        let entry = if root {
+            crate::fs::open(path, options, perm).await?.0
+        } else {
+            let base = files.get(fd).await?;
+            match base.open(path, options, perm).await {
+                Ok((entry, _)) => entry,
+                Err(ENOENT) if files.cwd() == "" => crate::fs::open(path, options, perm).await?.0,
+                Err(err) => return Err(err),
+            }
         };
         let close_on_exec = options.contains(OpenOptions::CLOEXEC);
         files.open(entry, close_on_exec).await
@@ -333,15 +337,18 @@ fssc!(
         perm: u32,
     ) -> Result<i32, Error> {
         let mut buf = [0; MAX_PATH_LEN];
-        let path = path.read_path(virt, &mut buf).await?;
+        let (path, root) = path.read_path(virt, &mut buf).await?;
         let perm = Permissions::from_bits(perm).ok_or(EPERM)?;
-        let base = files.get(fd).await?;
 
         log::trace!("user mkdir fd = {fd}, path = {path:?}, perm = {perm:?}");
 
-        let (entry, created) = base
-            .open(path, OpenOptions::DIRECTORY | OpenOptions::CREAT, perm)
-            .await?;
+        let (entry, created) = if root {
+            crate::fs::open(path, OpenOptions::DIRECTORY | OpenOptions::CREAT, perm).await?
+        } else {
+            let base = files.get(fd).await?;
+            base.open(path, OpenOptions::DIRECTORY | OpenOptions::CREAT, perm)
+                .await?
+        };
         if !created {
             return Err(EEXIST);
         }
@@ -381,16 +388,24 @@ fssc!(
         out: UserPtr<Kstat, Out>,
     ) -> Result<(), Error> {
         let mut buf = [0; MAX_PATH_LEN];
-        let path = path.read_path(virt, &mut buf).await?;
+        let (path, root) = path.read_path(virt, &mut buf).await?;
 
-        let base = files.get(fd).await?;
-        let (file, _) = base
-            .open(
+        let (file, _) = if root {
+            crate::fs::open(
                 path,
                 OpenOptions::RDONLY,
                 Permissions::all_same(true, false, false),
             )
-            .await?;
+            .await?
+        } else {
+            let base = files.get(fd).await?;
+            base.open(
+                path,
+                OpenOptions::RDONLY,
+                Permissions::all_same(true, false, false),
+            )
+            .await?
+        };
         let metadata = file.metadata().await;
 
         out.write(
@@ -472,15 +487,21 @@ fssc!(
         flags: i32,
     ) -> Result<(), Error> {
         let mut buf = [0; MAX_PATH_LEN];
-        let path = path.read_path(virt, &mut buf).await?;
+        let (path, root) = path.read_path(virt, &mut buf).await?;
 
         log::trace!("user mkdir fd = {fd}, path = {path:?}, flags = {flags}");
 
-        let base = files.get(fd).await?;
-        let base = base.to_dir_mut().ok_or(ENOTDIR)?;
-        base.unlink(path, (flags != 0).then_some(true)).await?;
-
-        Ok(())
+        if root {
+            crate::fs::unlink(path).await
+        } else {
+            let base = files.get(fd).await?;
+            let base = base.to_dir_mut().ok_or(ENOTDIR)?;
+            match base.unlink(path, (flags != 0).then_some(true)).await {
+                Ok(()) => Ok(()),
+                Err(ENOENT) if files.cwd() == "" => crate::fs::unlink(path).await,
+                Err(err) => Err(err),
+            }
+        }
     }
 
     pub async fn close(_v: Pin<&Virt>, files: &Files, fd: i32) -> Result<(), Error> {
@@ -576,7 +597,7 @@ fssc!(
 
     pub async fn mount(
         virt: Pin<&Virt>,
-        _f: &Files,
+        files: &Files,
         src: UserPtr<u8, In>,
         dst: UserPtr<u8, In>,
         ty: UserPtr<u8, In>,
@@ -586,17 +607,35 @@ fssc!(
         let mut src_buf = [0; MAX_PATH_LEN];
         let mut dst_buf = [0; MAX_PATH_LEN];
         let mut ty_buf = [0; 64];
-        let src = src.read_path(virt, &mut src_buf).await?;
-        let dst = dst.read_path(virt, &mut dst_buf).await?;
+        let (src, root_src) = src.read_path(virt, &mut src_buf).await?;
+        let (dst, root_dst) = dst.read_path(virt, &mut dst_buf).await?;
         let ty = ty.read_str(virt, &mut ty_buf).await?;
 
-        let (src, _) = crate::fs::open(
-            src,
-            Default::default(),
-            Permissions::all_same(true, true, true),
-        )
-        .await?;
-        crate::fs::open_dir(dst, Default::default(), Default::default()).await?;
+        let (src, _) = if root_src {
+            crate::fs::open(
+                src,
+                Default::default(),
+                Permissions::all_same(true, true, true),
+            )
+            .await?
+        } else {
+            crate::fs::open(
+                &files.cwd().join(src),
+                Default::default(),
+                Permissions::all_same(true, true, true),
+            )
+            .await?
+        };
+        if root_dst {
+            crate::fs::open_dir(dst, Default::default(), Default::default()).await?;
+        } else {
+            crate::fs::open_dir(
+                &files.cwd().join(dst),
+                Default::default(),
+                Default::default(),
+            )
+            .await?;
+        }
 
         let metadata = src.metadata().await;
         if metadata.ty != FileType::BLK {
@@ -620,12 +659,16 @@ fssc!(
 
     pub async fn umount(
         virt: Pin<&Virt>,
-        _f: &Files,
+        files: &Files,
         target: UserPtr<u8, In>,
     ) -> Result<(), Error> {
         let mut buf = [9; MAX_PATH_LEN];
-        let target = target.read_path(virt, &mut buf).await?;
-        crate::fs::unmount(target);
+        let (target, root) = target.read_path(virt, &mut buf).await?;
+        if root {
+            crate::fs::unmount(target);
+        } else {
+            crate::fs::unmount(&files.cwd().join(target));
+        }
         Ok(())
     }
 

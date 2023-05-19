@@ -233,11 +233,13 @@ impl<D: InPtr> UserPtr<u8, D> {
         &self,
         virt: Pin<&Virt>,
         buf: &'a mut [u8],
-    ) -> Result<&'a Path, Error> {
+    ) -> Result<(&'a Path, bool), Error> {
         let path = self.read_str(virt, buf).await?;
-        let path = path.strip_prefix('/').unwrap_or(path);
         let path = path.strip_prefix('.').unwrap_or(path);
-        Ok(Path::new(path))
+        Ok(match path.strip_prefix('/') {
+            Some(path) => (Path::new(path), true),
+            None => (Path::new(path), false),
+        })
     }
 }
 

@@ -5,12 +5,12 @@ mod serial;
 mod tmp;
 
 use alloc::{collections::BTreeMap, sync::Arc};
-use core::time::Duration;
+use core::{fmt, time::Duration};
 
 use afat32::NullTimeProvider;
 use arsc_rs::Arsc;
 use crossbeam_queue::ArrayQueue;
-use ksc::Error::{self, ENOENT};
+use ksc::Error::{self, EACCES, ENOENT};
 use ksync::{Sender, TryRecvError};
 use ktime::sleep;
 use spin::RwLock;
@@ -28,6 +28,12 @@ type FsCollection = BTreeMap<PathBuf, FsHandle>;
 struct FsHandle {
     fs: Arsc<dyn FileSystem>,
     unmount: Sender<ArrayQueue<()>>,
+}
+
+impl fmt::Debug for FsHandle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FsHandle").finish_non_exhaustive()
+    }
 }
 
 static FS: RwLock<FsCollection> = RwLock::new(BTreeMap::new());
@@ -62,11 +68,13 @@ pub fn unmount(path: &Path) {
 }
 
 pub fn get(path: &Path) -> Option<(Arsc<dyn FileSystem>, &Path)> {
-    let fs = FS.read();
-    let mut iter = fs.iter().rev(); // Reverse the iterator for longest-prefix matching.
-    iter.find_map(|(p, handle)| match path.strip_prefix(p) {
-        Ok(path) => Some((handle.fs.clone(), path)),
-        Err(_) => None,
+    ksync::critical(|| {
+        let fs = FS.read();
+        let mut iter = fs.iter().rev(); // Reverse the iterator for longest-prefix matching.
+        iter.find_map(|(p, handle)| match path.strip_prefix(p) {
+            Ok(path) => Some((handle.fs.clone(), path)),
+            Err(_) => None,
+        })
     })
 }
 
@@ -93,6 +101,19 @@ pub async fn open_dir(
 ) -> Result<Arc<dyn Entry>, Error> {
     let (entry, _) = open(path, options | OpenOptions::DIRECTORY, perm).await?;
     Ok(entry)
+}
+
+pub async fn unlink(path: &Path) -> Result<(), Error> {
+    let (entry, _) = open(
+        path.parent().ok_or(ENOENT)?,
+        OpenOptions::DIRECTORY | OpenOptions::RDWR,
+        Permissions::all_same(true, true, false),
+    )
+    .await?;
+    let Some(dir) = entry.to_dir_mut() else {
+        return Err(EACCES)
+    };
+    dir.unlink(path, None).await
 }
 
 pub async fn fs_init() {

@@ -1,14 +1,12 @@
-use alloc::{
-    boxed::Box,
-    sync::{Arc, Weak},
-};
+use alloc::{boxed::Box, sync::Arc};
 
 use arsc_rs::Arsc;
 use async_trait::async_trait;
-use hashbrown::{hash_map::Entry as H, HashMap};
+use hashbrown::HashMap;
 use kmem::Phys;
 use ksc::Error::{self, EEXIST, ENOENT, ENOSYS, ENOTDIR, EPERM};
 use rand_riscv::RandomState;
+use rv39_paging::PAGE_SIZE;
 use spin::Mutex;
 use umifs::{
     path::{Path, PathBuf},
@@ -35,7 +33,7 @@ impl FileSystem for TmpFs {
     }
 }
 
-struct TmpRoot(Mutex<HashMap<PathBuf, Weak<TmpFile>, RandomState>>);
+struct TmpRoot(Mutex<HashMap<PathBuf, Arc<TmpFile>, RandomState>>);
 
 impl ToIo for TmpRoot {}
 
@@ -64,28 +62,27 @@ impl Entry for TmpRoot {
             });
             ksync::critical(|| {
                 let mut list = self.0.lock();
-                match list.entry(path.to_path_buf()) {
-                    H::Occupied(mut ent) => {
-                        if ent.get().upgrade().is_none() {
-                            ent.insert(Arc::downgrade(&file));
-                        } else {
-                            return Err(EEXIST);
-                        }
-                    }
-                    H::Vacant(ent) => {
-                        ent.insert(Arc::downgrade(&file));
-                    }
+                if list.try_insert(path.to_path_buf(), file.clone()).is_err() {
+                    return Err(EEXIST);
                 }
                 Ok((file as _, true))
             })
         } else {
-            let weak = ksync::critical(|| self.0.lock().get(path).cloned());
-            Ok((weak.and_then(|w| w.upgrade()).ok_or(ENOENT)?, false))
+            let file = ksync::critical(|| self.0.lock().get(path).cloned());
+            Ok((file.ok_or(ENOENT)?, false))
         }
     }
 
     async fn metadata(&self) -> Metadata {
         todo!()
+    }
+
+    fn to_dir(self: Arc<Self>) -> Option<Arc<dyn Directory>> {
+        Some(self)
+    }
+
+    fn to_dir_mut(self: Arc<Self>) -> Option<Arc<dyn DirectoryMut>> {
+        Some(self)
     }
 }
 
@@ -158,7 +155,7 @@ impl Entry for TmpFile {
             len: self.phys.stream_len().await.unwrap(),
             offset: u64::MAX,
             perm: self.perm,
-            block_size: 0,
+            block_size: PAGE_SIZE,
             block_count: 0,
             last_access: None,
             last_modified: None,

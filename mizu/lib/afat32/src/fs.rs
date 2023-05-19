@@ -1,10 +1,13 @@
 use alloc::{boxed::Box, sync::Arc, vec};
-use core::sync::atomic::{AtomicU8, Ordering::SeqCst};
+use core::{
+    mem,
+    sync::atomic::{AtomicU8, Ordering::SeqCst},
+};
 
 use arsc_rs::Arsc;
 use async_trait::async_trait;
 use ksc_core::Error::{self, ENOSYS};
-use ksync::RwLock;
+use spin::RwLock;
 use umifs::traits::{Entry, FileSystem, Io, IoExt};
 
 use crate::{
@@ -94,8 +97,8 @@ impl<T: TimeProvider> FatFileSystem<T> {
         prev_cluster: Option<u32>,
         zero: bool,
     ) -> Result<u32, Error> {
-        let hint = self.fs_info.read().await.next_free_cluster;
-        let cluster = { self.fat.allocate(prev_cluster, hint).await? };
+        let hint = ksync::critical(|| self.fs_info.read().next_free_cluster);
+        let cluster = self.fat.allocate(prev_cluster, hint).await?;
         if zero {
             write_zeros(
                 &**self.fat.device(),
@@ -104,9 +107,11 @@ impl<T: TimeProvider> FatFileSystem<T> {
             )
             .await?;
         }
-        let mut fs_info = self.fs_info.write().await;
-        fs_info.set_next_free_cluster(cluster + 1);
-        fs_info.map_free_clusters(|n| n - 1);
+        ksync::critical(|| {
+            let mut fs_info = self.fs_info.write();
+            fs_info.set_next_free_cluster(cluster + 1);
+            fs_info.map_free_clusters(|n| n - 1);
+        });
         Ok(cluster)
     }
 
@@ -124,30 +129,36 @@ impl<T: TimeProvider> FatFileSystem<T> {
 
     pub(crate) async fn truncate_cluster_chain(&self, cluster: u32) -> Result<(), Error> {
         let num_free = self.fat.truncate(cluster).await?;
-        let mut fs_info = self.fs_info.write().await;
-        fs_info.map_free_clusters(|n| n + num_free);
+        ksync::critical(|| {
+            let mut fs_info = self.fs_info.write();
+            fs_info.map_free_clusters(|n| n + num_free);
+        });
         Ok(())
     }
 
     pub(crate) async fn free_cluster_chain(&self, cluster: u32) -> Result<(), Error> {
         let num_free = self.fat.free(cluster).await?;
-        let mut fs_info = self.fs_info.write().await;
-        fs_info.map_free_clusters(|n| n + num_free);
+        ksync::critical(|| {
+            let mut fs_info = self.fs_info.write();
+            fs_info.map_free_clusters(|n| n + num_free);
+        });
         Ok(())
     }
 
     async fn flush_fs_info(&self) -> Result<(), Error> {
-        let mut fs_info = self.fs_info.write().await;
-        if fs_info.dirty {
+        let bytes = ksync::critical(|| {
+            let mut fs_info = self.fs_info.write();
+            let dirty = mem::replace(&mut fs_info.dirty, false);
+            dirty.then(|| fs_info.to_bytes())
+        });
+
+        if let Some((prefix, suffix)) = bytes {
             let offset = self
                 .bpb
                 .bytes_from_sectors(u32::from(self.bpb.fs_info_sector));
-            let (prefix, suffix) = fs_info.to_bytes();
             for b in [&prefix, &[0; 480], &suffix] as [&[u8]; 3] {
                 self.fat.device().write_all_at(offset as usize, b).await?;
             }
-
-            fs_info.dirty = false;
         }
         Ok(())
     }
@@ -174,8 +185,10 @@ impl<T: TimeProvider> FatFileSystem<T> {
 
     async fn recalc_free_clusters(&self) -> Result<u32, Error> {
         let free_cluster_count = u32::try_from(self.fat.count_free().await)?;
-        let mut fs_info_sector = self.fs_info.write().await;
-        fs_info_sector.set_free_cluster_count(free_cluster_count);
+        ksync::critical(|| {
+            let mut fs_info_sector = self.fs_info.write();
+            fs_info_sector.set_free_cluster_count(free_cluster_count);
+        });
         Ok(free_cluster_count)
     }
 
@@ -192,7 +205,7 @@ impl<T: TimeProvider> FatFileSystem<T> {
     }
 
     pub async fn stats(&self) -> Result<FatStats, Error> {
-        let free_clusters_option = self.fs_info.read().await.free_cluster_count;
+        let free_clusters_option = ksync::critical(|| self.fs_info.read().free_cluster_count);
         let free_clusters = if let Some(n) = free_clusters_option {
             n
         } else {

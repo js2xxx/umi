@@ -15,6 +15,7 @@ dependencies = [
  "ksync",
  "log",
  "nom",
+ "spin",
  "umifs",
 ]
 
