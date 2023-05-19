@@ -3,6 +3,7 @@ use alloc::{boxed::Box, sync::Arc};
 use arsc_rs::Arsc;
 use async_trait::async_trait;
 use ksc_core::Error;
+use ktime_core::Instant;
 pub use umio::{IntoAny, IntoAnyExt, Io, IoExt, ToIo};
 
 use crate::{
@@ -29,6 +30,10 @@ pub trait Entry: IntoAny + Send + ToIo + Sync + 'static {
     ) -> Result<(Arc<dyn Entry>, bool), Error>;
 
     async fn metadata(&self) -> Metadata;
+
+    async fn set_times(&self, c: Option<Instant>, m: Option<Instant>, a: Option<Instant>) {
+        let _ = (c, m, a);
+    }
 
     fn to_dir(self: Arc<Self>) -> Option<Arc<dyn Directory>> {
         None

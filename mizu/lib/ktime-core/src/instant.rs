@@ -103,4 +103,8 @@ impl super::InstantExt for Instant {
     fn to_su(&self) -> (u64, u64) {
         ((self.0 / 1_000_000) as u64, (self.0 % 1_000_000) as u64)
     }
+
+    fn from_su(secs: u64, micros: u64) -> Self{
+        Instant(secs as u128 * 1_000_000 + micros as u128)
+    }
 }

@@ -14,17 +14,18 @@ use ksc::{
     async_handler,
     Error::{self, *},
 };
+use ktime::{Instant, InstantExt};
 use rand_riscv::RandomState;
 use rv39_paging::{Attr, LAddr, PAGE_MASK, PAGE_SHIFT};
 use umifs::{
     traits::IntoAnyExt,
-    types::{FileType, OpenOptions, Permissions, SeekFrom},
+    types::{FileType, Metadata, OpenOptions, Permissions, SeekFrom},
 };
 
 use super::Files;
 use crate::{
     mem::{In, Out, UserBuffer, UserPtr},
-    syscall::ScRet,
+    syscall::{ScRet, Ts},
     task::TaskState,
 };
 
@@ -289,13 +290,42 @@ pub struct Kstat {
     blksize: u32,
     __pad2: u32,
     blocks: u64,
-    atime_sec: u64,
-    atime_nsec: u64,
-    mtime_sec: u64,
-    mtime_nsec: u64,
-    ctime_sec: u64,
-    ctime_nsec: u64,
+    atime: Ts,
+    mtime: Ts,
+    ctime: Ts,
     __pad3: [u32; 2],
+}
+
+impl From<Metadata> for Kstat {
+    fn from(metadata: Metadata) -> Self {
+        fn mode(ty: FileType, perm: Permissions) -> i32 {
+            perm.bits() as i32 | ((ty.bits() as i32) << 12)
+        }
+        
+        fn time(i: Option<Instant>) -> Ts {
+            i.map_or(Default::default(), |i| {
+                let (s, u) = i.to_su();
+                Ts {
+                    sec: s,
+                    nsec: u * 1000,
+                }
+            })
+        }
+
+        Kstat {
+            dev: 1,
+            inode: metadata.offset,
+            mode: mode(metadata.ty, metadata.perm),
+            link_count: 1,
+            size: metadata.len,
+            blksize: metadata.block_size as u32,
+            blocks: metadata.block_count as u64,
+            atime: time(metadata.last_access),
+            mtime: time(metadata.last_modified),
+            ctime: time(metadata.last_created),
+            ..Default::default()
+        }
+    }
 }
 
 macro_rules! fssc {
@@ -477,21 +507,7 @@ fssc!(
     ) -> Result<(), Error> {
         let file = files.get(fd).await?;
         let metadata = file.metadata().await;
-
-        out.write(
-            virt,
-            Kstat {
-                dev: 1,
-                inode: metadata.offset,
-                mode: mode(metadata.ty, metadata.perm),
-                link_count: 1,
-                size: metadata.len,
-                blksize: metadata.block_size as u32,
-                blocks: metadata.block_count as u64,
-                ..Default::default()
-            },
-        )
-        .await
+        out.write(virt, metadata.into()).await
     }
 
     pub async fn fstatat(
@@ -527,21 +543,66 @@ fssc!(
             }
         };
         let metadata = file.metadata().await;
+        out.write(virt, metadata.into()).await
+    }
 
-        out.write(
-            virt,
-            Kstat {
-                dev: 1,
-                inode: metadata.offset,
-                mode: mode(metadata.ty, metadata.perm),
-                link_count: 1,
-                size: metadata.len,
-                blksize: metadata.block_size as u32,
-                blocks: metadata.block_count as u64,
-                ..Default::default()
-            },
-        )
-        .await
+    pub async fn utimensat(
+        virt: Pin<&Virt>,
+        files: &Files,
+        fd: i32,
+        path: UserPtr<u8, In>,
+        times: UserPtr<Ts, In>,
+    ) -> Result<(), Error> {
+        const UTIME_NOW: u64 = 0x3fffffff;
+        const UTIME_OMIT: u64 = 0x3ffffffe;
+
+        let mut buf = [0; MAX_PATH_LEN];
+        let (path, root) = path.read_path(virt, &mut buf).await?;
+
+        let file = if root {
+            crate::fs::open(
+                path,
+                OpenOptions::WRONLY,
+                Permissions::all_same(true, false, false),
+            )
+            .await?
+            .0
+        } else {
+            let base = files.get(fd).await?;
+            if path == "" {
+                base
+            } else {
+                base.open(
+                    path,
+                    OpenOptions::WRONLY,
+                    Permissions::all_same(true, false, false),
+                )
+                .await?
+                .0
+            }
+        };
+
+        let now = Instant::now();
+        let (a, m) = if times.is_null() {
+            (Some(now), Some(now))
+        } else {
+            let mut buf = [Ts::default(); 2];
+            times.read_slice(virt, &mut buf).await?;
+            let [a, m] = buf;
+            let a = match a.nsec {
+                UTIME_NOW => Some(now),
+                UTIME_OMIT => None,
+                _ => Some(Instant::from_su(a.sec, a.nsec / 1000)),
+            };
+            let m = match m.nsec {
+                UTIME_NOW => Some(now),
+                UTIME_OMIT => None,
+                _ => Some(Instant::from_su(m.sec, m.nsec / 1000)),
+            };
+            (a, m)
+        };
+        file.set_times(None, m, a).await;
+        Ok(())
     }
 
     pub async fn getdents64(
@@ -837,7 +898,3 @@ fssc!(
         Ok(())
     }
 );
-
-fn mode(ty: FileType, perm: Permissions) -> i32 {
-    perm.bits() as i32 | ((ty.bits() as i32) << 12)
-}

@@ -12,11 +12,17 @@ pub use self::instant::Instant;
 
 pub trait InstantExt {
     fn to_su(&self) -> (u64, u64);
+
+    fn from_su(secs: u64, micros: u64) -> Self;
 }
 
 #[cfg(feature = "test")]
 impl InstantExt for Instant {
     fn to_su(&self) -> (u64, u64) {
         (0, 0)
+    }
+
+    fn from_su(secs: u64, micros: u64) -> Self {
+        unimplemented!("{secs} * 1000000 + {micros}")
     }
 }

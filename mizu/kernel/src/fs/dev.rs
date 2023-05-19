@@ -72,6 +72,7 @@ impl Entry for DevRoot {
                         let dev_blocks = Arc::new(DevBlocks);
                         dev_blocks.open(next, options, perm).await
                     }
+                    "null" | "zero" | "serial" => Err(ENOTDIR),
                     _ => Err(ENOENT),
                 }
             }

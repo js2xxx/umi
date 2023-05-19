@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use hashbrown::HashMap;
 use kmem::Phys;
 use ksc::Error::{self, EEXIST, ENOENT, ENOSYS, ENOTDIR, EPERM};
+use ktime::Instant;
 use rand_riscv::RandomState;
 use rv39_paging::PAGE_SIZE;
 use spin::Mutex;
@@ -69,6 +70,14 @@ impl Entry for TmpRoot {
             let file = Arc::new(TmpFile {
                 phys: Arc::new(Phys::new_anon(true)),
                 perm,
+                times: Mutex::new({
+                    let now = Instant::now();
+                    Times {
+                        created: now,
+                        modified: now,
+                        accessed: now,
+                    }
+                }),
             });
             ksync::critical(|| {
                 let mut list = self.0.lock();
@@ -128,9 +137,17 @@ impl DirectoryMut for TmpRoot {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct Times {
+    created: Instant,
+    modified: Instant,
+    accessed: Instant,
+}
+
 struct TmpFile {
     phys: Arc<Phys>,
     perm: Permissions,
+    times: Mutex<Times>,
 }
 
 impl ToIo for TmpFile {
@@ -160,6 +177,7 @@ impl Entry for TmpFile {
     }
 
     async fn metadata(&self) -> Metadata {
+        let times = ksync::critical(|| *self.times.lock());
         Metadata {
             ty: FileType::FILE,
             len: self.phys.stream_len().await.unwrap(),
@@ -167,9 +185,24 @@ impl Entry for TmpFile {
             perm: self.perm,
             block_size: PAGE_SIZE,
             block_count: 0,
-            last_access: None,
-            last_modified: None,
-            last_created: None,
+            last_access: Some(times.accessed),
+            last_modified: Some(times.modified),
+            last_created: Some(times.created),
         }
+    }
+
+    async fn set_times(&self, c: Option<Instant>, m: Option<Instant>, a: Option<Instant>) {
+        ksync::critical(|| {
+            let mut times = self.times.lock();
+            if let Some(c) = c {
+                times.created = c;
+            }
+            if let Some(m) = m {
+                times.modified = m;
+            }
+            if let Some(a) = a {
+                times.accessed = a;
+            }
+        })
     }
 }

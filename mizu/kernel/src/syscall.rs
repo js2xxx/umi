@@ -65,6 +65,7 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         .map(MKDIRAT, fd::mkdirat)
         .map(FSTAT, fd::fstat)
         .map(NEWFSTATAT, fd::fstatat)
+        .map(UTIMENSAT, fd::utimensat)
         .map(GETDENTS64, fd::getdents64)
         .map(UNLINKAT, fd::unlinkat)
         .map(CLOSE, fd::close)
@@ -92,6 +93,13 @@ pub struct Tv {
     pub usec: u64,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+#[repr(C, packed)]
+pub struct Ts {
+    pub sec: u64,
+    pub nsec: u64,
+}
+
 #[async_handler]
 async fn gettimeofday(
     ts: &mut TaskState,
@@ -110,13 +118,17 @@ async fn gettimeofday(
 #[async_handler]
 async fn clock_gettime(
     ts: &mut TaskState,
-    cx: UserCx<'_, fn(usize, UserPtr<Tv, Out>) -> Result<(), Error>>,
+    cx: UserCx<'_, fn(usize, UserPtr<Ts, Out>) -> Result<(), Error>>,
 ) -> ScRet {
     let (_, mut out) = cx.args();
 
     let now = Instant::now();
     let (sec, usec) = now.to_su();
-    let ret = out.write(ts.virt.as_ref(), Tv { sec, usec }).await;
+    let t = Ts {
+        sec,
+        nsec: usec * 1000,
+    };
+    let ret = out.write(ts.virt.as_ref(), t).await;
     cx.ret(ret);
 
     ScRet::Continue(None)
@@ -125,16 +137,16 @@ async fn clock_gettime(
 #[async_handler]
 async fn sleep(
     ts: &mut TaskState,
-    cx: UserCx<'_, fn(UserPtr<Tv, In>, UserPtr<Tv, Out>) -> Result<(), Error>>,
+    cx: UserCx<'_, fn(UserPtr<Ts, In>, UserPtr<Ts, Out>) -> Result<(), Error>>,
 ) -> ScRet {
     async fn sleep_inner(
         virt: Pin<&Virt>,
-        input: UserPtr<Tv, In>,
-        mut output: UserPtr<Tv, Out>,
+        input: UserPtr<Ts, In>,
+        mut output: UserPtr<Ts, Out>,
     ) -> Result<(), Error> {
         let tv = input.read(virt).await?;
 
-        let dur = Duration::from_secs(tv.sec) + Duration::from_micros(tv.usec);
+        let dur = Duration::from_secs(tv.sec) + Duration::from_nanos(tv.nsec);
         if dur.is_zero() {
             crate::task::yield_now().await
         } else {
