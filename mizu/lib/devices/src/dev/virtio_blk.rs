@@ -2,6 +2,7 @@ use alloc::boxed::Box;
 use core::iter;
 
 use async_trait::async_trait;
+use futures_util::{stream, StreamExt, TryStreamExt};
 use ksc::Error::{self, EINVAL, EIO, ENOBUFS, ENOMEM, EPERM};
 use ksync::{event::Event, Semaphore};
 use spin::lock_api::Mutex;
@@ -24,13 +25,14 @@ unsafe impl Sync for VirtioBlock {}
 
 impl VirtioBlock {
     pub const SECTOR_SIZE: usize = virtio_drivers::device::blk::SECTOR_SIZE;
+    const OP_COUNT: usize = 3;
 
     pub fn new(mmio: MmioTransport) -> Result<Self, virtio_drivers::Error> {
         VirtIOBlk::new(mmio).map(|device| {
             let size = device.virt_queue_size() as usize;
 
             VirtioBlock {
-                virt_queue: Semaphore::new(size / 3),
+                virt_queue: Semaphore::new(size / Self::OP_COUNT),
                 device: Mutex::new(device),
                 event: iter::repeat_with(Event::new).take(size).collect(),
             }
@@ -56,8 +58,8 @@ impl VirtioBlock {
         unsafe { (*self.device.data_ptr()).readonly() }
     }
 
-    pub fn virt_queue_size(&self) -> u16 {
-        unsafe { (*self.device.data_ptr()).virt_queue_size() }
+    pub fn max_concurrents(&self) -> usize {
+        unsafe { (*self.device.data_ptr()).virt_queue_size() as usize / Self::OP_COUNT }
     }
 
     #[inline]
@@ -156,15 +158,19 @@ impl Block for VirtioBlock {
     }
 
     async fn read(&self, block: usize, buf: &mut [u8]) -> Result<usize, Error> {
-        let len = buf.len().min(Self::SECTOR_SIZE);
-        let res = self.read_chunk(block, &mut buf[..len]).await;
-        res.map_err(virtio_rw_err).map(|_| len)
+        let iter = stream::iter(buf.chunks_mut(Self::SECTOR_SIZE).zip(block..)).map(Ok);
+        let fut = iter.try_for_each_concurrent(Some(self.max_concurrents()), |(buf, block)| {
+            self.read_chunk(block, buf)
+        });
+        fut.await.map(|_| buf.len()).map_err(virtio_rw_err)
     }
 
     async fn write(&self, block: usize, buf: &[u8]) -> Result<usize, Error> {
-        let len = buf.len().min(Self::SECTOR_SIZE);
-        let res = self.write_chunk(block, &buf[..len]).await;
-        res.map_err(virtio_rw_err).map(|_| len)
+        let iter = stream::iter(buf.chunks(Self::SECTOR_SIZE).zip(block..)).map(Ok);
+        let fut = iter.try_for_each_concurrent(Some(self.max_concurrents()), |(buf, block)| {
+            self.write_chunk(block, buf)
+        });
+        fut.await.map(|_| buf.len()).map_err(virtio_rw_err)
     }
 }
 impl_io_for_block!(VirtioBlock);
