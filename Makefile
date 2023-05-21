@@ -24,7 +24,7 @@ QEMU_ARGS := -monitor stdio \
 	-kernel kernel-qemu \
 	-nographic \
 	-serial file:debug/qemu.log \
-	-smp 4 -m 128M \
+	-smp 4 -m 4G \
 	-drive file=$(ROOTFS),if=none,format=raw,id=x0 \
 	-device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0
 
