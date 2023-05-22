@@ -12,7 +12,7 @@ use core::{
 
 use arsc_rs::Arsc;
 use futures_util::Future;
-use ksc_core::Error::{self, EFAULT, EINVAL, ENOSPC, EPERM};
+use ksc_core::Error::{self, EFAULT, EINVAL, ENOSPC};
 use ksync::Mutex;
 use range_map::{AslrKey, RangeMap};
 use rv39_paging::{
@@ -293,9 +293,6 @@ impl Virt {
         let mut table = self.root.lock().await;
 
         for (addr, mapping) in map.range_mut(range.clone()) {
-            if !mapping.attr.contains(attr) {
-                return Err(EPERM);
-            }
             let count = (addr.end.val() - addr.start.val()) >> PAGE_SHIFT;
 
             if let Some(count) = NonZeroUsize::new(count) {
@@ -308,9 +305,6 @@ impl Virt {
         }
 
         if let Some((mut mapping, mut entry)) = map.split_entry(range.start) {
-            if !mapping.attr.contains(attr) {
-                return Err(EPERM);
-            }
             let addr = entry.old_key();
             let offset = (range.start.val() - addr.start.val()) >> PAGE_SHIFT;
             let count = (addr.end.val() - range.start.val()) >> PAGE_SHIFT;
@@ -332,9 +326,6 @@ impl Virt {
             entry.set_latter(latter);
         }
         if let Some((mut mapping, mut entry)) = map.split_entry(range.end) {
-            if !mapping.attr.contains(attr) {
-                return Err(EPERM);
-            }
             let addr = entry.old_key();
             let count = (range.end.val() - addr.start.val()) >> PAGE_SHIFT;
 

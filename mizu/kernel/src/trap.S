@@ -91,6 +91,15 @@ _checked_zero:
     li a0, 0
     ret
 
+.global _checked_load_u32
+.type _checked_load_u32, @function
+_checked_load_u32:
+    lw t0, 0(a0)
+    fence r, rw
+    sd t0, 0(a1)
+    li a0, 0
+    ret
+
 .global _checked_ua_fault
 .type _checked_ua_fault, @function
 _checked_ua_fault:

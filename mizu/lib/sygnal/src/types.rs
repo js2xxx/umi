@@ -155,6 +155,10 @@ impl SigSet {
         self.0 == 0
     }
 
+    pub const fn raw(&self) -> u64 {
+        self.0
+    }
+
     pub const fn contains<S: ~const Into<Self>>(self, other: S) -> bool {
         let other: Self = other.into();
         (!self & other).0 == 0

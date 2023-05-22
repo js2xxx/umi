@@ -60,6 +60,10 @@ impl<T: Copy, D> UserPtr<T, D> {
         }
     }
 
+    pub fn to_futex_key(&self) -> FutexKey {
+        FutexKey { addr: self.addr }
+    }
+
     pub fn addr(&self) -> LAddr {
         self.addr
     }
@@ -330,6 +334,27 @@ impl UserBuffer {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct FutexKey {
+    addr: LAddr,
+}
+
+impl RawReg for FutexKey {
+    fn from_raw(addr: usize) -> Self {
+        FutexKey { addr: addr.into() }
+    }
+
+    fn into_raw(self) -> usize {
+        self.addr.val()
+    }
+}
+
+impl FutexKey {
+    pub async fn load(&self, virt: Pin<&Virt>) -> Result<u32, Error> {
+        unsafe { checked_load_u32(virt, self.addr) }.await
+    }
+}
+
 #[inline]
 async unsafe fn checked_copy(
     virt: Pin<&Virt>,
@@ -356,17 +381,26 @@ async unsafe fn checked_zero(
     checked_op(virt, || unsafe { _checked_zero(src, dst, count) }).await
 }
 
-async fn checked_op<F: Fn() -> usize>(virt: Pin<&Virt>, op: F) -> Result<(), Error> {
+async unsafe fn checked_load_u32(virt: Pin<&Virt>, src: LAddr) -> Result<u32, Error> {
+    extern "C" {
+        fn _checked_load_u32(src: LAddr, dst: &mut u32) -> usize;
+    }
+    let mut dst = 0;
+    checked_op(virt, || unsafe { _checked_load_u32(src, &mut dst) }).await?;
+    Ok(dst)
+}
+
+async fn checked_op<F: FnMut() -> usize>(virt: Pin<&Virt>, mut op: F) -> Result<(), Error> {
     extern "C" {
         fn _checked_ua_fault();
     }
-    let addr = match UA_FAULT.set(&(_checked_ua_fault as _), &op) {
+    let addr = match UA_FAULT.set(&(_checked_ua_fault as _), &mut op) {
         0 => return Ok(()),
         addr => addr,
     };
 
     virt.commit(addr.into()).await?;
-    match UA_FAULT.set(&(_checked_ua_fault as _), &op) {
+    match UA_FAULT.set(&(_checked_ua_fault as _), &mut op) {
         0 => Ok(()),
         addr => {
             log::info!("checked op fault at {addr:?}");

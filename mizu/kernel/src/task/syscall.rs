@@ -209,6 +209,11 @@ async fn clone_task(
         system_times: 0,
         user_times: 0,
         virt,
+        futex: if flags.contains(Flags::THREAD) {
+            ts.futex.clone()
+        } else {
+            Arsc::new(ts.futex.deep_fork())
+        },
         files: ts
             .files
             .deep_fork(flags.contains(Flags::FS), flags.contains(Flags::FILES))
@@ -351,6 +356,7 @@ pub async fn execve(
             true,
         );
         ts.virt.clear().await;
+        ts.futex = Arsc::new(Default::default());
         ts.task.shared_sig.swap(Default::default(), SeqCst);
 
         let phys = crate::mem::new_phys(file.to_io().ok_or(ENOTDIR)?, true);
@@ -363,6 +369,7 @@ pub async fn execve(
             ts.virt.clone(),
             Default::default(),
             args,
+            envs,
         )
         .await?;
         init.reset(ts, tf).await;
