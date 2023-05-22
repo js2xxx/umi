@@ -26,6 +26,8 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         // Memory management
         .map(BRK, crate::mem::brk)
         .map(FUTEX, crate::mem::futex)
+        .map(GET_ROBUST_LIST, crate::mem::get_robust_list)
+        .map(SET_ROBUST_LIST, crate::mem::set_robust_list)
         .map(MMAP, fd::mmap)
         .map(MPROTECT, fd::mprotect)
         .map(MUNMAP, fd::munmap)

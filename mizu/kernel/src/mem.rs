@@ -2,20 +2,20 @@ mod futex;
 mod user;
 
 use alloc::{boxed::Box, sync::Arc};
-use core::{ops::Range, pin::Pin, time::Duration};
+use core::{mem, ops::Range, pin::Pin, time::Duration};
 
 use arsc_rs::Arsc;
 use co_trap::UserCx;
 use kmem::{CreateSub, Phys, Virt};
 use ksc::{
     async_handler,
-    Error::{self, EAGAIN, ENOMEM, ENOSYS, ETIMEDOUT},
+    Error::{self, EAGAIN, EINVAL, ENOMEM, ENOSYS, EPERM, ETIMEDOUT},
 };
 use ktime::{TimeOutExt, Timer};
-use rv39_paging::{Attr, CANONICAL_PREFIX, PAGE_MASK, PAGE_SHIFT, PAGE_SIZE};
+use rv39_paging::{Attr, CANONICAL_PREFIX, PAGE_MASK, PAGE_SHIFT, PAGE_SIZE, LAddr};
 use umifs::traits::{IntoAnyExt, Io, IoExt};
 
-use self::user::FutexKey;
+use self::{futex::RobustListHead, user::FutexKey};
 pub use self::{
     futex::{FutexWait, Futexes},
     user::{In, InOut, Out, UserBuffer, UserPtr, UA_FAULT},
@@ -137,6 +137,44 @@ pub async fn futex(
             }
             _ => return Err(ENOSYS),
         })
+    };
+    cx.ret(fut.await);
+    ScRet::Continue(None)
+}
+
+#[async_handler]
+pub async fn set_robust_list(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(UserPtr<RobustListHead, InOut>, usize) -> Result<(), Error>>,
+) -> ScRet {
+    let (ptr, len) = cx.args();
+    cx.ret(if len == mem::size_of::<RobustListHead>() {
+        ts.futex.set_robust_list(ptr);
+        Ok(())
+    } else {
+        Err(EINVAL)
+    });
+    ScRet::Continue(None)
+}
+
+#[async_handler]
+pub async fn get_robust_list(
+    ts: &mut TaskState,
+    cx: UserCx<
+        '_,
+        fn(usize, UserPtr<LAddr, Out>, UserPtr<usize, Out>) -> Result<(), Error>,
+    >,
+) -> ScRet {
+    let (tid, mut ptr, mut len) = cx.args();
+    let fut = async move {
+        if tid != 0 {
+            return Err(EPERM);
+        }
+        let rl = ts.futex.robust_list();
+        let virt = ts.virt.as_ref();
+
+        len.write(virt, mem::size_of::<RobustListHead>()).await?;
+        ptr.write(virt, rl.addr()).await
     };
     cx.ret(fut.await);
     ScRet::Continue(None)

@@ -1,7 +1,8 @@
 use core::{
     mem,
     pin::Pin,
-    sync::atomic::{AtomicIsize, AtomicUsize, Ordering::SeqCst},
+    ptr,
+    sync::atomic::{AtomicIsize, AtomicPtr, AtomicUsize, Ordering::SeqCst},
     task::{Context, Poll, Waker},
 };
 
@@ -11,7 +12,7 @@ use hashbrown::{hash_map::Entry, HashMap};
 use rand_riscv::RandomState;
 use spin::Mutex;
 
-use super::user::FutexKey;
+use super::{user::FutexKey, InOut, UserPtr};
 
 #[derive(Debug, Clone)]
 enum FutexState {
@@ -180,18 +181,24 @@ impl Drop for FutexQueue {
 }
 
 #[derive(Debug, Default)]
-pub struct Futexes(Mutex<HashMap<FutexKey, Pin<Arsc<FutexQueue>>, RandomState>>);
+pub struct Futexes {
+    map: Mutex<HashMap<FutexKey, Pin<Arsc<FutexQueue>>, RandomState>>,
+    robust_list: AtomicPtr<RobustListHead>,
+}
 
 impl Futexes {
     fn queue(&self, key: FutexKey) -> Pin<Arsc<FutexQueue>> {
-        ksync::critical(|| match self.0.lock().entry(key) {
+        ksync::critical(|| match self.map.lock().entry(key) {
             Entry::Occupied(ent) => ent.get().clone(),
             Entry::Vacant(ent) => ent.insert(FutexQueue::new(key)).clone(),
         })
     }
 
     pub fn new() -> Self {
-        Futexes(Default::default())
+        Futexes {
+            map: Default::default(),
+            robust_list: AtomicPtr::new(ptr::null_mut()),
+        }
     }
 
     pub fn notify(&self, key: FutexKey, n: usize) -> usize {
@@ -205,17 +212,28 @@ impl Futexes {
         }
     }
 
+    pub fn robust_list(&self) -> UserPtr<RobustListHead, InOut> {
+        UserPtr::new(self.robust_list.load(SeqCst).into())
+    }
+
+    pub fn set_robust_list(&self, ptr: UserPtr<RobustListHead, InOut>) {
+        self.robust_list.store(ptr.addr().cast(), SeqCst)
+    }
+
     pub fn requeue(&self, from: FutexKey, to: FutexKey, notify: usize, reque: usize) -> usize {
         let from = self.queue(from);
         from.as_ref().requeue(self.queue(to), notify, reque)
     }
 
     pub fn deep_fork(&self) -> Self {
-        Futexes(Mutex::new(ksync::critical(|| {
-            let queue = self.0.lock();
-            let iter = queue.iter().map(|(key, queue)| (*key, queue.deep_fork()));
-            iter.collect()
-        })))
+        Futexes {
+            map: Mutex::new(ksync::critical(|| {
+                let queue = self.map.lock();
+                let iter = queue.iter().map(|(key, queue)| (*key, queue.deep_fork()));
+                iter.collect()
+            })),
+            robust_list: AtomicPtr::new(self.robust_list.load(SeqCst)),
+        }
     }
 }
 
@@ -249,4 +267,12 @@ impl Drop for FutexWait {
             }
         }
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+pub struct RobustListHead {
+    list: usize,
+    futex_offset: usize,
+    list_op_pending: usize,
 }
