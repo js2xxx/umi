@@ -1,4 +1,4 @@
-use alloc::{boxed::Box, sync::Arc, vec::Vec};
+use alloc::{boxed::Box, vec::Vec};
 use core::{
     alloc::Layout,
     mem::{self, MaybeUninit},
@@ -9,18 +9,14 @@ use afat32::NullTimeProvider;
 use arsc_rs::Arsc;
 use co_trap::UserCx;
 use futures_util::{stream, StreamExt, TryStreamExt};
-use kmem::{Phys, Virt};
+use kmem::Virt;
 use ksc::{
     async_handler,
     Error::{self, *},
 };
 use ktime::{Instant, InstantExt};
 use rand_riscv::RandomState;
-use rv39_paging::{Attr, LAddr, PAGE_MASK, PAGE_SHIFT};
-use umifs::{
-    traits::IntoAnyExt,
-    types::{FileType, Metadata, OpenOptions, Permissions, SeekFrom},
-};
+use umifs::types::{FileType, Metadata, OpenOptions, Permissions, SeekFrom};
 
 use super::Files;
 use crate::{
@@ -325,25 +321,6 @@ impl From<Metadata> for Kstat {
             ctime: time(metadata.last_created),
             ..Default::default()
         }
-    }
-}
-
-bitflags::bitflags! {
-    #[derive(Default, Debug, Clone, Copy)]
-    struct Prot: i32 {
-        const READ     = 0x1;
-        const WRITE    = 0x2;
-        const EXEC     = 0x4;
-    }
-
-    struct Flags: i32 {
-        const SHARED	= 0x01;		/* Share changes */
-        const PRIVATE	= 0x02;		/* Changes are private */
-
-        const FIXED     = 0x10;  /* Interpret addr exactly */
-        const ANONYMOUS = 0x20;  /* don't use a file */
-
-        const POPULATE  = 0x8000;  /* populate (prefault) pagetables */
     }
 }
 
@@ -708,85 +685,6 @@ fssc!(
         log::trace!("user close fd = {fd}");
 
         files.close(fd).await
-    }
-
-    pub async fn mmap(
-        virt: Pin<&Virt>,
-        files: &Files,
-        addr: usize,
-        len: usize,
-        prot: i32,
-        flags: i32,
-        fd: i32,
-        offset: usize,
-    ) -> Result<usize, Error> {
-        let prot = Prot::from_bits(prot).ok_or(ENOSYS)?;
-        let flags = Flags::from_bits_truncate(flags);
-
-        let cow = flags.contains(Flags::PRIVATE);
-        let phys = if flags.contains(Flags::ANONYMOUS) {
-            Phys::new_anon(cow)
-        } else {
-            let entry = files.get(fd).await?;
-            match entry.clone().downcast::<Phys>() {
-                Some(phys) => phys.clone_as(cow, None),
-                None => crate::mem::new_phys(entry.to_io().ok_or(EISDIR)?, cow),
-            }
-        };
-
-        let addr = flags.contains(Flags::FIXED).then(|| LAddr::from(addr));
-
-        let offset = if offset & PAGE_MASK != 0 {
-            return Err(EINVAL);
-        } else {
-            offset >> PAGE_SHIFT
-        };
-
-        let attr = Attr::builder()
-            .user_access(true)
-            .readable(prot.contains(Prot::READ))
-            .writable(prot.contains(Prot::WRITE))
-            .executable(prot.contains(Prot::EXEC))
-            .build();
-
-        let count = (len + PAGE_MASK) >> PAGE_SHIFT;
-        let addr = virt.map(addr, Arc::new(phys), offset, count, attr).await?;
-
-        if flags.contains(Flags::POPULATE) {
-            virt.commit_range(addr..(addr + len)).await?;
-        }
-
-        Ok(addr.val())
-    }
-
-    pub async fn mprotect(
-        virt: Pin<&Virt>,
-        _f: &Files,
-        addr: usize,
-        len: usize,
-        prot: i32,
-    ) -> Result<(), Error> {
-        let prot = Prot::from_bits(prot).ok_or(ENOSYS)?;
-
-        let attr = Attr::builder()
-            .user_access(true)
-            .readable(prot.contains(Prot::READ))
-            .writable(prot.contains(Prot::WRITE))
-            .executable(prot.contains(Prot::EXEC))
-            .build();
-
-        let len = (len + PAGE_MASK) & !PAGE_MASK;
-        virt.reprotect(addr.into()..(addr + len).into(), attr).await
-    }
-
-    pub async fn munmap(
-        virt: Pin<&Virt>,
-        _f: &Files,
-        addr: usize,
-        len: usize,
-    ) -> Result<(), Error> {
-        let len = (len + PAGE_MASK) & !PAGE_MASK;
-        virt.unmap(addr.into()..(addr + len).into()).await
     }
 
     pub async fn pipe(virt: Pin<&Virt>, files: &Files, fd: UserPtr<i32, Out>) -> Result<(), Error> {
