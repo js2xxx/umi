@@ -12,7 +12,7 @@ use ksc::{
     Error::{self, EAGAIN, EINVAL, ENOMEM, ENOSYS, EPERM, ETIMEDOUT},
 };
 use ktime::{TimeOutExt, Timer};
-use rv39_paging::{Attr, CANONICAL_PREFIX, PAGE_MASK, PAGE_SHIFT, PAGE_SIZE, LAddr};
+use rv39_paging::{Attr, LAddr, CANONICAL_PREFIX, PAGE_MASK, PAGE_SHIFT, PAGE_SIZE};
 use umifs::traits::{IntoAnyExt, Io, IoExt};
 
 use self::{futex::RobustListHead, user::FutexKey};
@@ -160,10 +160,7 @@ pub async fn set_robust_list(
 #[async_handler]
 pub async fn get_robust_list(
     ts: &mut TaskState,
-    cx: UserCx<
-        '_,
-        fn(usize, UserPtr<LAddr, Out>, UserPtr<usize, Out>) -> Result<(), Error>,
-    >,
+    cx: UserCx<'_, fn(usize, UserPtr<LAddr, Out>, UserPtr<usize, Out>) -> Result<(), Error>>,
 ) -> ScRet {
     let (tid, mut ptr, mut len) = cx.args();
     let fut = async move {
