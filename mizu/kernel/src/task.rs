@@ -25,7 +25,7 @@ use sygnal::{ActionSet, Sig, SigInfo, SigSet, Signals};
 
 use self::{fd::Files, signal::SigStack};
 pub use self::{future::yield_now, init::InitTask, syscall::*};
-use crate::mem::{Out, UserPtr};
+use crate::mem::{Futexes, Out, UserPtr};
 
 const DEFAULT_STACK_SIZE: usize = PAGE_SIZE * 8;
 const DEFAULT_STACK_ATTR: Attr = Attr::USER_ACCESS
@@ -90,6 +90,7 @@ pub struct TaskState {
     user_times: u64,
 
     pub(crate) virt: Pin<Arsc<Virt>>,
+    pub(crate) futex: Arsc<Futexes>,
     sig_actions: Arsc<ActionSet>,
     pub(crate) files: Files,
     tid_clear: Option<UserPtr<usize, Out>>,
@@ -157,6 +158,7 @@ impl TaskState {
     async fn cleanup(mut self, code: i32, sig: Option<Sig>) {
         if let Some(mut tid_clear) = self.tid_clear.take() {
             let _ = tid_clear.write(self.virt.as_ref(), 0).await;
+            self.futex.notify(tid_clear.to_futex_key(), 1);
         }
 
         let last_thread = ksync::critical(|| {

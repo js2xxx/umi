@@ -337,15 +337,32 @@ impl Fat {
         })
     }
 
-    pub async fn all_clusters(&self, start: u32) -> Result<Vec<u32>, Error> {
+    pub async fn all_clusters(&self, start: u32) -> Result<Vec<(u32, u32)>, Error> {
         let mut buf = [0; BATCH_LEN];
-        let mut ret = vec![start];
+        let mut ret = vec![(start, 0)];
         loop {
             let last_len = ret.len();
             let iter = self
-                .iter_ranged_next(*ret.last().unwrap(), &mut buf)
+                .iter_ranged_next(ret.last().unwrap().0, &mut buf)
                 .await?;
-            ret.extend(iter);
+            ret.extend(iter.map(|c| (c, 0)));
+
+            let mut last = None;
+            let mut end = None;
+            for &mut (c, ref mut e) in ret.iter_mut().rev() {
+                let end = match end {
+                    None => *end.insert(c),
+                    Some(_) if Some(c + 1) != last => *end.insert(c),
+                    Some(end) => end,
+                };
+                if *e == 0 {
+                    *e = end;
+                } else {
+                    break;
+                }
+                last = Some(c)
+            }
+
             if ret.len() == last_len {
                 break Ok(ret);
             }

@@ -15,6 +15,7 @@ use co_trap::TrapFrame;
 use kmem::{Phys, Virt};
 use ksc::Error::{self, ENOSYS};
 use ksync::Broadcast;
+use rand_riscv::rand_core::RngCore;
 use riscv::register::sstatus;
 use rv39_paging::{Attr, LAddr, ID_OFFSET, PAGE_MASK, PAGE_SHIFT, PAGE_SIZE};
 use sygnal::{ActionSet, Sig, SigSet, Signals};
@@ -22,6 +23,7 @@ use umifs::path::Path;
 
 use crate::{
     executor,
+    mem::Futexes,
     task::{
         elf, fd,
         fd::Files,
@@ -38,10 +40,88 @@ pub struct InitTask {
 }
 
 impl InitTask {
+    async unsafe fn populate_args(
+        stack: LAddr,
+        virt: Pin<&Virt>,
+        args: Vec<String>,
+        envs: Vec<String>,
+        auxv: Vec<(u8, usize)>,
+    ) -> Result<LAddr, Error> {
+        let argc_len = mem::size_of::<usize>();
+        let argv_len = mem::size_of::<usize>() * (args.len() + 1);
+        let envp_len = mem::size_of::<usize>() * (envs.len() + 1);
+        let auxv_len = mem::size_of::<usize>() * (auxv.len() * 2 + 1);
+        let rand_len = mem::size_of::<u64>() * 2;
+        let args_len = args.iter().map(|s| s.len() + 1).sum::<usize>();
+        let envs_len = envs.iter().map(|s| s.len() + 1).sum::<usize>();
+
+        let len = argc_len + argv_len + envp_len + auxv_len + rand_len + args_len + envs_len;
+        let ret = LAddr::from((stack - len).val() & !7);
+
+        let paddr = virt.commit(ret).await?;
+
+        let argc_ptr = paddr.to_laddr(ID_OFFSET);
+        let mut argv_ptr = argc_ptr + argc_len;
+        let argv_addr = ret + argc_len;
+
+        let mut envp_ptr = argv_ptr + argv_len;
+        let envp_addr = argv_addr + argv_len;
+
+        let mut auxv_ptr = envp_ptr + envp_len;
+        let auxv_addr = envp_addr + envp_len;
+
+        let rand_ptr = auxv_ptr + auxv_len;
+        let rand_addr = auxv_addr + auxv_len;
+
+        let mut args_ptr = rand_ptr + rand_len;
+        let mut args_addr = rand_addr + rand_len;
+        let mut envs_ptr = args_ptr + args_len;
+        let mut envs_addr = args_addr + args_len;
+
+        argc_ptr.cast::<usize>().write(args.len());
+
+        for arg in args {
+            argv_ptr.cast::<usize>().write(args_addr.val());
+            let src = arg.as_bytes();
+            args_ptr.copy_from_nonoverlapping(src.as_ptr(), src.len());
+            argv_ptr += mem::size_of::<usize>();
+            args_ptr += src.len() + 1;
+            args_addr += src.len() + 1;
+        }
+
+        for env in envs {
+            envp_ptr.cast::<usize>().write(envs_addr.val());
+            let src = env.as_bytes();
+            envs_ptr.copy_from_nonoverlapping(src.as_ptr(), src.len());
+            envp_ptr += mem::size_of::<usize>();
+            envs_ptr += src.len() + 1;
+            envs_addr += src.len() + 1;
+        }
+
+        for (idx, val) in auxv {
+            let val = if val == 0xdeadbeef {
+                rand_addr.val()
+            } else {
+                val
+            };
+            auxv_ptr.cast::<[usize; 2]>().write([idx as usize, val]);
+            auxv_ptr += mem::size_of::<[usize; 2]>();
+        }
+
+        let mut rng = rand_riscv::rng();
+        rand_ptr
+            .cast::<[u64; 2]>()
+            .write([rng.next_u64(), rng.next_u64()]);
+
+        Ok(ret)
+    }
+
     pub(super) async fn load_stack(
         virt: Pin<&Virt>,
         stack: Option<(usize, Attr)>,
         args: Vec<String>,
+        envs: Vec<String>,
+        auxv: Vec<(u8, usize)>,
     ) -> Result<LAddr, Error> {
         log::trace!("InitTask::load_stack {stack:?}");
 
@@ -63,38 +143,7 @@ impl InitTask {
             .await?;
 
         let end = addr + PAGE_SIZE + stack_size;
-        let count = args.len();
-        // 1 for argc, 1 for argv ending null, 1 for envp ending null, 1 for auxv ending
-        // null.
-        let len =
-            mem::size_of::<usize>() * (count + 4) + args.iter().map(|s| s.len() + 1).sum::<usize>();
-        assert!(len <= PAGE_SIZE);
-
-        let sp = LAddr::from((end - len).val() & !7);
-        let paddr = virt.commit(sp).await?;
-
-        // Populate args.
-        unsafe {
-            let lsp = paddr.to_laddr(ID_OFFSET);
-            log::trace!("argc: *{sp:?} = {count}");
-            lsp.cast::<usize>().write(count);
-            let argv = lsp.add(mem::size_of::<usize>());
-            // 1 for argv ending null, 1 for envp ending null, 1 for auxv ending null.
-            let argp = argv.add(mem::size_of::<usize>() * (count + 3));
-            let (_, off) = args.iter().fold((argp, Vec::new()), |(ptr, mut off), arg| {
-                let aptr = (ptr as usize)
-                    .wrapping_add(sp.val())
-                    .wrapping_sub(lsp.val());
-                off.push(aptr);
-                let arg = arg.as_bytes();
-                ptr.copy_from_nonoverlapping(arg.as_ptr(), arg.len());
-                ptr.add(arg.len()).write(0);
-                (ptr.add(arg.len() + 1), off)
-            });
-            log::trace!("argv: *{argv:p} = {off:x?}");
-            argv.cast::<usize>()
-                .copy_from_nonoverlapping(off.as_ptr(), off.len());
-        }
+        let sp = unsafe { Self::populate_args(end, virt, args, envs, auxv) }.await?;
 
         log::trace!("InitTask::load_stack finish {sp:?}");
         Ok(sp)
@@ -127,7 +176,11 @@ impl InitTask {
         virt: Pin<Arsc<Virt>>,
         lib_path: Vec<&Path>,
         args: Vec<String>,
+        envs: Vec<String>,
     ) -> Result<Self, Error> {
+        const AT_PAGESZ: u8 = 6;
+        const AT_RANDOM: u8 = 25;
+
         let has_interp = if let Some(interp) = elf::get_interp(phys).await? {
             let _ = (lib_path, interp);
             todo!("load deynamic linker");
@@ -141,7 +194,14 @@ impl InitTask {
         }
         virt.commit(loaded.entry).await?;
 
-        let stack = Self::load_stack(virt.as_ref(), loaded.stack, args).await?;
+        let stack = Self::load_stack(
+            virt.as_ref(),
+            loaded.stack,
+            args,
+            envs,
+            vec![(AT_PAGESZ, PAGE_SIZE), (AT_RANDOM, 0xdeadbeef)],
+        )
+        .await?;
 
         let tf = Self::trap_frame(loaded.entry, stack, 0);
 
@@ -174,6 +234,7 @@ impl InitTask {
             system_times: 0,
             user_times: 0,
             virt: self.virt,
+            futex: Arsc::new(Futexes::new()),
             files: self.files,
             sig_actions: Arsc::new(ActionSet::new()),
             tid_clear: None,

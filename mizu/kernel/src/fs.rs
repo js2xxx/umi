@@ -117,6 +117,7 @@ pub async fn unlink(path: &Path) -> Result<(), Error> {
 }
 
 pub async fn fs_init() {
+    mount("dev/shm".into(), Arsc::new(tmp::TmpFs::new()));
     mount("dev".into(), Arsc::new(dev::DevFs));
     mount("tmp".into(), Arsc::new(tmp::TmpFs::new()));
     for block in blocks() {

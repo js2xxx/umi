@@ -328,6 +328,25 @@ impl From<Metadata> for Kstat {
     }
 }
 
+bitflags::bitflags! {
+    #[derive(Default, Debug, Clone, Copy)]
+    struct Prot: i32 {
+        const READ     = 0x1;
+        const WRITE    = 0x2;
+        const EXEC     = 0x4;
+    }
+
+    struct Flags: i32 {
+        const SHARED	= 0x01;		/* Share changes */
+        const PRIVATE	= 0x02;		/* Changes are private */
+
+        const FIXED     = 0x10;  /* Interpret addr exactly */
+        const ANONYMOUS = 0x20;  /* don't use a file */
+
+        const POPULATE  = 0x8000;  /* populate (prefault) pagetables */
+    }
+}
+
 macro_rules! fssc {
     (
         $(pub async fn $name:ident(
@@ -701,25 +720,6 @@ fssc!(
         fd: i32,
         offset: usize,
     ) -> Result<usize, Error> {
-        bitflags::bitflags! {
-            #[derive(Default, Debug, Clone, Copy)]
-            struct Prot: i32 {
-                const READ     = 0x1;
-                const WRITE    = 0x2;
-                const EXEC     = 0x4;
-            }
-
-            struct Flags: i32 {
-                const SHARED	= 0x01;		/* Share changes */
-                const PRIVATE	= 0x02;		/* Changes are private */
-
-                const FIXED     = 0x100;  /* Interpret addr exactly */
-                const ANONYMOUS = 0x10;  /* don't use a file */
-
-                const POPULATE  = 0x20000;  /* populate (prefault) pagetables */
-            }
-        }
-
         let prot = Prot::from_bits(prot).ok_or(ENOSYS)?;
         let flags = Flags::from_bits_truncate(flags);
 
@@ -757,6 +757,26 @@ fssc!(
         }
 
         Ok(addr.val())
+    }
+
+    pub async fn mprotect(
+        virt: Pin<&Virt>,
+        _f: &Files,
+        addr: usize,
+        len: usize,
+        prot: i32,
+    ) -> Result<(), Error> {
+        let prot = Prot::from_bits(prot).ok_or(ENOSYS)?;
+
+        let attr = Attr::builder()
+            .user_access(true)
+            .readable(prot.contains(Prot::READ))
+            .writable(prot.contains(Prot::WRITE))
+            .executable(prot.contains(Prot::EXEC))
+            .build();
+
+        let len = (len + PAGE_MASK) & !PAGE_MASK;
+        virt.reprotect(addr.into()..(addr + len).into(), attr).await
     }
 
     pub async fn munmap(

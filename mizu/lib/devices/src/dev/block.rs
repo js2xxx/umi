@@ -39,7 +39,7 @@ pub trait Block: Io {
 macro_rules! impl_io_for_block {
     ($type:ident) => {
         #[async_trait]
-        impl umio::Io for VirtioBlock {
+        impl umio::Io for $type {
             async fn seek(&self, whence: umio::SeekFrom) -> Result<usize, Error> {
                 match whence {
                     umio::SeekFrom::End(0) => Ok(self.capacity_blocks() << self.block_shift()),

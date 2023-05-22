@@ -761,19 +761,17 @@ fn copy_from_frame(
 ) -> usize {
     let mut read_len = 0;
     loop {
-        if buffer.is_empty() {
+        if buffer.is_empty() || end == start {
             break read_len;
         }
         let buf = &mut buffer[0];
-        let len = buf.len().min(end - start);
-        if len == 0 {
+        if buf.is_empty() {
             *buffer = &mut mem::take(buffer)[1..];
             continue;
         }
-        unsafe {
-            let src = frame.as_ptr();
-            buf[..len].copy_from_slice(&src.as_ref()[start..][..len]);
-        }
+        let len = buf.len().min(end - start);
+        buf[..len].copy_from_slice(&frame[start..][..len]);
+
         read_len += len;
         start += len;
         advance_slices(buffer, len);
@@ -788,15 +786,15 @@ fn copy_to_frame(
 ) -> usize {
     let mut written_len = 0;
     loop {
-        if buffer.is_empty() {
+        if buffer.is_empty() || end == start {
             break written_len;
         }
         let buf = buffer[0];
-        let len = buf.len().min(end - start);
-        if len == 0 {
+        if buf.is_empty() {
             *buffer = &mut mem::take(buffer)[1..];
             continue;
         }
+        let len = buf.len().min(end - start);
         unsafe {
             let mut src = frame.as_ptr();
             src.as_mut()[start..][..len].copy_from_slice(&buf[..len])

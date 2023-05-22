@@ -26,6 +26,9 @@ impl<F: Flavor> Broadcast<F> {
         F::Item: Clone,
     {
         let mut senders = ksync_core::critical(|| self.senders.lock().clone());
+        if senders.is_empty() {
+            return;
+        }
         let mut pos = senders.len() - 1;
         loop {
             let sender = &senders[pos];

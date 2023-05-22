@@ -4,7 +4,7 @@ use alloc::{boxed::Box, vec};
 use core::{alloc::Layout, mem, sync::atomic::Ordering::SeqCst};
 
 use arsc_rs::Arsc;
-use co_trap::{Gpr, TrapFrame};
+use co_trap::TrapFrame;
 use ksc::async_handler;
 use rv39_paging::LAddr;
 use static_assertions::const_assert;
@@ -103,16 +103,18 @@ impl TaskState {
         };
         usi_ptr.write(virt, usi).await.map_err(|_| si.sig)?;
 
-        let uc = Ucontext {
+        let mut uc = Ucontext {
             flags: 0,
             link: 0usize.into(),
             stack: sig_stack.unwrap_or_default(),
-            sig_mask: PaddedSigSet(self.sig_mask),
+            sig_mask: self.sig_mask.into(),
+            _rsvd: 0,
             mc: Mcontext {
                 pc: tf.sepc,
-                gpr: tf.gpr,
+                ..Default::default()
             },
         };
+        tf.gpr.copy_to_x(&mut uc.mc.x);
         uc_ptr.write(virt, uc).await.map_err(|_| si.sig)?;
 
         tf.gpr.tx.a[0..3].copy_from_slice(&[
@@ -141,10 +143,10 @@ impl TaskState {
             }));
         };
 
-        ts.sig_mask = uc.sig_mask.0;
+        ts.sig_mask = uc.sig_mask.into();
         ts.sig_stack = (uc.stack.len != 0).then_some(uc.stack);
         tf.sepc = uc.mc.pc;
-        tf.gpr = uc.mc.gpr;
+        tf.gpr.copy_from_x(&uc.mc.x);
         ScRet::Continue(None)
     }
 }
@@ -166,16 +168,29 @@ struct Ucontext {
     link: LAddr,
     stack: SigStack,
     sig_mask: PaddedSigSet,
+    _rsvd: usize,
     mc: Mcontext,
 }
 
 #[derive(Debug, Clone, Copy)]
-#[repr(C, align(128))]
-struct PaddedSigSet(SigSet);
+#[repr(C)]
+struct PaddedSigSet([u64; 128 / mem::size_of::<u64>()]);
 
-#[derive(Debug, Clone, Copy)]
+impl From<SigSet> for PaddedSigSet {
+    fn from(value: SigSet) -> Self {
+        PaddedSigSet([value.raw(), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+    }
+}
+
+impl From<PaddedSigSet> for SigSet {
+    fn from(val: PaddedSigSet) -> Self {
+        val.0[0].into()
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
 #[repr(C)]
 struct Mcontext {
     pc: usize,
-    gpr: Gpr,
+    x: [usize; 31],
 }

@@ -25,7 +25,11 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
     AHandlers::new()
         // Memory management
         .map(BRK, crate::mem::brk)
+        .map(FUTEX, crate::mem::futex)
+        .map(GET_ROBUST_LIST, crate::mem::get_robust_list)
+        .map(SET_ROBUST_LIST, crate::mem::set_robust_list)
         .map(MMAP, fd::mmap)
+        .map(MPROTECT, fd::mprotect)
         .map(MUNMAP, fd::munmap)
         // Tasks
         .map(SCHED_YIELD, task::uyield)
@@ -45,6 +49,8 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         .map(RT_SIGACTION, signal::sigaction)
         .map(RT_SIGTIMEDWAIT, signal::sigtimedwait)
         .map(KILL, signal::kill)
+        .map(TKILL, signal::tkill)
+        .map(TGKILL, signal::tgkill)
         .map(RT_SIGRETURN, task::TaskState::resume_from_signal)
         // FS operations
         .map(READ, fd::read)
@@ -223,7 +229,7 @@ async fn prlimit(
                 };
                 (limit, limit)
             }
-            _ => return Ok(()),
+            _ => (usize::MAX, usize::MAX),
         };
         if !old.is_null() {
             old.write(ts.virt.as_ref(), Rlimit { cur, max }).await?;

@@ -5,7 +5,7 @@ use co_trap::UserCx;
 use futures_util::future::{select, Either};
 use ksc::{
     async_handler,
-    Error::{self, EINVAL, ESRCH, ETIMEDOUT},
+    Error::{self, EINVAL, EPERM, ESRCH, ETIMEDOUT},
 };
 use ktime::{TimeOutExt, Timer};
 use rv39_paging::{LAddr, PAGE_SIZE};
@@ -300,6 +300,66 @@ pub async fn kill(
             }
             x => todo!("kill {x:?}"),
         }
+        Ok(())
+    };
+    cx.ret(fut.await);
+    ScRet::Continue(None)
+}
+
+#[async_handler]
+pub async fn tkill(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(usize, i32) -> Result<(), Error>>,
+) -> ScRet {
+    let (tid, sig) = cx.args();
+    let fut = async move {
+        let sig = NonZeroI32::new(sig)
+            .and_then(|s| Sig::new(s.get()))
+            .ok_or(EINVAL)?;
+
+        let si = SigInfo {
+            sig,
+            code: SigCode::USER as _,
+            fields: SigFields::SigKill {
+                pid: ts.task.tid,
+                uid: 0,
+            },
+        };
+
+        let task = ksync::critical(|| ts.tgroup.1.read().iter().find(|t| t.tid == tid).cloned());
+        task.ok_or(ESRCH)?.sig.push(si);
+        Ok(())
+    };
+    cx.ret(fut.await);
+    ScRet::Continue(None)
+}
+
+#[async_handler]
+pub async fn tgkill(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(usize, usize, i32) -> Result<(), Error>>,
+) -> ScRet {
+    let (tgid, tid, sig) = cx.args();
+    let fut = async move {
+        let sig = NonZeroI32::new(sig)
+            .and_then(|s| Sig::new(s.get()))
+            .ok_or(EINVAL)?;
+
+        if ts.tgroup.0 != tgid {
+            return Err(EPERM);
+        }
+
+        let si = SigInfo {
+            sig,
+            code: SigCode::USER as _,
+            fields: SigFields::SigKill {
+                pid: ts.task.tid,
+                uid: 0,
+            },
+        };
+
+        let task = ksync::critical(|| ts.tgroup.1.read().iter().find(|t| t.tid == tid).cloned());
+        task.ok_or(ESRCH)?.sig.push(si);
         Ok(())
     };
     cx.ret(fut.await);

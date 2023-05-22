@@ -33,6 +33,29 @@ const_assert_eq!(
     core::mem::size_of::<usize>() * 31
 );
 
+impl Gpr {
+    pub fn copy_to_x(&self, output: &mut [usize; 31]) {
+        output[0..4].copy_from_slice(&[self.tx.ra, self.tx.sp, self.tx.gp, self.tx.tp]);
+        output[4..7].copy_from_slice(&self.tx.t[..3]);
+        output[7..9].copy_from_slice(&self.s[..2]);
+        output[9..17].copy_from_slice(&self.tx.a);
+        output[17..27].copy_from_slice(&self.s[2..]);
+        output[27..31].copy_from_slice(&self.tx.t[3..]);
+    }
+
+    pub fn copy_from_x(&mut self, input: &[usize; 31]) {
+        self.tx.ra = input[0];
+        self.tx.sp = input[1];
+        self.tx.gp = input[2];
+        self.tx.tp = input[3];
+        self.tx.t[..3].copy_from_slice(&input[4..7]);
+        self.s[..2].copy_from_slice(&input[7..9]);
+        self.tx.a.copy_from_slice(&input[9..17]);
+        self.s[2..].copy_from_slice(&input[17..27]);
+        self.tx.t[3..].copy_from_slice(&input[27..31]);
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 #[repr(C)]
 pub struct TrapFrame {

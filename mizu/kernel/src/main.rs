@@ -184,6 +184,7 @@ async fn main(fdt: usize) {
                 "entry-static".into(),
                 case.into(),
             ],
+            vec![],
         )
         .await
         .unwrap();

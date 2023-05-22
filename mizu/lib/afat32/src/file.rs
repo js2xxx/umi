@@ -21,7 +21,7 @@ use crate::{dirent::DirEntryEditor, fs::FatFileSystem, TimeProvider};
 #[derive(Debug)]
 pub struct FatFile<T: TimeProvider> {
     pub(crate) fs: Arsc<FatFileSystem<T>>,
-    clusters: RwLock<Vec<u32>>,
+    clusters: RwLock<Vec<(u32, u32)>>,
     cluster_shift: u32,
 
     entry: Option<Mutex<DirEntryEditor>>,
@@ -60,12 +60,12 @@ impl<T: TimeProvider> FatFile<T> {
     }
 
     pub(crate) async fn abs_start_pos(&self) -> Option<u64> {
-        let cluster = self.clusters.read().await.first().cloned();
+        let cluster = self.first_cluster().await;
         cluster.map(|cluster| u64::from(cluster) << self.cluster_shift)
     }
 
     pub(crate) async fn first_cluster(&self) -> Option<u32> {
-        self.clusters.read().await.first().cloned()
+        self.clusters.read().await.first().map(|&(c, _)| c)
     }
 
     pub async fn truncate(&self, new_len: u32) -> Result<(), Error> {
@@ -95,13 +95,21 @@ impl<T: TimeProvider> FatFile<T> {
 
         match new_decomp {
             Some((new_cluster_index, _)) if cluster_index != new_cluster_index => {
-                let start = clusters[new_cluster_index];
+                let (start, _) = clusters[new_cluster_index];
                 clusters.truncate(new_cluster_index + 1);
+                if let Some(&(last, old_end)) = clusters.last() {
+                    for (_, end) in clusters.iter_mut().rev() {
+                        if *end != old_end {
+                            break;
+                        }
+                        *end = last;
+                    }
+                }
                 self.fs.truncate_cluster_chain(start).await?;
             }
             None => {
                 entry.set_first_cluster(None);
-                let start = clusters[0];
+                let (start, _) = clusters[0];
                 clusters.clear();
                 self.fs.free_cluster_chain(start).await?;
             }
@@ -190,11 +198,7 @@ impl<T: TimeProvider> Io for FatFile<T> {
         Ok(offset)
     }
 
-    async fn read_at(
-        &self,
-        mut offset: usize,
-        mut buffer: &mut [IoSliceMut],
-    ) -> Result<usize, Error> {
+    async fn read_at(&self, offset: usize, mut buffer: &mut [IoSliceMut]) -> Result<usize, Error> {
         // log::trace!(
         //     "FatFile::read_at {offset:#x}, buffer len = {}",
         //     ioslice_len(&buffer)
@@ -202,19 +206,33 @@ impl<T: TimeProvider> Io for FatFile<T> {
 
         let cluster_shift = self.cluster_shift;
         let (cluster_index, offset_in_cluster) = self.decomp(offset);
-        let end_offset_in_cluster = self
-            .decomp_end(self.len.load(SeqCst))
-            .and_then(|(ci, oc)| (cluster_index == ci).then_some(oc))
-            .unwrap_or(1 << cluster_shift);
+
+        let Some((end_len_ci, end_len_oc)) = self
+            .decomp_end(self.len.load(SeqCst)) else {
+            return Ok(0);
+        };
 
         let clusters = self.clusters.read().await;
 
-        let Some(&cluster) = clusters.get(cluster_index) else {
-            return Ok(0)
+        let Some(&(cluster, cluster_end)) = clusters.get(cluster_index) else {
+            return Ok(0);
         };
+        let count = (cluster_end + 1 - cluster) as usize;
+
+        let mut rest = match clusters.get(end_len_ci) {
+            Some(&(end_len_cluster, end_len_cluster_end)) => {
+                if end_len_cluster_end != cluster_end {
+                    (count << cluster_shift) - offset_in_cluster
+                } else {
+                    let count = (end_len_cluster - cluster) as usize;
+                    (count << cluster_shift) + end_len_oc - offset_in_cluster
+                }
+            }
+            None => (count << cluster_shift) - offset_in_cluster,
+        };
+        // log::trace!("FatFile::read_at: rest {rest:#x} bytes can be read");
 
         let mut cluster_offset = self.fs.offset_from_cluster(cluster) as usize + offset_in_cluster;
-        let mut rest = end_offset_in_cluster - offset_in_cluster;
         let mut read_len = 0;
         let device = self.fs.fat.device();
         loop {
@@ -223,13 +241,14 @@ impl<T: TimeProvider> Io for FatFile<T> {
                 break Ok(read_len);
             }
             let len = rest.min(buffer[0].len());
+            // log::trace!("FatFile::read_at: attempt to read {len:#x} bytes");
 
             let len = device
                 .read_at(cluster_offset, &mut [&mut buffer[0][..len]])
                 .await?;
+            // log::trace!("FatFile::read_at: actual read {len:#x} bytes");
 
             cluster_offset += len;
-            offset += len;
             read_len += len;
             rest -= len;
             advance_slices(&mut buffer, len)
@@ -251,34 +270,39 @@ impl<T: TimeProvider> Io for FatFile<T> {
 
         let clusters = self.clusters.upgradable_read().await;
 
-        let (cluster, _clusters) = {
+        let (cluster, count, _clusters) = {
             let cluster = clusters.get(cluster_index).cloned();
             match cluster {
-                Some(cluster) => (cluster, clusters),
+                Some((cluster, cluster_end)) => {
+                    let count = (cluster_end + 1 - cluster) as usize;
+                    (cluster, count, clusters)
+                }
                 None => {
                     let mut clusters = RwLockUpgradableReadGuard::upgrade(clusters).await;
-                    let mut times = cluster_index + 1 - clusters.len();
-                    let mut prev = clusters.last().cloned();
-                    loop {
-                        let new = self.fs.fat.allocate(prev, None).await?;
-                        if clusters.is_empty() {
-                            if let Some(ref entry) = self.entry {
-                                entry.lock().await.set_first_cluster(Some(new));
-                            }
+                    let prev = clusters.last().map(|&(c, _)| c);
+
+                    let new = self.fs.fat.allocate(prev, None).await?;
+                    if clusters.is_empty() {
+                        if let Some(ref entry) = self.entry {
+                            entry.lock().await.set_first_cluster(Some(new));
                         }
-                        clusters.push(new);
-                        times -= 1;
-                        if times == 0 {
-                            break (new, RwLockWriteGuard::downgrade_to_upgradable(clusters));
-                        }
-                        prev = Some(new)
                     }
+                    if let Some(&(_, old_end)) = clusters.last() {
+                        for (_, end) in clusters.iter_mut().rev() {
+                            if *end != old_end {
+                                break;
+                            }
+                            *end = new;
+                        }
+                    }
+                    clusters.push((new, new));
+                    (new, 1, RwLockWriteGuard::downgrade_to_upgradable(clusters))
                 }
             }
         };
 
         let mut cluster_offset = self.fs.offset_from_cluster(cluster) as usize + offset_in_cluster;
-        let mut rest = (1 << cluster_shift) - offset_in_cluster;
+        let mut rest = (count << cluster_shift) - offset_in_cluster;
         let mut written_len = 0;
         let device = self.fs.fat.device();
         loop {

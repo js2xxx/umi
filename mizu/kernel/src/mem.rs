@@ -1,20 +1,30 @@
+mod futex;
 mod user;
 
 use alloc::{boxed::Box, sync::Arc};
-use core::{ops::Range, pin::Pin};
+use core::{mem, ops::Range, pin::Pin, time::Duration};
 
 use arsc_rs::Arsc;
 use co_trap::UserCx;
 use kmem::{CreateSub, Phys, Virt};
 use ksc::{
     async_handler,
-    Error::{self, ENOMEM},
+    Error::{self, EAGAIN, EINVAL, ENOMEM, ENOSYS, EPERM, ETIMEDOUT},
 };
-use rv39_paging::{Attr, CANONICAL_PREFIX, PAGE_MASK, PAGE_SHIFT, PAGE_SIZE};
+use ktime::{TimeOutExt, Timer};
+use rv39_paging::{Attr, LAddr, CANONICAL_PREFIX, PAGE_MASK, PAGE_SHIFT, PAGE_SIZE};
 use umifs::traits::{IntoAnyExt, Io, IoExt};
 
-pub use self::user::{In, InOut, Out, UserBuffer, UserPtr, UA_FAULT};
-use crate::{rxx::KERNEL_PAGES, syscall::ScRet, task::TaskState};
+use self::{futex::RobustListHead, user::FutexKey};
+pub use self::{
+    futex::{FutexWait, Futexes},
+    user::{In, InOut, Out, UserBuffer, UserPtr, UA_FAULT},
+};
+use crate::{
+    rxx::KERNEL_PAGES,
+    syscall::{ScRet, Ts},
+    task::TaskState,
+};
 
 pub const USER_RANGE: Range<usize> = 0x1000..((!CANONICAL_PREFIX) + 1);
 
@@ -79,6 +89,91 @@ pub async fn brk(ts: &mut TaskState, cx: UserCx<'_, fn(usize) -> Result<usize, E
     let res = inner(ts.virt.as_ref(), &mut ts.brk, addr).await;
     cx.ret(res.map(|_| ts.brk));
 
+    ScRet::Continue(None)
+}
+
+#[async_handler]
+pub async fn futex(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(FutexKey, i32, u32, usize, FutexKey, u32) -> Result<usize, Error>>,
+) -> ScRet {
+    const FUTEX_WAIT: i32 = 0;
+    const FUTEX_WAKE: i32 = 1;
+    const FUTEX_REQUEUE: i32 = 3;
+    const FUTEX_CMP_REQUEUE: i32 = 4;
+    const FUTEX_PRIVATE_FLAG: i32 = 128;
+
+    let (key, op, val, spec, key2, val3) = cx.args();
+    let fut = async move {
+        if op & FUTEX_PRIVATE_FLAG == 0 {
+            return Err(ENOSYS);
+        }
+        Ok(match op & !FUTEX_PRIVATE_FLAG {
+            FUTEX_WAIT => {
+                let c = key.load(ts.virt.as_ref()).await?;
+                if c != val {
+                    return Err(EAGAIN);
+                }
+                let t = UserPtr::<Ts, In>::new(spec.into());
+                if t.is_null() {
+                    ts.futex.wait(key).await
+                } else {
+                    let t = t.read(ts.virt.as_ref()).await?;
+                    let timeout = Duration::from_secs(t.sec) + Duration::from_nanos(t.nsec);
+                    let wait = ts.futex.wait(key);
+                    wait.ok_or_timeout(Timer::after(timeout), || ETIMEDOUT)
+                        .await?;
+                }
+                0
+            }
+            FUTEX_WAKE => ts.futex.notify(key, val as usize),
+            FUTEX_REQUEUE => ts.futex.requeue(key, key2, val as usize, spec),
+            FUTEX_CMP_REQUEUE => {
+                let c = key.load(ts.virt.as_ref()).await?;
+                if c != val3 {
+                    return Err(EAGAIN);
+                }
+                ts.futex.requeue(key, key2, val as usize, spec)
+            }
+            _ => return Err(ENOSYS),
+        })
+    };
+    cx.ret(fut.await);
+    ScRet::Continue(None)
+}
+
+#[async_handler]
+pub async fn set_robust_list(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(UserPtr<RobustListHead, InOut>, usize) -> Result<(), Error>>,
+) -> ScRet {
+    let (ptr, len) = cx.args();
+    cx.ret(if len == mem::size_of::<RobustListHead>() {
+        ts.futex.set_robust_list(ptr);
+        Ok(())
+    } else {
+        Err(EINVAL)
+    });
+    ScRet::Continue(None)
+}
+
+#[async_handler]
+pub async fn get_robust_list(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(usize, UserPtr<LAddr, Out>, UserPtr<usize, Out>) -> Result<(), Error>>,
+) -> ScRet {
+    let (tid, mut ptr, mut len) = cx.args();
+    let fut = async move {
+        if tid != 0 {
+            return Err(EPERM);
+        }
+        let rl = ts.futex.robust_list();
+        let virt = ts.virt.as_ref();
+
+        len.write(virt, mem::size_of::<RobustListHead>()).await?;
+        ptr.write(virt, rl.addr()).await
+    };
+    cx.ret(fut.await);
     ScRet::Continue(None)
 }
 
