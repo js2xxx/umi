@@ -7,7 +7,7 @@ use core::{
 
 use futures_util::{stream, stream::StreamExt};
 use goblin::elf64::{header::*, program_header::*, section_header::*};
-use kmem::{CreateSub, Phys, Virt, ZERO};
+use kmem::{Phys, Virt, ZERO};
 use ksc::Error::{ENOEXEC, ENOSYS};
 use rv39_paging::{Attr, LAddr, PAGE_MASK, PAGE_SHIFT};
 use umifs::traits::IoExt;
@@ -179,10 +179,8 @@ async fn map_segment(
 
         let segment = phys.clone_as(
             true,
-            Some(CreateSub {
-                index_offset: aligned_offset >> PAGE_SHIFT,
-                fixed_count: Some(aligned_file_size >> PAGE_SHIFT),
-            }),
+            aligned_offset >> PAGE_SHIFT,
+            Some(aligned_file_size >> PAGE_SHIFT),
         );
         segment
             .write_all_at(aligned_data_size, &ZERO[..zero_size])

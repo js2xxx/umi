@@ -227,12 +227,12 @@ async fn clone_task(
         exit_signal,
     };
 
-    log::trace!(
-        "clone_task: push into parent: {:?}",
-        new_ts.task.parent.upgrade().map(|s| s.tid)
-    );
-
     if !flags.contains(Flags::THREAD) {
+        log::trace!(
+            "clone_task: push into parent: {:?}",
+            new_ts.task.parent.upgrade().map(|s| s.tid)
+        );
+
         if let Some(parent) = new_ts.task.parent.upgrade() {
             ksync::critical(|| {
                 parent.children.lock().push(Child {

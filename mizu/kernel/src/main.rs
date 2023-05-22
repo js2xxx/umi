@@ -37,10 +37,12 @@ use crate::task::InitTask;
 async fn main(fdt: usize) {
     println!("Hello from UMI ^_^");
 
-    mem::test_phys().await;
-
-    unsafe { dev::init(fdt as _).expect("failed to initialize devices") };
+    // Init devices.
+    unsafe { crate::dev::init(fdt as _).expect("failed to initialize devices") };
+    // Init FS.
     fs::fs_init().await;
+
+    mem::test_phys().await;
 
     let (fs, _) = fs::get("".as_ref()).unwrap();
     let rt = fs.root_dir().await.unwrap();

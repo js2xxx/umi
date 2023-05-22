@@ -282,12 +282,6 @@ pub struct Phys {
     flusher: Option<Flusher>,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct CreateSub {
-    pub index_offset: usize,
-    pub fixed_count: Option<usize>,
-}
-
 impl Phys {
     pub fn new(
         backend: Arc<dyn Io>,
@@ -321,11 +315,7 @@ impl Phys {
         }
     }
 
-    pub fn clone_as(self: &Arc<Self>, cow: bool, create_sub: Option<CreateSub>) -> Self {
-        let (start, end) = create_sub.map_or((0, None), |cs| {
-            (cs.index_offset, cs.fixed_count.map(|c| c + cs.index_offset))
-        });
-
+    pub fn clone_as(&self, cow: bool, index_offset: usize, fixed_count: Option<usize>) -> Self {
         let branch = ksync::critical(|| {
             let mut list = self.list.lock();
 
@@ -354,15 +344,15 @@ impl Phys {
             list: Mutex::new(FrameList {
                 parent: Some(Parent::Phys {
                     phys: branch,
-                    start,
-                    end,
+                    start: index_offset,
+                    end: fixed_count.map(|c| c + index_offset),
                 }),
                 frames: Default::default(),
             }),
             position: Default::default(),
             cow,
             flusher: self.flusher.clone().map(|flusher| Flusher {
-                offset: flusher.offset + start,
+                offset: flusher.offset + index_offset,
                 ..flusher
             }),
         }

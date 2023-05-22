@@ -1,6 +1,4 @@
 #![no_std]
-#![feature(const_trait_impl)]
-#![feature(thread_local)]
 
 #[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))]
 mod state;
@@ -24,7 +22,7 @@ mod state;
 #[inline]
 pub fn critical<R>(f: impl FnOnce() -> R) -> R {
     #[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))]
-    let _preempt = state::PREEMPT.lock();
+    let _preempt = state::PreemptState::new();
     f()
 }
 
@@ -34,9 +32,11 @@ pub fn critical<R>(f: impl FnOnce() -> R) -> R {
 ///
 /// The caller must care about the potential risks of functions that have sth to
 /// do with interrupts.
-pub unsafe fn disable(_set_sstatus: bool) {
+pub unsafe fn disable() -> usize {
+    #[cfg(not(any(target_arch = "riscv32", target_arch = "riscv64")))]
+    return 0;
     #[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))]
-    state::PREEMPT.disable(_set_sstatus)
+    state::disable()
 }
 
 /// Enable interrupts manually.
@@ -45,7 +45,11 @@ pub unsafe fn disable(_set_sstatus: bool) {
 ///
 /// The caller must care about the potential risks of functions that have sth to
 /// do with interrupts.
-pub unsafe fn enable(_set_sstatus: bool) {
+pub unsafe fn enable(_flags: usize) {
     #[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))]
-    state::PREEMPT.enable(_set_sstatus)
+    state::enable(_flags)
+}
+
+pub fn is_enabled() -> bool {
+    riscv::register::sstatus::read().sie()
 }

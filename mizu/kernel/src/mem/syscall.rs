@@ -184,7 +184,7 @@ pub async fn mmap(
         } else {
             let entry = ts.files.get(fd).await?;
             match entry.clone().downcast::<Phys>() {
-                Some(phys) => phys.clone_as(cow, None),
+                Some(phys) => phys.clone_as(cow, 0, None),
                 None => crate::mem::new_phys(entry.to_io().ok_or(EISDIR)?, cow),
             }
         };
