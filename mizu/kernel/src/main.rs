@@ -11,6 +11,7 @@
 #![feature(result_option_inspect)]
 #![feature(thread_local)]
 
+mod cpu;
 mod dev;
 pub mod fs;
 mod mem;
@@ -25,11 +26,14 @@ extern crate klog;
 extern crate alloc;
 
 use alloc::{
+    string::ToString,
     sync::{Arc, Weak},
     vec,
 };
+use core::pin::pin;
 
-use umifs::types::{OpenOptions, Permissions};
+use futures_util::{stream, StreamExt};
+use umifs::types::OpenOptions;
 
 pub use self::rxx::executor;
 use crate::task::InitTask;
@@ -37,160 +41,50 @@ use crate::task::InitTask;
 async fn main(fdt: usize) {
     println!("Hello from UMI ^_^");
 
-    mem::test_phys().await;
-
-    unsafe { dev::init(fdt as _).expect("failed to initialize devices") };
+    // Init devices.
+    unsafe { crate::dev::init(fdt as _).expect("failed to initialize devices") };
+    // Init FS.
     fs::fs_init().await;
+
+    mem::test_phys().await;
 
     let (fs, _) = fs::get("".as_ref()).unwrap();
     let rt = fs.root_dir().await.unwrap();
 
-    let spec = [
-        "argv",
-        "basename",
-        "clocale_mbfuncs",
-        "clock_gettime",
-        "crypt",
-        "dirname",
-        "env",
-        "fdopen",
-        "fnmatch",
-        "fscanf",
-        "fwscanf",
-        "iconv_open",
-        "inet_pton",
-        "mbc",
-        "memstream",
-        "pthread_cancel_points",
-        "pthread_cancel",
-        "pthread_cond",
-        "pthread_tsd",
-        "qsort",
-        "random",
-        "search_hsearch",
-        "search_insque",
-        "search_lsearch",
-        "search_tsearch",
-        "setjmp",
-        "snprintf",
-        "socket",
-        "sscanf",
-        "sscanf_long",
-        "stat",
-        "strftime",
-        "string",
-        "string_memcpy",
-        "string_memmem",
-        "string_memset",
-        "string_strchr",
-        "string_strcspn",
-        "string_strstr",
-        "strptime",
-        "strtod",
-        "strtod_simple",
-        "strtof",
-        "strtol",
-        "strtold",
-        "swprintf",
-        "tgmath",
-        "time",
-        "tls_align",
-        "udiv",
-        "ungetc",
-        "utime",
-        "wcsstr",
-        "wcstol",
-        "pleval",
-        "daemon_failure",
-        "dn_expand_empty",
-        "dn_expand_ptr_0",
-        "fflush_exit",
-        "fgets_eof",
-        "fgetwc_buffering",
-        "flockfile_list",
-        "fpclassify_invalid_ld80",
-        "ftello_unflushed_append",
-        "getpwnam_r_crash",
-        "getpwnam_r_errno",
-        "iconv_roundtrips",
-        "inet_ntop_v4mapped",
-        "inet_pton_empty_last_field",
-        "iswspace_null",
-        "lrand48_signextend",
-        "lseek_large",
-        "malloc_0",
-        "mbsrtowcs_overflow",
-        "memmem_oob_read",
-        "memmem_oob",
-        "mkdtemp_failure",
-        "mkstemp_failure",
-        "printf_1e9_oob",
-        "printf_fmt_g_round",
-        "printf_fmt_g_zeros",
-        "printf_fmt_n",
-        "pthread_robust_detach",
-        "pthread_cancel_sem_wait",
-        "pthread_cond_smasher",
-        "pthread_condattr_setclock",
-        "pthread_exit_cancel",
-        "pthread_once_deadlock",
-        "pthread_rwlock_ebusy",
-        "putenv_doublefree",
-        "regex_backref_0",
-        "regex_bracket_icase",
-        "regex_ere_backref",
-        "regex_escaped_high_byte",
-        "regex_negated_range",
-        "regexec_nosub",
-        "rewind_clear_error",
-        "rlimit_open_files",
-        "scanf_bytes_consumed",
-        "scanf_match_literal_eof",
-        "scanf_nullbyte_char",
-        "setvbuf_unget",
-        "sigprocmask_internal",
-        "sscanf_eof",
-        "statvfs",
-        "strverscmp",
-        "syscall_sign_extend",
-        "uselocale_0",
-        "wcsncpy_read_overflow",
-        "wcsstr_false_negative",
-    ];
-
     let oo = OpenOptions::RDONLY;
-    let perm = Permissions::all_same(true, false, true);
+    let perm = Default::default();
 
-    rt.clone()
-        .open("entry-static".as_ref(), oo, perm)
-        .await
-        .unwrap();
+    let scripts = ["run-dynamic.sh", "run-static.sh"];
+
+    let rt2 = rt.clone();
+    let stream = stream::iter(scripts)
+        .then(|sh| rt2.clone().open(sh.as_ref(), oo, perm))
+        .flat_map(|res| {
+            let (sh, _) = res.unwrap();
+            let io = sh.to_io().unwrap();
+            umio::lines(io).map(|res| res.unwrap())
+        });
+    let mut cmd = pin!(stream);
 
     let (runner, _) = rt.open("runtest".as_ref(), oo, perm).await.unwrap();
     let runner = Arc::new(mem::new_phys(runner.to_io().unwrap(), true));
 
     log::warn!("Start testing");
-    for case in spec {
-        log::info!("Running test case {case:?}");
+    while let Some(cmd) = cmd.next().await {
+        log::info!("Executing cmd {cmd:?}");
 
-        let task = InitTask::from_elf(
+        let init = InitTask::from_elf(
             Weak::new(),
             &runner,
             crate::mem::new_virt(),
-            Default::default(),
-            vec![
-                "runtest".into(),
-                "-w".into(),
-                "entry-static".into(),
-                case.into(),
-            ],
+            cmd.split(' ').map(|s| s.to_string()).collect(),
             vec![],
         )
         .await
         .unwrap();
-        let task = task.spawn().unwrap();
+        let task = init.spawn().unwrap();
         let code = task.wait().await;
-        log::info!("test case {case:?} returned with {code:?}\n");
+        log::info!("cmd {cmd:?} returned with {code:?}\n");
     }
 
     log::warn!("Goodbye!");

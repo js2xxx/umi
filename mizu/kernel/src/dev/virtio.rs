@@ -38,7 +38,7 @@ pub fn virtio_mmio_init(node: &FdtNode) -> bool {
             executor()
                 .spawn(device.clone().intr_dispatch(intr))
                 .detach();
-            BLOCKS.lock().push(device);
+            ksync::critical(|| BLOCKS.lock().push(device));
 
             true
         }

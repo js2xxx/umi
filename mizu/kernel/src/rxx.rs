@@ -40,6 +40,7 @@ pub const KERNEL_PAGES: Table = const {
 
 static EXECUTOR: Once<Arsc<Executor>> = Once::new();
 
+#[track_caller]
 pub fn executor() -> &'static Arsc<Executor> {
     EXECUTOR.get().unwrap()
 }
@@ -96,6 +97,7 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
     use config::VIRT_END;
     use riscv::register::{sie, sstatus};
     use sbi_rt::{NoReason, Shutdown};
+    use spin::Lazy;
 
     static GLOBAL_INIT: AtomicBool = AtomicBool::new(false);
 
@@ -127,7 +129,7 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
     }
 
     // Disable interrupt in `ksync`.
-    unsafe { ksync::disable(true) };
+    unsafe { ksync::disable() };
 
     // Init default kernel trap handler.
     unsafe { crate::trap::init() };
@@ -148,6 +150,10 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
             let range = (&_end as *const u8).into()..VIRT_END.into();
             kmem::init_frames(range)
         }
+
+        // Init lazies.
+        Lazy::force(&crate::syscall::SYSCALL);
+        Lazy::force(&kmem::ZERO);
     }
     hart_id::init_hart_id(hartid);
 
@@ -158,12 +164,12 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
         sstatus::set_spie();
         sstatus::set_sum();
 
-        ksync::enable(true);
+        ksync::enable(usize::MAX);
     }
     sbi_rt::set_timer(0);
 
     run_art(payload);
-    unsafe { ksync::disable(true) };
+    unsafe { ksync::disable() };
 
     if hart_id::is_bsp() {
         sbi_rt::system_reset(Shutdown, NoReason);

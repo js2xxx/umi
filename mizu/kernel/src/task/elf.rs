@@ -7,7 +7,7 @@ use core::{
 
 use futures_util::{stream, stream::StreamExt};
 use goblin::elf64::{header::*, program_header::*, section_header::*};
-use kmem::{CreateSub, Phys, Virt, ZERO};
+use kmem::{Phys, Virt, ZERO};
 use ksc::Error::{ENOEXEC, ENOSYS};
 use rv39_paging::{Attr, LAddr, PAGE_MASK, PAGE_SHIFT};
 use umifs::traits::IoExt;
@@ -41,12 +41,12 @@ impl From<Error> for ksc::Error {
 pub struct LoadedElf {
     pub is_dyn: bool,
     pub range: Range<LAddr>,
+    pub header: Header,
     /// Note: The size of the stack can be zero and the caller should check it
     /// before allocating memory for the stack.
     pub stack: Option<(usize, Attr)>,
     pub entry: LAddr,
     pub dynamic: Option<ProgramHeader>,
-    pub tls: Option<ProgramHeader>,
     pub sym_len: usize,
 }
 
@@ -142,7 +142,7 @@ fn get_addr_range_info(segments: &[ProgramHeader]) -> (usize, usize) {
 ///      +--------------------------------------------------------------------+
 async fn map_segment(
     segment: &ProgramHeader,
-    phys: &Arc<Phys>,
+    phys: &Phys,
     virt: Pin<&Virt>,
     base: LAddr,
 ) -> Result<(), Error> {
@@ -179,10 +179,8 @@ async fn map_segment(
 
         let segment = phys.clone_as(
             true,
-            Some(CreateSub {
-                index_offset: aligned_offset >> PAGE_SHIFT,
-                fixed_count: Some(aligned_file_size >> PAGE_SHIFT),
-            }),
+            aligned_offset >> PAGE_SHIFT,
+            Some(aligned_file_size >> PAGE_SHIFT),
         );
         segment
             .write_all_at(aligned_data_size, &ZERO[..zero_size])
@@ -223,7 +221,7 @@ pub async fn get_interp(phys: &Phys) -> Result<Option<Vec<u8>>, Error> {
 }
 
 pub async fn load(
-    phys: &Arc<Phys>,
+    phys: &Phys,
     force_dyn: Option<bool>,
     virt: Pin<&Virt>,
 ) -> Result<LoadedElf, Error> {
@@ -252,13 +250,11 @@ pub async fn load(
 
     let mut stack = None;
     let mut dynamic = None;
-    let mut tls = None;
     for segment in segments {
         match segment.p_type {
             PT_LOAD => map_segment(&segment, phys, virt, offset).await?,
             PT_GNU_STACK => stack = Some((segment.p_memsz as usize, parse_attr(segment.p_flags))),
             PT_DYNAMIC => dynamic = Some(segment),
-            PT_TLS => tls = Some(segment),
             _ => {}
         }
     }
@@ -279,10 +275,10 @@ pub async fn load(
     Ok(LoadedElf {
         is_dyn,
         range: base..(base + (max - min)),
+        header,
         stack,
         entry,
         dynamic,
-        tls,
         sym_len,
     })
 }

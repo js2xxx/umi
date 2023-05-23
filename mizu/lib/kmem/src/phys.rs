@@ -27,10 +27,15 @@ use umio::{advance_slices, ioslice_len, Io, IoExt, IoSlice, IoSliceMut, SeekFrom
 
 pub static ZERO: Lazy<Arc<Frame>> = Lazy::new(|| Arc::new(Frame::new().unwrap()));
 
-#[derive(Debug)]
 pub struct Frame {
     base: PAddr,
     ptr: NonNull<u8>,
+}
+
+impl fmt::Debug for Frame {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("Frame").field(&self.base).finish()
+    }
 }
 
 unsafe impl Send for Frame {}
@@ -282,12 +287,6 @@ pub struct Phys {
     flusher: Option<Flusher>,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct CreateSub {
-    pub index_offset: usize,
-    pub fixed_count: Option<usize>,
-}
-
 impl Phys {
     pub fn new(
         backend: Arc<dyn Io>,
@@ -303,7 +302,7 @@ impl Phys {
             }),
             position: initial_pos.into(),
             cow,
-            flusher: Some(Flusher { sender, offset: 0 }),
+            flusher: cow.then_some(Flusher { sender, offset: 0 }),
         };
         (phys, flusher(receiver, backend))
     }
@@ -321,11 +320,7 @@ impl Phys {
         }
     }
 
-    pub fn clone_as(self: &Arc<Self>, cow: bool, create_sub: Option<CreateSub>) -> Self {
-        let (start, end) = create_sub.map_or((0, None), |cs| {
-            (cs.index_offset, cs.fixed_count.map(|c| c + cs.index_offset))
-        });
-
+    pub fn clone_as(&self, cow: bool, index_offset: usize, fixed_count: Option<usize>) -> Self {
         let branch = ksync::critical(|| {
             let mut list = self.list.lock();
 
@@ -354,16 +349,18 @@ impl Phys {
             list: Mutex::new(FrameList {
                 parent: Some(Parent::Phys {
                     phys: branch,
-                    start,
-                    end,
+                    start: index_offset,
+                    end: fixed_count.map(|c| c + index_offset),
                 }),
                 frames: Default::default(),
             }),
             position: Default::default(),
             cow,
-            flusher: self.flusher.clone().map(|flusher| Flusher {
-                offset: flusher.offset + start,
-                ..flusher
+            flusher: self.flusher.clone().and_then(|flusher| {
+                cow.then_some(Flusher {
+                    offset: flusher.offset + index_offset,
+                    ..flusher
+                })
             }),
         }
     }
@@ -469,13 +466,16 @@ impl Phys {
         pin: bool,
     ) -> Result<(Arc<Frame>, usize), Error> {
         log::trace!(
-            "Phys::commit index = {index} {writable:?} {} {}",
-            if pin { "pin" } else { "" },
-            if self.cow { "cow" } else { "" }
+            "Phys::commit index = {index} {writable:?}{}{}",
+            if pin { " pin" } else { "" },
+            if self.cow { " cow" } else { "" }
         );
         assert!(!self.branch);
         match self.commit_impl(index, writable, pin, self.cow).await {
-            Ok(Commit::Shared(frame, len)) => Ok((frame, len)),
+            Ok(Commit::Shared(frame, len)) => {
+                log::trace!("Phys::commit result = {frame:?}, len = {len:#x}");
+                Ok((frame, len))
+            }
             Ok(Commit::Unique(..)) => unreachable!(),
             Err(err) => Err(err),
         }

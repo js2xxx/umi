@@ -47,7 +47,7 @@ impl<T: TimeProvider> FatFile<T> {
             .and_then(|e| e.inner().size().map(|s| s as usize))
             .unwrap_or(clusters.len() << cluster_shift);
 
-        log::trace!("FatFile::new: clusters = {clusters:#?}");
+        // log::trace!("FatFile::new: clusters = {clusters:#?}");
 
         Ok(FatFile {
             fs,
@@ -279,24 +279,32 @@ impl<T: TimeProvider> Io for FatFile<T> {
                 }
                 None => {
                     let mut clusters = RwLockUpgradableReadGuard::upgrade(clusters).await;
-                    let prev = clusters.last().map(|&(c, _)| c);
+                    let mut times = cluster_index + 1 - clusters.len();
+                    let mut prev = clusters.last().map(|&(c, _)| c);
 
-                    let new = self.fs.fat.allocate(prev, None).await?;
-                    if clusters.is_empty() {
-                        if let Some(ref entry) = self.entry {
+                    loop {
+                        let new = self.fs.fat.allocate(prev, None).await?;
+
+                        if let Some(&(_, old_end)) = clusters.last() {
+                            for (_, end) in clusters.iter_mut().rev() {
+                                if *end != old_end {
+                                    break;
+                                }
+                                *end = new;
+                            }
+                        } else if let Some(ref entry) = self.entry {
+                            // No last entry means emptiness.
                             entry.lock().await.set_first_cluster(Some(new));
                         }
-                    }
-                    if let Some(&(_, old_end)) = clusters.last() {
-                        for (_, end) in clusters.iter_mut().rev() {
-                            if *end != old_end {
-                                break;
-                            }
-                            *end = new;
+
+                        clusters.push((new, new));
+
+                        times -= 1;
+                        if times == 0 {
+                            break (new, 1, RwLockWriteGuard::downgrade_to_upgradable(clusters));
                         }
+                        prev = Some(new);
                     }
-                    clusters.push((new, new));
-                    (new, 1, RwLockWriteGuard::downgrade_to_upgradable(clusters))
                 }
             }
         };

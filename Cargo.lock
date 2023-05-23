@@ -325,10 +325,6 @@ dependencies = [
 [[package]]
 name = "hart-id"
 version = "0.1.0"
-dependencies = [
- "ksync-core",
- "spin",
-]
 
 [[package]]
 name = "hash32"
@@ -391,7 +387,6 @@ dependencies = [
  "hashbrown",
  "ksc-core",
  "ksync",
- "ktime-core",
  "log",
  "rand-riscv",
  "range-map",
@@ -570,6 +565,7 @@ dependencies = [
  "static_assertions",
  "sygnal",
  "umifs",
+ "umio",
  "virtio-drivers",
 ]
 
@@ -931,6 +927,7 @@ version = "0.1.0"
 dependencies = [
  "arsc-rs",
  "async-trait",
+ "futures-util",
  "ksc-core",
  "log",
 ]

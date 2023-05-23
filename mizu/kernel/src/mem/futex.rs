@@ -120,9 +120,9 @@ impl FutexQueue {
                 let dst = other.wakers.lock();
                 (src, dst)
             } else {
-                let other = other.wakers.lock();
-                let this = self.wakers.lock();
-                (this, other)
+                let dst = other.wakers.lock();
+                let src = self.wakers.lock();
+                (src, dst)
             };
 
             let mut notified = 0;
