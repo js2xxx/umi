@@ -9,7 +9,6 @@ use ksc::{
     Error::{self, *},
 };
 use rand_riscv::RandomState;
-use rv39_paging::{PAGE_MASK, PAGE_SHIFT};
 use spin::RwLock;
 use umifs::{path::*, traits::*, types::*};
 
@@ -92,11 +91,7 @@ impl Entry for CachedDir {
             (EntryCache::Dir(dir.clone()), dir)
         } else {
             let io = entry.clone().to_io().ok_or(EISDIR)?;
-            let stream_len = io.stream_len().await?;
             let phys = crate::mem::new_phys(io, false);
-            for index in 0..(stream_len + PAGE_MASK) >> PAGE_SHIFT {
-                phys.commit(index, None, false).await?;
-            }
             let file = Arc::new(CachedFile {
                 entry,
                 phys: Arc::new(phys),

@@ -297,7 +297,7 @@ impl Phys {
             }),
             position: initial_pos.into(),
             cow,
-            flusher: Some(Flusher { sender, offset: 0 }),
+            flusher: cow.then_some(Flusher { sender, offset: 0 }),
         };
         (phys, flusher(receiver, backend))
     }
@@ -351,9 +351,11 @@ impl Phys {
             }),
             position: Default::default(),
             cow,
-            flusher: self.flusher.clone().map(|flusher| Flusher {
-                offset: flusher.offset + index_offset,
-                ..flusher
+            flusher: self.flusher.clone().and_then(|flusher| {
+                cow.then_some(Flusher {
+                    offset: flusher.offset + index_offset,
+                    ..flusher
+                })
             }),
         }
     }

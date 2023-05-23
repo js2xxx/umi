@@ -12,7 +12,6 @@ test = ["dep:scoped_threadpool"]
 hart-id = {path = "../hart-id"}
 ksc-core = {path = "../ksc-core"}
 ksync = {path = "../ksync"}
-ktime-core = {path = "../ktime-core"}
 rand-riscv = {path = "../rand-riscv"}
 range-map = {path = "../range-map"}
 rv39-paging = {path = "../paging"}

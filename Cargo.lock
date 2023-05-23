@@ -391,7 +391,6 @@ dependencies = [
  "hashbrown",
  "ksc-core",
  "ksync",
- "ktime-core",
  "log",
  "rand-riscv",
  "range-map",
