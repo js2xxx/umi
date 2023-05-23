@@ -48,6 +48,7 @@ pub fn handle_intr(intr: Interrupt, from: &str) {
             sbi_rt::set_timer(raw + config::TIME_FREQ as u64 / TIMER_GRAN_DIV);
         }
         Interrupt::SupervisorExternal => crate::dev::INTR.notify(hart_id::hart_id()),
+        Interrupt::SupervisorSoft => crate::cpu::IPI.receive(),
         _ => log::info!("unhandled interrupt in {from}: {intr:?}"),
     }
 }

@@ -10,4 +10,5 @@ ksc-core = {path = "../ksc-core"}
 # External crates
 arsc-rs = {git = "https://github.com/js2xxx/arsc"}
 async-trait = "0"
+futures-util = {version = "0", default-features = false, features = ["alloc"]}
 log = "0"

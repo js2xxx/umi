@@ -1,10 +1,15 @@
 #![cfg_attr(not(test), no_std)]
 
-use alloc::{boxed::Box, sync::Arc};
-use core::{any::Any, mem, slice};
+use alloc::{
+    boxed::Box,
+    string::{String, ToString},
+    sync::Arc,
+};
+use core::{any::Any, mem, slice, str};
 
 use arsc_rs::Arsc;
 use async_trait::async_trait;
+use futures_util::{stream, Stream};
 use ksc_core::{Error, EINTR, EIO};
 
 extern crate alloc;
@@ -241,8 +246,48 @@ pub trait IoExt: Io {
             Err(EIO)
         }
     }
+
+    async fn read_line(&self, out: &mut String) -> Result<String, Error> {
+        if let Some(pos) = out.find('\n') {
+            let next = out.split_off(pos + 1);
+            out.pop();
+            return Ok(next);
+        }
+        let mut buf = [0; 64];
+        loop {
+            let len = self.read(&mut [&mut buf]).await?;
+            if len == 0 {
+                return Ok(String::new());
+            }
+
+            let (line, b) = match buf.iter().position(|&b| b == b'\n') {
+                Some(pos) => (pos, true),
+                None => (len, false),
+            };
+            let s = str::from_utf8(&buf[..line])?;
+            out.push_str(s);
+
+            if b {
+                let rest = buf.get(line + 1..len);
+                return Ok(match rest {
+                    Some(rest) => str::from_utf8(rest)?.to_string(),
+                    None => String::new(),
+                });
+            }
+        }
+    }
 }
 impl<T: Io + ?Sized> IoExt for T {}
+
+pub fn lines(io: Arc<dyn Io>) -> impl Stream<Item = Result<String, Error>> + Send {
+    stream::unfold((io, String::new()), |(io, mut buf)| async move {
+        let next_buf = io.read_line(&mut buf).await;
+        match next_buf {
+            Ok(next) => (!buf.is_empty()).then_some((Ok(buf), (io, next))),
+            Err(err) => Some((Err(err), (io, String::new()))),
+        }
+    })
+}
 
 pub trait ToIo {
     fn to_io(self: Arc<Self>) -> Option<Arc<dyn Io>> {

@@ -31,6 +31,7 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         .map(MMAP, crate::mem::mmap)
         .map(MPROTECT, crate::mem::mprotect)
         .map(MUNMAP, crate::mem::munmap)
+        .map(MEMBARRIER, crate::mem::membarrier)
         // Tasks
         .map(SCHED_YIELD, task::uyield)
         .map(GETTID, task::tid)

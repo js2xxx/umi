@@ -257,3 +257,22 @@ pub async fn munmap(
     cx.ret(ts.virt.unmap(addr.into()..(addr + len).into()).await);
     ScRet::Continue(None)
 }
+
+#[async_handler]
+pub async fn membarrier(
+    _: &mut TaskState,
+    cx: UserCx<'_, fn(i32, u32, usize) -> Result<i32, Error>>,
+) -> ScRet {
+    let (cmd, flags, hid) = cx.args();
+    cx.ret(if cmd == 0 {
+        Ok(i32::MAX)
+    } else {
+        if flags == 1 {
+            crate::cpu::IPI.remote_fence(1 << hid);
+        } else {
+            crate::cpu::IPI.remote_fence(hart_id::hart_ids())
+        }
+        Ok(0)
+    });
+    ScRet::Continue(None)
+}
