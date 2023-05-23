@@ -9,7 +9,6 @@ use ksc::{
 };
 use ktime::{TimeOutExt, Timer};
 use rv39_paging::{Attr, LAddr, PAGE_MASK, PAGE_SHIFT, PAGE_SIZE};
-use umifs::traits::IntoAnyExt;
 
 use crate::{
     mem::{futex::RobustListHead, user::FutexKey, In, InOut, Out, UserPtr},
@@ -183,13 +182,10 @@ pub async fn mmap(
             Phys::new_anon(cow)
         } else {
             let entry = ts.files.get(fd).await?;
-            match entry.clone().downcast::<Phys>() {
-                Some(phys) => phys.clone_as(cow, 0, None),
-                None => crate::mem::new_phys(entry.to_io().ok_or(EISDIR)?, cow),
-            }
+            crate::mem::new_phys(entry.to_io().ok_or(EISDIR)?, cow)
         };
 
-        let addr = flags.contains(Flags::FIXED).then(|| LAddr::from(addr));
+        let addr = (flags.contains(Flags::FIXED) || addr != 0).then(|| LAddr::from(addr));
 
         let offset = if offset & PAGE_MASK != 0 {
             return Err(EINVAL);
@@ -203,6 +199,12 @@ pub async fn mmap(
             .writable(prot.contains(Prot::WRITE))
             .executable(prot.contains(Prot::EXEC))
             .build();
+
+        if flags.contains(Flags::FIXED) {
+            let addr = addr.unwrap().val() & !PAGE_MASK;
+            let len = (len + PAGE_MASK) & !PAGE_MASK;
+            ts.virt.unmap(addr.into()..(addr + len).into()).await?;
+        }
 
         let count = (len + PAGE_MASK) >> PAGE_SHIFT;
         let addr = ts

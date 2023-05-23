@@ -27,10 +27,15 @@ use umio::{advance_slices, ioslice_len, Io, IoExt, IoSlice, IoSliceMut, SeekFrom
 
 pub static ZERO: Lazy<Arc<Frame>> = Lazy::new(|| Arc::new(Frame::new().unwrap()));
 
-#[derive(Debug)]
 pub struct Frame {
     base: PAddr,
     ptr: NonNull<u8>,
+}
+
+impl fmt::Debug for Frame {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("Frame").field(&self.base).finish()
+    }
 }
 
 unsafe impl Send for Frame {}
@@ -461,13 +466,16 @@ impl Phys {
         pin: bool,
     ) -> Result<(Arc<Frame>, usize), Error> {
         log::trace!(
-            "Phys::commit index = {index} {writable:?} {} {}",
-            if pin { "pin" } else { "" },
-            if self.cow { "cow" } else { "" }
+            "Phys::commit index = {index} {writable:?}{}{}",
+            if pin { " pin" } else { "" },
+            if self.cow { " cow" } else { "" }
         );
         assert!(!self.branch);
         match self.commit_impl(index, writable, pin, self.cow).await {
-            Ok(Commit::Shared(frame, len)) => Ok((frame, len)),
+            Ok(Commit::Shared(frame, len)) => {
+                log::trace!("Phys::commit result = {frame:?}, len = {len:#x}");
+                Ok((frame, len))
+            }
             Ok(Commit::Unique(..)) => unreachable!(),
             Err(err) => Err(err),
         }

@@ -313,6 +313,10 @@ impl Default for UserBuffer {
 }
 
 impl UserBuffer {
+    pub fn addr(&self) -> LAddr {
+        self.addr
+    }
+
     pub async fn as_slice(&self, virt: Pin<&Virt>, len: usize) -> Result<Vec<&[u8]>, Error> {
         let paddrs = virt.commit_range(self.addr..(self.addr + len)).await?;
         Ok(paddrs

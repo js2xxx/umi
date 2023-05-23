@@ -16,24 +16,26 @@ bitflags! {
         const SEARCH  =  4;
         const WRONLY  =  5;
 
-        const APPEND    = 0x000008;
-        const CREAT     = 0x40;
-        const EXCL      = 0x000040;
-        const NOCTTY    = 0x000080;
-        const NOFOLLOW  = 0x000100;
-        const TRUNC     = 0x000200;
-        const NONBLOCK  = 0x000400;
-        const DSYNC     = 0x000800;
-        const RSYNC     = 0x001000;
-        const SYNC      = 0x002000;
-        const CLOEXEC   = 0x004000;
-        const PATH      = 0x008000;
-        const LARGEFILE = 0x010000;
-        const NOATIME   = 0x020000;
-        const ASYNC     = 0x040000;
-        const TMPFILE   = 0x080000;
-        const DIRECT    = 0x100000;
-        const DIRECTORY = 0x200000;
+        const CREAT       =  0o100;
+        const EXCL        =  0o200;
+        const NOCTTY      =  0o400;
+        const TRUNC       =  0o1000;
+        const APPEND      =  0o2000;
+        const NONBLOCK    =  0o4000;
+        const DSYNC       =  0o10000;
+        const SYNC        =  0o4010000;
+        const RSYNC       =  0o4010000;
+        const DIRECTORY   =  0o200000;
+        const NOFOLLOW    =  0o400000;
+        const CLOEXEC     =  0o2000000;
+
+        const ASYNC       =  0o20000;
+        const DIRECT      =  0o40000;
+        const LARGEFILE   =  0o100000;
+        const NOATIME     =  0o1000000;
+        const PATH        =  0o10000000;
+        const TMPFILE     =  0o20200000;
+        const NDELAY      =  Self::NONBLOCK.bits();
     }
 
 

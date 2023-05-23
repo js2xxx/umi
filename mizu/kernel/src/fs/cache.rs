@@ -48,7 +48,7 @@ impl FileSystem for CachedFs {
 #[derive(Clone)]
 enum EntryCache {
     Dir(Arc<CachedDir>),
-    File(Arc<CachedFile>),
+    File(CachedFile),
 }
 
 pub struct CachedDir {
@@ -59,6 +59,15 @@ pub struct CachedDir {
 pub struct CachedFile {
     entry: Arc<dyn Entry>,
     phys: Arc<Phys>,
+}
+
+impl Clone for CachedFile {
+    fn clone(&self) -> Self {
+        Self {
+            entry: self.entry.clone(),
+            phys: Arc::new(self.phys.clone_as(false, 0, None)),
+        }
+    }
 }
 
 impl ToIo for CachedDir {}
@@ -78,7 +87,7 @@ impl Entry for CachedDir {
                 EntryCache::Dir(_) if !expect_dir => return Err(EISDIR),
                 EntryCache::File(_) if expect_dir => return Err(ENOTDIR),
                 EntryCache::Dir(dir) => dir,
-                EntryCache::File(file) => file,
+                EntryCache::File(file) => Arc::new(file),
             };
             return Ok((entry, false));
         }
@@ -92,11 +101,11 @@ impl Entry for CachedDir {
         } else {
             let io = entry.clone().to_io().ok_or(EISDIR)?;
             let phys = crate::mem::new_phys(io, false);
-            let file = Arc::new(CachedFile {
+            let file = CachedFile {
                 entry,
                 phys: Arc::new(phys),
-            });
-            (EntryCache::File(file.clone()), file)
+            };
+            (EntryCache::File(file.clone()), Arc::new(file))
         };
         ksync::critical(|| self.cache.write().insert(path.to_path_buf(), ec));
         Ok((entry, created))

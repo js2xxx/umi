@@ -367,7 +367,6 @@ pub async fn execve(
             ts.task.parent.clone(),
             &Arc::new(phys),
             ts.virt.clone(),
-            Default::default(),
             args,
             envs,
         )

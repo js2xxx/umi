@@ -1,10 +1,11 @@
 use alloc::{
-    string::String,
+    string::{String, ToString},
     sync::{Arc, Weak},
     vec,
     vec::Vec,
 };
 use core::{
+    ffi::CStr,
     mem,
     pin::Pin,
     sync::atomic::{AtomicUsize, Ordering::SeqCst},
@@ -13,13 +14,13 @@ use core::{
 use arsc_rs::Arsc;
 use co_trap::TrapFrame;
 use kmem::{Phys, Virt};
-use ksc::Error::{self, ENOSYS};
+use ksc::Error::{self, EISDIR, ENOSYS};
 use ksync::Broadcast;
 use rand_riscv::rand_core::RngCore;
 use riscv::register::sstatus;
 use rv39_paging::{Attr, LAddr, ID_OFFSET, PAGE_MASK, PAGE_SHIFT, PAGE_SIZE};
 use sygnal::{ActionSet, Sig, SigSet, Signals};
-use umifs::path::Path;
+use umifs::types::{OpenOptions, Permissions};
 
 use crate::{
     executor,
@@ -174,32 +175,58 @@ impl InitTask {
         parent: Weak<Task>,
         phys: &Arc<Phys>,
         virt: Pin<Arsc<Virt>>,
-        lib_path: Vec<&Path>,
         args: Vec<String>,
         envs: Vec<String>,
     ) -> Result<Self, Error> {
+        const AT_PHDR: u8 = 3; // Program header table base address
+        const AT_PHENT: u8 = 4; // Size of program header entry
+        const AT_PHNUM: u8 = 5; // Number of program headers
         const AT_PAGESZ: u8 = 6;
+        const AT_BASE: u8 = 7; // Load base address
         const AT_RANDOM: u8 = 25;
 
-        let has_interp = if let Some(interp) = elf::get_interp(phys).await? {
-            let _ = (lib_path, interp);
-            todo!("load deynamic linker");
-        } else {
-            false
-        };
+        let (loaded, args) = match elf::get_interp(phys).await? {
+            Some(interp) => {
+                let mut interp = CStr::from_bytes_until_nul(&interp)?.to_str()?.to_string();
+                interp = interp.replace("/lib/ld-musl-riscv64-sf.so.1", "libc.so");
 
-        let loaded = elf::load(phys, None, virt.as_ref()).await?;
-        if loaded.is_dyn && !has_interp {
-            return Err(ENOSYS);
-        }
+                let (entry, _) = crate::fs::open(
+                    interp.as_ref(),
+                    OpenOptions::RDONLY,
+                    Permissions::SELF_R | Permissions::SELF_X,
+                )
+                .await?;
+                let phys = crate::mem::new_phys(entry.to_io().ok_or(EISDIR)?, true);
+                let loaded = elf::load(&Arc::new(phys), None, virt.as_ref()).await?;
+
+                let args = [interp, "--library-path=/".into()].into_iter().chain(args);
+                (loaded, args.collect())
+            }
+            None => {
+                let loaded = elf::load(phys, None, virt.as_ref()).await?;
+                if loaded.is_dyn {
+                    return Err(ENOSYS);
+                }
+                (loaded, args)
+            }
+        };
         virt.commit(loaded.entry).await?;
+
+        let base = loaded.range.start;
 
         let stack = Self::load_stack(
             virt.as_ref(),
             loaded.stack,
             args,
             envs,
-            vec![(AT_PAGESZ, PAGE_SIZE), (AT_RANDOM, 0xdeadbeef)],
+            vec![
+                (AT_PAGESZ, PAGE_SIZE),
+                (AT_RANDOM, 0xdeadbeef),
+                (AT_BASE, base.val()),
+                (AT_PHDR, base.val() + loaded.header.e_phoff as usize),
+                (AT_PHENT, loaded.header.e_phentsize as usize),
+                (AT_PHNUM, loaded.header.e_phnum as usize),
+            ],
         )
         .await?;
 

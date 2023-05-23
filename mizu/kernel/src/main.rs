@@ -163,11 +163,6 @@ async fn main(fdt: usize) {
     let oo = OpenOptions::RDONLY;
     let perm = Permissions::all_same(true, false, true);
 
-    rt.clone()
-        .open("entry-static".as_ref(), oo, perm)
-        .await
-        .unwrap();
-
     let (runner, _) = rt.open("runtest".as_ref(), oo, perm).await.unwrap();
     let runner = Arc::new(mem::new_phys(runner.to_io().unwrap(), true));
 
@@ -179,11 +174,10 @@ async fn main(fdt: usize) {
             Weak::new(),
             &runner,
             crate::mem::new_virt(),
-            Default::default(),
             vec![
                 "runtest".into(),
                 "-w".into(),
-                "entry-static".into(),
+                "entry-dynamic".into(),
                 case.into(),
             ],
             vec![],
