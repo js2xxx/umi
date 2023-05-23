@@ -54,7 +54,7 @@ async fn main(fdt: usize) {
     let oo = OpenOptions::RDONLY;
     let perm = Default::default();
 
-    let scripts = ["run-static.sh", "run-dynamic.sh"];
+    let scripts = ["run-dynamic.sh", "run-static.sh"];
 
     let rt2 = rt.clone();
     let stream = stream::iter(scripts)
