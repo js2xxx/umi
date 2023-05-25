@@ -13,9 +13,13 @@
 - `debug` - 调试信息，包括内核文件的反汇编、ELF元数据还有QEMU的输出日志；
 - `mizu/kernel` - 内核主程序代码；
 - `mizu/lib` - 内核各个模块的代码；
+- `scripts` - 包含第三方依赖的换源脚本；
 - `target` - cargo的生成目录；
 - `third-party/bin` - RustSBI的BIOS二进制文件；
+- `third-party/vendor` - 第三方库的依赖；
 - `third-party/img`- 初赛评测程序的磁盘映像文件。
+
+由于分支原因，第三方库的依赖和换源脚本并不实际包含于以上目录中，将在本文档最后进行演示。
 
 ## 编译&运行&调试
 
@@ -261,3 +265,72 @@ pub unsafe fn init(fdt_base: *const ()) -> Result<(), FdtError> {
 [设备树的文档](https://devicetree-specification.readthedocs.io/en/latest/index.html)
 
 而对于文件系统，我们也直接建立了串口、管道、DevFS等对应的文件系统结构。其中串口文件作为`klog`模块的简单包装，管道也仅是对`kmem::Phys`的简单包装，而DevFS则是囊括了`umifs::misc`和块设备中的所有文件节点。
+
+
+## 常见问题
+
+### 启动时的地址转换
+
+由于我们的内核是放在高位的地址空间，而启动时SBI会将我们放到低位地址空间中，这不仅需要从低到高进行一个长跳转，而且会导致编译出来的符号表地址的不统一。
+
+1. 为了保证长跳转不出错，我们使用一个启动页表，同时映射低地址和高地址，并在入口先加载该页表，跳转之后再换成其他页表或者抹去低地址的页表；
+2. 为了保证符号的统一性，我们将内核编译成静态的PIE（Position-Independent Executable），即不依赖绝对地址的可执行文件。这样可以将所有的函数调用和跳转转换成相对PC的寻址模式，具体表现为汇编出包含`auipc`指令的代码。并且如果不能控制GOT（全局偏移表）的生成，我们还需要在链接选项中添加诸如`--apply-dynamic-relocs`和`-Ztls-model=local-exec`等选项，并且在链接脚本中制定最终的加载地址，在静态连接时就确定GOT中表项的值，从而避免我们程序运行时再麻烦地动态设置。
+
+### 第三方依赖的自动下载
+
+在此直接奉上自动下载第三方依赖项的脚本，帮助同学们避坑。使用时注意替换其中可能与自己项目不一致的内容。
+
+```bash
+# scripts/revendor.sh
+
+#! /bin/bash
+
+RUST_DIR="$(rustc --print=sysroot)"
+
+# Rust标准库（包括core和alloc）自身也会包括一些依赖项，这些依赖项的版本被固定在这个Cargo.lock中，会被
+# cargo硬编码监测。需要将其复制到这些core、alloc或者test等的根目录下来保证和Cargo.toml的一致性，不然
+# 在执行cargo vendor的时候，会更新一些不被该Cargo.lock认可的依赖项，造成vendor换源之后编译失败。
+cp -f "$RUST_DIR"/lib/rustlib/src/rust/Cargo.lock \
+    "$RUST_DIR"/lib/rustlib/src/rust/library/test/
+
+mkdir -p .cargo
+cp -rf cargo-config/* .cargo
+
+# 这里的`scripts/config.patch.toml`是项目中非crates.io中的依赖项的源信息。具体示例在下文。
+cp -f scripts/config.patch.toml .cargo/config.toml
+
+rm -rf third-party/vendor
+
+cargo update
+
+# 实际的下载操作，cargo会自动检测你工作区中所有项目的依赖然后一起下载到指定目录中，在这里是
+# third-party/vendor。
+cargo vendor third-party/vendor \
+    --respect-source-config --versioned-dirs \
+    -s $RUST_DIR/lib/rustlib/src/rust/library/test/Cargo.toml \
+    >> .cargo/config2.toml
+
+mv -f .cargo/config2.toml .cargo/config.toml
+
+# 这里的`scripts/config.toml`里包含公用的编译选项。比如LTO、编译参数设置等等。
+cat scripts/config.toml >> .cargo/config.toml
+
+cp -rf .cargo/* cargo-config
+```
+运行这个脚本之后，当前所有的第三方库源将会全部被替换成本地源。如果想要改回网络下载，将你的`scripts/config.toml`替换掉`cargo-config`中对应文件即可。
+
+```toml
+# scripts/cargo.patch.toml
+
+# 比如说我的项目中依赖了我自己在Github上event-listener的fork，但是我可能又会引用一些依赖crates.io上的
+# 该项目官方源的第三方库。这个时候如果直接进行cargo vendor就会造成多个源同时存在使得vendor失败。因此我们
+# 需要将指向crate.io的该项目的源也替换成我自己的fork，从而解决冲突。
+[patch.crates-io]
+event-listener = { git = "https://github.com/js2xxx/event-listener"}
+```
+
+## 参考项目
+
+- 往届的项目：[Maturin](https://gitlab.eduxiji.net/scPointer/maturin)，[FTL OS](https://gitlab.eduxiji.net/DarkAngelEX/oskernel2022-ftlos)；
+- 商业和开源项目：Linux，Fuchsia；
+- 自己之前写的OS：[oceanic](https://github.com/js2xxx/oceanic)。
