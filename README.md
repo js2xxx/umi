@@ -297,7 +297,7 @@ impl<A: 'static> FromParam<&'_ mut TrapFrame> for UserCx<'_, A> {
 ### `umio`、`umifs`和`afat32`
 
 - `umio`抽象出一个读写相关的抽象trait `Io`，表示一切可读写的数据结构，以及从标准库扒来的`SeekFrom`、`IoSlice`等基础类型；
-- `umifs`实现了umi的虚拟文件系统，实现了高性能的路径解析，并兼容了Linux的文件类型
+- `umifs`实现了umi的虚拟文件系统，包括`FileSystem`、`Entry`、`Directory`、`DirectoryMut`等trait，实现了方便的路径解析，并兼容了Linux的文件类型
   - VFS虚拟文件系统在各类文件系统之上构建了一个抽象层，从而使操作系统可以挂载各类w文件系统；
 - `afat32` Async FAT32，参考[`rust-fatfs`](https://github.com/rafalh/rust-fatfs)实现的异步且并发的FAT32文件系统。
 
@@ -309,7 +309,7 @@ impl<A: 'static> FromParam<&'_ mut TrapFrame> for UserCx<'_, A> {
 
 此处我们解耦了**内核和Rust语言自用的内核堆分配器**和**全局的物理页帧管理**的两个部分，从而减小了复杂度并一定程度上避免了一些安全的问题。
 
-- `kalloc` (内核堆)：初始化一个全局分配器。Rust语言的后端通过 `#[global_allocator]` 确定一个全局的分配器，并在每次需要时从该函数分配内存
+- `kalloc` (内核堆)：初始化一个全局分配器。Rust语言的后端通过 `#[global_allocator]` 确定一个全局的分配器，并在每次需要时从该函数分配内存。引入了`buddy_system_allocator`这个crate。
   
   ```Rust
   #[global_allocator]
@@ -714,4 +714,4 @@ event-listener = { git = "https://github.com/js2xxx/event-listener"}
 
 - 往届的项目：[Maturin](https://gitlab.eduxiji.net/scPointer/maturin)，[FTL OS](https://gitlab.eduxiji.net/DarkAngelEX/oskernel2022-ftlos)；
 - 商业和开源项目：Linux，Fuchsia；
-- 自己之前写的OS：[oceanic](https://github.com/js2xxx/oceanic)。
+- 徐启航同学之前写的OS：[oceanic](https://github.com/js2xxx/oceanic)。
