@@ -45,7 +45,7 @@ riscv64-unknown-elf-gdb debug/mizu.sym # 另一个终端
 
 OS的输出文件被配置在了`debug/qemu.log`文件中，而终端中的QEMU作为一个监视器可以查看实时的运行信息（键入help可以查看所有命令）。
 
-## 开发过程
+## 开发过程&结构设计
 
 我们的OS是从接近RISC-V的硬件底层根SBI标准开始，先完成大部分模块会用到的公用底层模块的实现，然后将每一个模块逐个设计与实现，最后整合进内核，完成系统调用的编写，辅以简单的调试并通过初赛。接下来将按照开发时间顺序逐个讲解各个模块。
 
@@ -256,13 +256,129 @@ impl<A: 'static> FromParam<&'_ mut TrapFrame> for UserCx<'_, A> {
 
 另外，其中定义在`ksc-macros`中的`#[async_handler]`宏可以自动包装异步函数返回的Future，并抹去其具体类型，变成一个`Pin<Box<dyn Future>>`。参考的是[`async-trait`](https://github.com/dtolnay/async-trait)的实现。
 
-### `umio`和`umifs`
+### `umio`、`umifs`和`afat32`
 
-### `afat32`
+- `umio`抽象出一个读写相关的抽象trait `Io`，表示一切可读写的数据结构，以及从标准库扒来的`SeekFrom`、`IoSlice`等基础类型；
+- `umifs`实现了umi的虚拟文件系统，实现了高性能的路径解析，并兼容了Linux的文件类型
+  - VFS虚拟文件系统在各类文件系统之上构建了一个抽象层，从而使操作系统可以挂载各类w文件系统；
+- `afat32` Async FAT32，参考[`rust-fatfs`](https://github.com/rafalh/rust-fatfs)实现的异步且并发的FAT32文件系统。
 
-### `kmem`和`range-map`
+### `kmem`、`range-map`和`kalloc`
+
+这几个模块专注于内存管理。
+
+#### 物理内存
+
+此处我们解耦了**内核和Rust语言自用的内核堆分配器**和**全局的物理页帧管理**的两个部分，从而减小了复杂度并一定程度上避免了一些安全的问题。
+
+- `kalloc` (内核堆)：初始化一个全局分配器。Rust语言的后端通过 `#[global_allocator]` 确定一个全局的分配器，并在每次需要时从该函数分配内存
+  
+  ```Rust
+  #[global_allocator]
+  static GLOBAL_ALLOC: imp::Allocator = imp::Allocator::new();
+
+  #[cfg(not(feature = "test"))]
+  pub unsafe fn init<T: Copy>(start: &mut T, end: &mut T) {
+    let start_ptr = (start as *mut T).cast();
+    let end_ptr = (end as *mut T).cast::<u8>();
+    let len = end_ptr.offset_from(start_ptr);
+    GLOBAL_ALLOC.init(start_ptr as usize, len as usize)
+  }
+  ```
+
+- 页帧分配：使用经典的链表模式分配页帧，但是全部操作都是无锁的，比`kalloc`引用的分配器效率更高；
+- 页帧管理：提供了RAII的内存管理模型，每个 `Phys` 管理一个包含若干个页帧的LRU缓存（从[`lru-rs`](https://github.com/jeromefroe/lru-rs)导入），和一个可选的IO后端，通过按页帧索引提交、回写等操作来同步后端的内容，并在此基础上也实现了IO trait。
+
+  ```Rust
+  pub struct FrameInfo {
+    frame: Arc<Frame>,
+    len: usize,
+    dirty: bool,
+    pin_count: usize,
+  }
+
+  pub struct Phys {
+    frames: Mutex<LruCache<usize, FrameInfo>>,
+    position: AtomicUsize,
+    cow: bool,
+    backend: Arc<dyn Io>,
+  }
+  ```
+
+#### 虚拟内存&地址空间
+
+我们采用了当前主流操作系统类似的策略：将内核映射到地址空间的高位，从而实现了内核和用户地址的隔离。
+
+虚拟地址空间管理的结构体持有一个根页表和一个`RangeMap`，即以一个范围为键的键值映射表，对每一个分配的地值范围建立一个映射结构体：
+
+```rust
+struct Mapping {
+    phys: Arc<Phys>,
+    start_index: usize,
+    attr: Attr,
+}
+
+pub struct Virt {
+    root: Mutex<Table>,
+    map: Mutex<RangeMap<LAddr, Mapping>>,
+    cpu_mask: AtomicUsize,
+
+    _marker: PhantomPinned,
+}
+```
+
+该结构体包含创建映射、提交映射、重设映射权限、释放映射等操作，实现了映射懒分配的功能。其中`RangeMap`结构支持地址空间随机化（ASLR）的分配策略，基于标准库的`BTreeMap`建立了一个键值表，并附带了ASLR的基本实现，从而提升了内核安全性，防止被缓存溢出侵略。
+
+而地址空间的加载卸载和页表缓存的刷新则需要与硬件平台和SBI直接交互。其中加载方式便是为每个CPU分配一个TLS变量储存当前的地址空间结构，在更新`satp`的时候顺带更新该变量以转移所有权。
+
+刷新页表缓存的代码如下：
+
+```rust
+/// # Arguments
+/// 
+/// - `cpu_mask` - 当前正在加载该地址空间的CPU核心；
+/// - `addr`和`count` - 刷新页表的基地址和页的个数。
+pub fn flush(cpu_mask: usize, addr: LAddr, count: usize) {
+    if count == 0 {
+        return;
+    }
+    let others = cpu_mask & !(1 << hart_id::hart_id());
+    if others != 0 {
+        let _ = sbi_rt::remote_sfence_vma(others, 0, addr.val(), count << PAGE_SHIFT);
+    }
+    if cpu_mask != others {
+        unsafe {
+            if count == 1 {
+                sfence_vma(0, addr.val())
+            } else {
+                sfence_vma_all()
+            }
+        }
+    }
+}
+```
+
+其中有一个坑，使用RustSBI作为BIOS的小伙伴需要注意了：目前RustSBI的官方QEMU实现代码没有实现`remote_sfence_vma`，调用这个接口返回的是不支持错误。虽然在该OS目前的测试中没有遇到因此造成的bug，但如果遇到了页表不一致的问题应该往此方向考虑。
 
 ### `devices`
+
+该模块专注于各种通过异步实现的驱动程序，包括PLIC中断控制器、块设备等等。
+
+其中的VirtIO块设备的驱动程序调用的是[`virtio-drivers`](https://docs.rs/virtio-drivers/latest/virtio_drivers/)中的`*_nb`（非阻塞）函数，然后通过中断通知来实现异步操作。VirtIO块设备中包含一个Virt队列，分为提交队列跟完成队列，类似Linux的io-uring实现。
+
+驱动过程
+  1. 提交：线程 A 提交任务给提交队列, 然后睡眠等待通知；
+  2. 等待中断；
+  3. 完成：
+     1. 设备发出中断信号；
+     2. 驱动设备维护线程 B 接受信号，将对应的请求操作结构体从提交队列移入结束队列，唤醒 A；
+     3. A 检查结束队列中的最新任务是否和自己符合，若符合则将其删除，完成操作并返回。
+
+看上去不错？确实已经通过了测试，但这样的实现其实有 bug！
+
+线程 A 有可能被取消，此时缓冲区就会被提早释放，如果设备此时还在使用该地址，那么实际上就造成了use-after-free的问题。这个问题可以留给同学们思考如何解决，而我们已经在后续的代码中解决了。
+
+而PLIC中断管理，实际上就是对[文档](https://github.com/riscv/riscv-plic-spec)的一层包装，在此不再赘述。
 
 ### 其他的一些模块
 
