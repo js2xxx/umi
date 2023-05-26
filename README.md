@@ -51,7 +51,159 @@ OS的输出文件被配置在了`debug/qemu.log`文件中，而终端中的QEMU�
 
 ## 模块讲解
 
-### `mizu/kernel`
+我们OS的内核态运行在异步的无栈协程上下文中。TODO
+
+### `ksync(-core)`
+
+这个模块提供了各种在异步上下文中同步源语，这些数据结构均取自(`async-lock`)[https://github.com/smol-rs/async-lock] crate：
+
+  - `mutex` 互斥锁
+  - `rw_lock` 读写锁
+  - `semaphore` 信号量
+
+此外，还有如下数据结构：
+
+  - `broadcast` 广播事件订阅
+  - `mpmc` 多消费者多生产者的通道
+  - `RCU` 无锁 Read Copy-Update 机制
+    - `epoch` 多线程垃圾回收算法
+
+在`core`中，实现了单个CPU核内的临界区访问机制：`fn critial`，以用来配合`spin` crate的自旋锁，防止可能的中断重入导致递归锁。
+
+独立出`core`的原因是，由于模块间有相互依赖的关系，通过独立出一些共用的接口或服务就可以来消除模块依赖图中的环。
+
+### `ktime(-core)`
+
+这个模块主要处理时间相关的数据结构。
+
+- 在`core`中模仿标准库定义了独立的`Instant`，并像标准库一样可以与`core::time::Duration`进行互操作；
+- 模仿(`async-io`)[https://doc.rs/async-io/latest/async_io/struct.Timer.html]实现了异步定时器及其队列。
+
+### `co-trap`
+
+这个模块处理用户态与内核态通过中断机制相互切换的流程控制和对用户上下文的系统调用参数抽象。
+
+传统的中断处理程序通常会以函数调用的形式，伪代码如下：
+
+1. 保存用户上下文；
+2. 通过标准的函数调用形式跳转到中断处理程序；
+3. 恢复用户上下文并退出。
+
+而这里使用一种新的方式，思想与去年的一等奖作品FTL OS不谋而合，其伪代码分成两个部分，进入用户和进入内核。
+
+进入内核时：
+
+1. 保存用户上下文；
+2. 通过sscratch切换并加载内核上下文；
+3. 退出函数调用（通过`ret`指令）。
+
+进入用户时：
+
+1. 保存内核上下文；
+2. 通过a0切换并加载用户上下文；
+3. 退出中断函数（通过`sret`指令）。
+
+可以看出，这两段代码是完全对偶的，并不跟传统方式一样是一个单独的函数调用过程。
+
+实际上这就是一种有栈协程的上下文切换方式。在传统不依靠无栈协程的内核上下文中，内核线程的相互切换便是采用的这种方式。这里将这种方式转移到这里，可以使得用户代码和内核代码变成两个独立的控制流。而从内核态的视角来看，进入用户态相当于调用函数，而退出用户态便是调用函数返回。
+
+```assembly
+// a0 <- trap_frame: *mut TrapFrame
+// a1 <- scratch register
+
+.global _return_to_user
+.type _return_to_user, @function
+_return_to_user:
+    xchg_sx // 交换s系列寄存器
+    load_ux // 加载中断寄存器（sepc）等
+    load_tx // 加载a、t系列和sp、tp等寄存器
+    load_scratch // 加载a1
+
+    csrw sscratch, a0 // a0即为该函数的参数，保存用户上下文的地址；将其存入sscratch中
+    ld a0, 16*8(a0) // 加载a0
+    sret
+
+.global _user_entry
+.type _user_entry, @function
+.align 4
+_user_entry:
+    csrrw a0, sscratch, a0 // 取出用户上下文地址
+    save_scratch
+    save_tx // 保存a、t系列和sp、tp等寄存器
+    save_ux // 保存中断寄存器（sepc）等
+    csrr a1, sscratch // 保存a1
+    xchg_sx // 交换s系列寄存器
+    ret
+```
+
+而对于用户上下文的系统调用参数抽象，我们定义了一个泛型包装结构，可以很容易地从泛型中的函数签名看出系统调用的函数原型签名。在实现的时候使用了宏展开来保证每个函数签名的有效性。
+
+```rust
+pub struct UserCx<'a, A> {
+    tf: &'a mut TrapFrame,
+    _marker: PhantomData<A>,
+}
+
+macro_rules! impl_arg {
+    ($($arg:ident),*) => {
+        impl<'a, $($arg: RawReg,)* T: RawReg> UserCx<'a, fn($($arg),*) -> T> {
+            #[allow(clippy::unused_unit)]
+            #[allow(non_snake_case)]
+            #[allow(unused_parens)]
+            /// Get the arguments with the same prototype as the parameters in the function prototype.
+            pub fn args(&self) -> ($($arg),*) {
+                $(
+                    let $arg = self.tf.syscall_arg::<${index()}>();
+                )*
+                ($(RawReg::from_raw($arg)),*)
+            }
+
+            /// Gives the return value to the user context, consuming `self`.
+            pub fn ret(self, value: T) {
+                self.tf.set_syscall_ret(RawReg::into_raw(value))
+            }
+        }
+    };
+}
+
+all_tuples!(impl_arg, 0, 7, P);
+```
+
+使用示例：
+
+```rust
+let mut tf = Default::default();
+
+let user: UserCx<'_, fn(u32, *const u8) -> usize> =
+    UserCx::from(&mut tf);
+
+let (a, b): (u32, *const u8) = user.args();
+user.ret(a as usize + b as usize);
+```
+
+### `art`
+
+### `ksc(-core, -macros)`
+
+### `umio`和`umifs`
+
+### `afat32`
+
+### `kmem`和`range-map`
+
+### `devices`
+
+### 其他的一些模块
+
+- `kalloc` : 内核和Rust语言自用的内核堆分配器；
+- `klog` : 一些日志和输出的宏和函数；
+- `rv39-paging` : RISC-V 的 Sv39 页表机制；
+- `config` : 一些参数；
+- `hart-id` : 存储 hart-id；
+- `rand-riscv` : 随机数生成函数；
+- `sygnal` : 尚不完备的信号处理机制。
+
+### `kernel`
 
 这是内核程序的crate，也是各个模块整合的终点。在这个crate中，逐个介绍一些比较重要的设计点。
 
@@ -267,7 +419,7 @@ pub unsafe fn init(fdt_base: *const ()) -> Result<(), FdtError> {
 而对于文件系统，我们也直接建立了串口、管道、DevFS等对应的文件系统结构。其中串口文件作为`klog`模块的简单包装，管道也仅是对`kmem::Phys`的简单包装，而DevFS则是囊括了`umifs::misc`和块设备中的所有文件节点。
 
 
-## 常见问题
+## 常见问题与细节
 
 ### 启动时的地址转换
 
@@ -275,6 +427,10 @@ pub unsafe fn init(fdt_base: *const ()) -> Result<(), FdtError> {
 
 1. 为了保证长跳转不出错，我们使用一个启动页表，同时映射低地址和高地址，并在入口先加载该页表，跳转之后再换成其他页表或者抹去低地址的页表；
 2. 为了保证符号的统一性，我们将内核编译成静态的PIE（Position-Independent Executable），即不依赖绝对地址的可执行文件。这样可以将所有的函数调用和跳转转换成相对PC的寻址模式，具体表现为汇编出包含`auipc`指令的代码。并且如果不能控制GOT（全局偏移表）的生成，我们还需要在链接选项中添加诸如`--apply-dynamic-relocs`和`-Ztls-model=local-exec`等选项，并且在链接脚本中制定最终的加载地址，在静态连接时就确定GOT中表项的值，从而避免我们程序运行时再麻烦地动态设置。
+
+### 每个模块内部的单元测试
+
+为了不依赖于内核来测试各个模块，我们在一些模块内部实现了单元测试，直接运行在宿主机（工作机器）平台下。
 
 ### 第三方依赖的自动下载
 
