@@ -53,22 +53,20 @@ impl From<Action> for SigAction {
                 entry,
                 use_extra_cx,
                 use_alt_stack,
-            } => {
-                SigAction {
-                    handler: entry.val(),
-                    mask: action.mask,
-                    flags: {
-                        let mut flags = Default::default();
-                        if use_extra_cx {
-                            flags |= SigFlags::SIGINFO
-                        }
-                        if use_alt_stack {
-                            flags |= SigFlags::ONSTACK
-                        }
-                        flags
-                    },
-                }
-            }
+            } => SigAction {
+                handler: entry.val(),
+                mask: action.mask,
+                flags: {
+                    let mut flags = Default::default();
+                    if use_extra_cx {
+                        flags |= SigFlags::SIGINFO
+                    }
+                    if use_alt_stack {
+                        flags |= SigFlags::ONSTACK
+                    }
+                    flags
+                },
+            },
         }
     }
 }

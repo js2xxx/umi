@@ -17,7 +17,10 @@ use futures_util::future::{select, select_all, Either};
 use hashbrown::HashMap;
 use kmem::Virt;
 use ksc::Error::{self, ECHILD};
-use ksync::{unbounded, AtomicArsc, Broadcast, Receiver};
+use ksync::{
+    channel::{mpmc::Receiver, unbounded, Broadcast},
+    AtomicArsc,
+};
 use rand_riscv::RandomState;
 use rv39_paging::{Attr, PAGE_SIZE};
 use spin::{Lazy, Mutex};

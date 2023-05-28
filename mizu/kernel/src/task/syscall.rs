@@ -12,7 +12,7 @@ use ksc::{
     Error::{self, EINVAL, ENOTDIR},
     RawReg,
 };
-use ksync::{AtomicArsc, Broadcast};
+use ksync::{channel::Broadcast, AtomicArsc};
 use sygnal::{Sig, SigCode, SigFields, SigInfo, SigSet, Signals};
 use umifs::types::Permissions;
 

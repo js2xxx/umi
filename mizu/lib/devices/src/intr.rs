@@ -2,7 +2,10 @@ use core::num::NonZeroU32;
 
 use crossbeam_queue::SegQueue;
 use hashbrown::{hash_map::Entry, HashMap};
-use ksync::{unbounded, Receiver, Sender, TryRecvError};
+use ksync::channel::{
+    mpmc::{Receiver, Sender, TryRecvError},
+    unbounded,
+};
 use rand_riscv::RandomState;
 use spin::RwLock;
 

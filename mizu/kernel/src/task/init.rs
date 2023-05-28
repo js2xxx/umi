@@ -15,7 +15,7 @@ use arsc_rs::Arsc;
 use co_trap::TrapFrame;
 use kmem::{Phys, Virt};
 use ksc::Error::{self, EISDIR, ENOSYS};
-use ksync::Broadcast;
+use ksync::channel::Broadcast;
 use rand_riscv::rand_core::RngCore;
 use riscv::register::sstatus;
 use rv39_paging::{Attr, LAddr, ID_OFFSET, PAGE_MASK, PAGE_SHIFT, PAGE_SIZE};

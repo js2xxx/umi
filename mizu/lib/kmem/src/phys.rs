@@ -19,7 +19,10 @@ use ksc_core::{
     handler::Boxed,
     Error::{self, EINVAL, ENOENT, ENOMEM},
 };
-use ksync::{unbounded, Receiver, Sender};
+use ksync::channel::{
+    mpmc::{Receiver, Sender},
+    unbounded,
+};
 use rand_riscv::RandomState;
 use rv39_paging::{PAddr, ID_OFFSET, PAGE_SHIFT, PAGE_SIZE};
 use spin::{Lazy, Mutex};

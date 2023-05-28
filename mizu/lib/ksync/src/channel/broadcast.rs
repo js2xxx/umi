@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use arsc_rs::Arsc;
 use spin::Mutex;
 
-use crate::{Flavor, Sender};
+use super::mpmc::{Flavor, Sender};
 
 #[derive(Debug)]
 pub struct Broadcast<F: Flavor> {
