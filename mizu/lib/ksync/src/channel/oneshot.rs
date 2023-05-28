@@ -1,11 +1,15 @@
 use core::{
     cell::UnsafeCell,
-    fmt, ptr,
+    fmt,
+    pin::Pin,
+    ptr,
     sync::atomic::{AtomicU8, Ordering::SeqCst},
+    task::{ready, Context, Poll},
 };
 
 use arsc_rs::Arsc;
-use event_listener::Event;
+use event_listener::{Event, EventListener};
+use futures_lite::{Future, FutureExt, Stream, StreamExt};
 
 /// Oneshot channels/ports
 ///
@@ -87,26 +91,6 @@ impl<T> Packet<T> {
                 _ => unreachable!(),
             }
         }
-    }
-
-    pub async fn recv(&self) -> Result<T, Failure> {
-        // Attempt to not block the thread (it's a little expensive). If it looks
-        // like we're not empty, then immediately go through to `try_recv`.
-        if self.state.load(SeqCst) == EMPTY {
-            let listener = self.event.listen();
-
-            // race with senders to enter the blocking state
-            if self
-                .state
-                .compare_exchange(EMPTY, WAITING, SeqCst, SeqCst)
-                .is_ok()
-            {
-                listener.await;
-                debug_assert!(self.state.load(SeqCst) != EMPTY);
-            }
-        }
-
-        self.try_recv()
     }
 
     pub fn try_recv(&self) -> Result<T, Failure> {
@@ -200,7 +184,8 @@ impl<T> fmt::Debug for Sender<T> {
 }
 
 pub struct Receiver<T> {
-    pub(super) inner: Arsc<Packet<T>>,
+    inner: Arsc<Packet<T>>,
+    listener: Option<EventListener>,
 }
 
 unsafe impl<T: Send> Send for Receiver<T> {}
@@ -208,7 +193,10 @@ unsafe impl<T: Send> Send for Receiver<T> {}
 impl<T> Receiver<T> {
     #[inline]
     pub(super) fn new(inner: Arsc<Packet<T>>) -> Self {
-        Receiver { inner }
+        Receiver {
+            inner,
+            listener: None,
+        }
     }
 
     #[inline]
@@ -219,9 +207,54 @@ impl<T> Receiver<T> {
         })
     }
 
-    #[inline]
-    pub async fn recv(&self) -> Result<T, RecvError> {
-        self.inner.recv().await.map_err(|_| RecvError)
+    pub async fn recv(&mut self) -> Result<T, RecvError> {
+        self.next().await.ok_or(RecvError)
+    }
+}
+
+impl<T> Unpin for Receiver<T> {}
+
+impl<T> Stream for Receiver<T> {
+    type Item = T;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        loop {
+            if let Some(listener) = self.listener.as_mut() {
+                ready!(listener.poll(cx));
+                self.listener = None;
+
+                debug_assert!(self.inner.state.load(SeqCst) != EMPTY);
+                break Poll::Ready(self.try_recv().ok());
+            }
+
+            // Attempt to not block the thread (it's a little expensive). If it looks
+            // like we're not empty, then immediately go through to `try_recv`.
+            if self.inner.state.load(SeqCst) != EMPTY {
+                break Poll::Ready(self.try_recv().ok());
+            }
+
+            let listener = self.inner.event.listen();
+
+            // race with senders to enter the blocking state
+            if self
+                .inner
+                .state
+                .compare_exchange(EMPTY, WAITING, SeqCst, SeqCst)
+                .is_err()
+            {
+                break Poll::Ready(self.try_recv().ok());
+            }
+
+            self.listener = Some(listener);
+        }
+    }
+}
+
+impl<T> Future for Receiver<T> {
+    type Output = Result<T, RecvError>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        Poll::Ready(ready!(self.poll_next(cx)).ok_or(RecvError))
     }
 }
 
