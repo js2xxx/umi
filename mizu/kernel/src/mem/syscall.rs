@@ -213,7 +213,9 @@ pub async fn mmap(
             .await?;
 
         if flags.contains(Flags::POPULATE) {
-            ts.virt.commit_range(addr..(addr + len)).await?;
+            ts.virt
+                .commit_range(addr..(addr + len), Default::default())
+                .await?;
         }
 
         Ok(addr.val())

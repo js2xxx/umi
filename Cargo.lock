@@ -881,6 +881,7 @@ dependencies = [
  "futures-util",
  "ksc-core",
  "ksync",
+ "log",
  "rv39-paging",
  "spin",
 ]

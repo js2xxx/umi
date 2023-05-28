@@ -12,7 +12,7 @@ use core::{
 
 use arsc_rs::Arsc;
 use futures_util::Future;
-use ksc_core::Error::{self, EFAULT, EINVAL, ENOSPC};
+use ksc_core::Error::{self, EFAULT, EINVAL, ENOSPC, EPERM};
 use ksync::Mutex;
 use range_map::{AslrKey, RangeMap};
 use rv39_paging::{
@@ -70,6 +70,7 @@ impl Mapping {
         count: NonZeroUsize,
         table: &mut Table,
         cpu_mask: usize,
+        expect_attr: Attr,
     ) -> Result<Vec<Range<PAddr>>, Error> {
         let writable = self.attr.contains(Attr::WRITABLE);
         let mut p = Vec::new();
@@ -79,6 +80,10 @@ impl Mapping {
         for (index, addr) in
             (0..count.get()).map(|c| (c + self.start_index + offset, addr + (c << PAGE_SHIFT)))
         {
+            if !self.attr.contains(expect_attr | Attr::USER_ACCESS) {
+                return Err(EPERM);
+            }
+
             let entry = table.la2pte_alloc(addr, frames(), ID_OFFSET)?;
             let base = if !entry.is_set() {
                 let writable = writable.then_some(PAGE_SIZE);
@@ -216,7 +221,11 @@ impl Virt {
         .ok_or(ENOSPC)
     }
 
-    pub async fn commit_range(&self, range: Range<LAddr>) -> Result<Vec<Range<PAddr>>, Error> {
+    pub async fn commit_range(
+        &self,
+        range: Range<LAddr>,
+        expect_attr: Attr,
+    ) -> Result<Vec<Range<PAddr>>, Error> {
         let aligned_range = LAddr::from(range.start.val() & !PAGE_MASK)
             ..LAddr::from((range.end.val() + PAGE_MASK) & !PAGE_MASK);
 
@@ -237,7 +246,7 @@ impl Virt {
             if let Some(count) = NonZeroUsize::new(count) {
                 let cpu_mask = self.cpu_mask.load(SeqCst);
                 let mut p = mapping
-                    .commit(start, offset, count, &mut table, cpu_mask)
+                    .commit(start, offset, count, &mut table, cpu_mask, expect_attr)
                     .await?;
                 if let Some(first) = p.first_mut() {
                     first.start += range.start.val().saturating_sub(start.val())
@@ -253,8 +262,8 @@ impl Virt {
         Ok(paddr)
     }
 
-    pub async fn commit(&self, addr: LAddr) -> Result<PAddr, Error> {
-        let paddr = self.commit_range(addr..(addr + 1)).await?;
+    pub async fn commit(&self, addr: LAddr, expect_attr: Attr) -> Result<PAddr, Error> {
+        let paddr = self.commit_range(addr..(addr + 1), expect_attr).await?;
         paddr.first().cloned().ok_or(EFAULT).map(|r| r.start)
     }
 

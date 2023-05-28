@@ -14,6 +14,7 @@ use riscv::register::{
     scause::{Exception, Scause, Trap},
     time,
 };
+use rv39_paging::Attr;
 use sygnal::{Sig, SigCode, SigInfo};
 
 use super::TaskState;
@@ -137,7 +138,13 @@ async fn handle_scause(scause: Scause, ts: &mut TaskState, tf: &mut TrapFrame) -
                     return TaskState::resume_from_signal(ts, tf).await;
                 }
 
-                let res = ts.virt.commit(tf.stval.into()).await;
+                let attr = Attr::builder()
+                    .readable(excep == Exception::LoadPageFault)
+                    .writable(excep == Exception::StorePageFault)
+                    .executable(excep == Exception::InstructionPageFault)
+                    .build();
+
+                let res = ts.virt.commit(tf.stval.into(), attr).await;
                 if let Err(err) = res {
                     log::error!("failing to commit pages at address {:#x}: {err}", tf.stval);
                     return Continue(Some(SigInfo {

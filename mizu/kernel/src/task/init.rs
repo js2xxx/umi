@@ -59,7 +59,7 @@ impl InitTask {
         let len = argc_len + argv_len + envp_len + auxv_len + rand_len + args_len + envs_len;
         let ret = LAddr::from((stack - len).val() & !7);
 
-        let paddr = virt.commit(ret).await?;
+        let paddr = virt.commit(ret, Default::default()).await?;
 
         let argc_ptr = paddr.to_laddr(ID_OFFSET);
         let mut argv_ptr = argc_ptr + argc_len;
@@ -210,7 +210,8 @@ impl InitTask {
                 (loaded, args)
             }
         };
-        virt.commit(loaded.entry).await?;
+        virt.commit(loaded.entry, Attr::READABLE | Attr::EXECUTABLE)
+            .await?;
 
         let base = loaded.range.start;
 
