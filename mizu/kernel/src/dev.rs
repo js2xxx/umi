@@ -12,7 +12,7 @@ use spin::{Lazy, Once};
 pub use self::{
     block::{block, blocks},
     intr::INTR,
-    serial::{stdout, Stdout},
+    serial::{Stdin, Stdout},
 };
 
 static DEV_INIT: Lazy<Handlers<&str, &FdtNode, bool>> = Lazy::new(|| {

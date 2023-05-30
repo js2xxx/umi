@@ -1,6 +1,7 @@
 use alloc::{boxed::Box, sync::Arc};
 
 use async_trait::async_trait;
+use futures_util::{stream, StreamExt};
 use ksc::Error::{self, EBADF, ENOSYS, ENOTDIR};
 use umifs::{
     path::Path,
@@ -30,23 +31,28 @@ impl Default for Serial {
 
 #[async_trait]
 impl Io for Serial {
-    async fn read(&self, _buffer: &mut [IoSliceMut]) -> Result<usize, Error> {
+    async fn read(&self, buffer: &mut [IoSliceMut]) -> Result<usize, Error> {
         if !self.read {
             return Err(EBADF);
         }
-        todo!("Serial::read")
+        Ok(stream::iter(buffer.iter_mut())
+            .fold(0, |acc, buf| async move {
+                stream::iter(buf.iter_mut())
+                    .zip(crate::dev::Stdin::new())
+                    .for_each(|(dst, b)| async move { *dst = b })
+                    .await;
+                acc + buf.len()
+            })
+            .await)
     }
 
     async fn write(&self, buffer: &mut [IoSlice]) -> Result<usize, Error> {
         if !self.write {
             return Err(EBADF);
         }
-        Ok(ksync::critical(|| match crate::dev::stdout() {
-            Some(mut out) => buffer.iter().fold(0, |acc, buf| {
-                out.write_bytes(buf);
-                acc + buf.len()
-            }),
-            _ => 0,
+        Ok(buffer.iter().fold(0, |acc, buf| {
+            crate::dev::Stdout.write_bytes(buf);
+            acc + buf.len()
         }))
     }
 

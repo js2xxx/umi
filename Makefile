@@ -7,7 +7,7 @@ export TARGET_DIR 	:= $(ROOT)/target/$(TARGET)/$(MODE)
 export DEBUG_DIR   	:= $(ROOT)/debug
 
 export ROOTFS  ?= $(ROOT)/third-party/img/sdcard.img
-export SBI ?= $(ROOT)/third-party/bin/rustsbi-$(BOARD).bin
+export SBI ?= $(ROOT)/third-party/bin/opensbi-$(BOARD)
 
 .PHONY: all build run debug test clean
 
@@ -20,17 +20,16 @@ build:
 	cd mizu/kernel && make build
 	cp $(SBI) $(ROOT)/sbi-qemu
 
-QEMU_ARGS := -monitor stdio \
+QEMU_ARGS := \
 	-kernel kernel-qemu \
 	-nographic \
-	-serial file:debug/qemu.log \
 	-smp 4 -m 4G \
 	-drive file=$(ROOTFS),if=none,format=raw,id=x0 \
 	-device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0
 
 ifeq ($(BOARD), qemu-virt)
 	QEMU_ARGS += -machine virt \
-		-bios default
+		-bios $(SBI)
 endif
 
 run: build

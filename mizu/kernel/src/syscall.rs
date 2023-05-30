@@ -90,6 +90,7 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         .map(PRLIMIT64, prlimit)
         .map(GETEUID, geteuid)
         .map(GETEGID, getegid)
+        .map(GETPGID, getpgid)
         .map(GETUID, getuid)
 });
 
@@ -249,6 +250,12 @@ async fn geteuid(_: &mut TaskState, cx: UserCx<'_, fn() -> usize>) -> ScRet {
 
 #[async_handler]
 async fn getegid(_: &mut TaskState, cx: UserCx<'_, fn() -> usize>) -> ScRet {
+    cx.ret(0);
+    ScRet::Continue(None)
+}
+
+#[async_handler]
+async fn getpgid(_: &mut TaskState, cx: UserCx<'_, fn() -> usize>) -> ScRet {
     cx.ret(0);
     ScRet::Continue(None)
 }
