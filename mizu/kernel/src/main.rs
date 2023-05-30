@@ -22,20 +22,17 @@ mod trap;
 
 mod test;
 
-#[macro_use]
-extern crate klog;
-
 extern crate alloc;
 
 pub use self::rxx::executor;
 
 async fn main(fdt: usize) {
-    println!("Hello from UMI ^_^");
-
     // Init devices.
     unsafe { crate::dev::init(fdt as _).expect("failed to initialize devices") };
     // Init FS.
     fs::fs_init().await;
+
+    println!("Hello from UMI ^_^");
 
     mem::test_phys().await;
 

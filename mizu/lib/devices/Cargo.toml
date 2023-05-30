@@ -26,5 +26,6 @@ hashbrown = {version = "0", default-features = false, features = ["inline-more"]
 log = "0"
 spin = "0"
 static_assertions = "1"
+uart_16550 = "0"
 virtio-drivers = "0"
 volatile = "0"

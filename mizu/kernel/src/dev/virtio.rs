@@ -9,7 +9,7 @@ use virtio_drivers::transport::{mmio::MmioTransport, DeviceType, Transport};
 use super::block::BLOCKS;
 use crate::{dev::intr::intr_man, executor, someb, tryb};
 
-pub fn virtio_mmio_init(node: &FdtNode) -> bool {
+pub fn init_mmio(node: &FdtNode) -> bool {
     let intr_pin = someb!(node
         .interrupts()
         .and_then(|mut intr| intr.next())

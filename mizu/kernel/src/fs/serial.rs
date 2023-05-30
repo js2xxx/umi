@@ -41,12 +41,12 @@ impl Io for Serial {
         if !self.write {
             return Err(EBADF);
         }
-        Ok(ksync::critical(|| {
-            let mut out = klog::stdout();
-            buffer.iter().fold(0, |acc, buf| {
+        Ok(ksync::critical(|| match crate::dev::stdout() {
+            Some(mut out) => buffer.iter().fold(0, |acc, buf| {
                 out.write_bytes(buf);
                 acc + buf.len()
-            })
+            }),
+            _ => 0,
         }))
     }
 

@@ -135,17 +135,6 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
     unsafe { crate::trap::init() };
 
     if !GLOBAL_INIT.load(Relaxed) {
-        let level = match option_env!("RUST_LOG") {
-            Some("error") => log::Level::Error,
-            Some("warn") => log::Level::Warn,
-            Some("info") => log::Level::Info,
-            Some("debug") => log::Level::Debug,
-            Some("trace") => log::Level::Trace,
-            _ => log::Level::Warn,
-        };
-        // Init logger.
-        unsafe { klog::init_logger(level) };
-
         // Init the kernel heap.
         unsafe { kalloc::init(&mut _sheap, &mut _eheap) };
 
