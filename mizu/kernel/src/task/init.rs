@@ -34,6 +34,7 @@ use crate::{
 };
 
 pub struct InitTask {
+    executable: String,
     parent: Weak<Task>,
     virt: Pin<Arsc<Virt>>,
     tf: TrapFrame,
@@ -44,9 +45,9 @@ impl InitTask {
     async unsafe fn populate_args(
         stack: LAddr,
         virt: Pin<&Virt>,
-        args: Vec<String>,
-        envs: Vec<String>,
-        auxv: Vec<(u8, usize)>,
+        args: &[String],
+        envs: &[String],
+        auxv: &[(u8, usize)],
     ) -> Result<LAddr, Error> {
         let argc_len = mem::size_of::<usize>();
         let argv_len = mem::size_of::<usize>() * (args.len() + 1);
@@ -99,7 +100,7 @@ impl InitTask {
             envs_addr += src.len() + 1;
         }
 
-        for (idx, val) in auxv {
+        for (idx, val) in auxv.iter().copied() {
             let val = if val == 0xdeadbeef {
                 rand_addr.val()
             } else {
@@ -120,9 +121,9 @@ impl InitTask {
     pub(super) async fn load_stack(
         virt: Pin<&Virt>,
         stack: Option<(usize, Attr)>,
-        args: Vec<String>,
-        envs: Vec<String>,
-        auxv: Vec<(u8, usize)>,
+        args: &[String],
+        envs: &[String],
+        auxv: &[(u8, usize)],
     ) -> Result<LAddr, Error> {
         log::trace!("InitTask::load_stack {stack:?}");
 
@@ -172,6 +173,7 @@ impl InitTask {
     }
 
     pub async fn from_elf(
+        executable: String,
         parent: Weak<Task>,
         phys: &Arc<Phys>,
         virt: Pin<Arsc<Virt>>,
@@ -218,9 +220,9 @@ impl InitTask {
         let stack = Self::load_stack(
             virt.as_ref(),
             loaded.stack,
-            args,
-            envs,
-            vec![
+            &args,
+            &envs,
+            &[
                 (AT_PAGESZ, PAGE_SIZE),
                 (AT_RANDOM, 0xdeadbeef),
                 (AT_BASE, base.val()),
@@ -234,6 +236,7 @@ impl InitTask {
         let tf = Self::trap_frame(loaded.entry, stack, 0);
 
         Ok(InitTask {
+            executable,
             parent,
             virt,
             tf,
@@ -244,9 +247,12 @@ impl InitTask {
     pub fn spawn(self) -> Result<Arc<Task>, ksc::Error> {
         let tid = alloc_tid();
         let task = Arc::new(Task {
+            executable: spin::Mutex::new(self.executable),
             parent: self.parent,
             children: spin::Mutex::new(Default::default()),
             tid,
+
+            times: Default::default(),
 
             sig: Signals::new(),
             shared_sig: Default::default(),
@@ -259,8 +265,6 @@ impl InitTask {
             sig_mask: SigSet::EMPTY,
             sig_stack: None,
             brk: 0,
-            system_times: 0,
-            user_times: 0,
             virt: self.virt,
             futex: Arsc::new(Futexes::new()),
             files: self.files,
@@ -277,6 +281,7 @@ impl InitTask {
     }
 
     pub async fn reset(self, ts: &mut TaskState, tf: &mut TrapFrame) {
+        ksync::critical(|| *ts.task.executable.lock() = self.executable);
         ts.task.shared_sig.swap(Default::default(), SeqCst);
         ts.brk = 0;
         ts.virt = self.virt;

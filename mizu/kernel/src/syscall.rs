@@ -4,17 +4,15 @@ use core::{ops::ControlFlow, pin::Pin, time::Duration};
 use co_trap::{TrapFrame, UserCx};
 use kmem::Virt;
 use ksc::{
-    async_handler, AHandlers,
-    Error::{self, EPERM},
+    async_handler, AHandlers, Error,
     Scn::{self, *},
 };
 use ktime::{Instant, InstantExt};
-use riscv::register::time;
 use spin::Lazy;
 use sygnal::SigInfo;
 
 use crate::{
-    mem::{In, Out, UserPtr, USER_RANGE},
+    mem::{In, Out, UserPtr},
     task::{self, fd, signal, TaskState},
 };
 
@@ -38,6 +36,8 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         .map(GETPID, task::pid)
         .map(GETPPID, task::ppid)
         .map(TIMES, task::times)
+        .map(PRLIMIT64, task::prlimit)
+        .map(GETRUSAGE, task::getrusage)
         .map(SET_TID_ADDRESS, task::set_tid_addr)
         .map(CLONE, task::clone)
         .map(WAIT4, task::waitpid)
@@ -70,6 +70,7 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         .map(DUP3, fd::dup3)
         .map(FCNTL, fd::fcntl)
         .map(OPENAT, fd::openat)
+        .map(READLINKAT, fd::readlinkat)
         .map(FACCESSAT, fd::faccessat)
         .map(MKDIRAT, fd::mkdirat)
         .map(FSTAT, fd::fstat)
@@ -89,13 +90,18 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         .map(NANOSLEEP, sleep)
         // Miscellaneous
         .map(UNAME, uname)
-        .map(PRLIMIT64, prlimit)
         .map(GETEUID, dummy_zero)
         .map(GETEGID, dummy_zero)
         .map(GETPGID, dummy_zero)
         .map(GETUID, dummy_zero)
         .map(GETGID, dummy_zero)
 });
+
+#[async_handler]
+async fn dummy_zero(_: &mut TaskState, cx: UserCx<'_, fn() -> usize>) -> ScRet {
+    cx.ret(0);
+    ScRet::Continue(None)
+}
 
 #[derive(Debug, Clone, Copy, Default)]
 #[repr(C, packed)]
@@ -182,7 +188,7 @@ async fn uname(
     cx: UserCx<'_, fn(UserPtr<u8, Out>) -> Result<(), Error>>,
 ) -> ScRet {
     async fn inner(virt: Pin<&Virt>, mut out: UserPtr<u8, Out>) -> Result<(), Error> {
-        let names: [&str; 6] = ["mizu", "umi", "alpha", "0.1.0", "riscv qemu", ""];
+        let names: [&str; 6] = ["mizu", "umi", "5.0.0", "23.05", "riscv", ""];
         for name in names {
             out.write_slice(virt, name.as_bytes(), true).await?;
             out.advance(65);
@@ -191,62 +197,5 @@ async fn uname(
     }
     let ret = inner(ts.virt.as_ref(), cx.args());
     cx.ret(ret.await);
-    ScRet::Continue(None)
-}
-
-const RLIMIT_CPU: u32 = 0; // CPU time in sec
-const RLIMIT_DATA: u32 = 2; // max data size
-const RLIMIT_STACK: u32 = 3; // max stack size
-const RLIMIT_NPROC: u32 = 6; // max number of processes
-const RLIMIT_NOFILE: u32 = 7; // max number of open files
-const RLIMIT_AS: u32 = 9; // address space limit
-
-#[derive(Debug, Clone, Copy)]
-#[repr(C)]
-struct Rlimit {
-    cur: usize,
-    max: usize,
-}
-
-#[async_handler]
-async fn prlimit(
-    ts: &mut TaskState,
-    cx: UserCx<'_, fn(usize, u32, UserPtr<Rlimit, In>, UserPtr<Rlimit, Out>) -> Result<(), Error>>,
-) -> ScRet {
-    let (pid, ty, new, mut old) = cx.args();
-    let fut = async move {
-        if pid != 0 {
-            return Err(EPERM);
-        }
-        let (cur, max) = match ty {
-            RLIMIT_AS => (USER_RANGE.len(), USER_RANGE.len()),
-            RLIMIT_NPROC => (65536, 65536),
-            RLIMIT_CPU => {
-                let s = time::read() / config::TIME_FREQ as usize;
-                (s, usize::MAX)
-            }
-            RLIMIT_DATA | RLIMIT_STACK => (8 * 1024 * 1024, usize::MAX),
-            RLIMIT_NOFILE => {
-                let limit = if new.is_null() {
-                    ts.files.get_limit()
-                } else {
-                    ts.files.set_limit(new.read(ts.virt.as_ref()).await?.cur)
-                };
-                (limit, limit)
-            }
-            _ => (usize::MAX, usize::MAX),
-        };
-        if !old.is_null() {
-            old.write(ts.virt.as_ref(), Rlimit { cur, max }).await?;
-        }
-        Ok(())
-    };
-    cx.ret(fut.await);
-    ScRet::Continue(None)
-}
-
-#[async_handler]
-async fn dummy_zero(_: &mut TaskState, cx: UserCx<'_, fn() -> usize>) -> ScRet {
-    cx.ret(0);
     ScRet::Continue(None)
 }

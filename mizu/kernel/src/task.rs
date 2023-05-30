@@ -4,10 +4,11 @@ mod future;
 mod init;
 pub mod signal;
 mod syscall;
+mod time;
 
 use alloc::{
     sync::{Arc, Weak},
-    vec::Vec,
+    vec::Vec, string::String,
 };
 use core::pin::Pin;
 
@@ -26,7 +27,7 @@ use rv39_paging::{Attr, PAGE_SIZE};
 use spin::{Lazy, Mutex};
 use sygnal::{ActionSet, Sig, SigInfo, SigSet, Signals};
 
-use self::{fd::Files, signal::SigStack};
+use self::{fd::Files, signal::SigStack, time::Times};
 pub use self::{future::yield_now, init::InitTask, syscall::*};
 use crate::mem::{Futexes, Out, UserPtr};
 
@@ -53,6 +54,9 @@ pub struct Task {
     parent: Weak<Task>,
     children: spin::Mutex<Vec<Child>>,
     tid: usize,
+    executable: spin::Mutex<String>,
+
+    times: Arc<Times>,
 
     sig: Signals,
     shared_sig: AtomicArsc<Signals>,
@@ -89,9 +93,6 @@ pub struct TaskState {
     sig_stack: Option<SigStack>,
     pub(crate) brk: usize,
 
-    system_times: u64,
-    user_times: u64,
-
     pub(crate) virt: Pin<Arsc<Virt>>,
     pub(crate) futex: Arsc<Futexes>,
     sig_actions: Arsc<ActionSet>,
@@ -124,6 +125,9 @@ impl TaskState {
                 let children = ksync::critical(|| self.task.children.lock().clone());
                 log::trace!("task::wait found {} child(ren)", children.len());
 
+                for c in children.iter() {
+                    self.task.times.append_child(&c.task.times)
+                }
                 match &children[..] {
                     [] => return Err(ECHILD),
                     [a] => (a.event.recv().await, a.task.tid),
@@ -142,6 +146,9 @@ impl TaskState {
             PidSelection::Task(Some(tid)) => {
                 let child = ksync::critical(|| {
                     let children = self.task.children.lock();
+                    for c in children.iter() {
+                        self.task.times.append_child(&c.task.times)
+                    }
                     children.iter().find(|c| c.task.tid == tid).cloned()
                 });
                 (child.ok_or(ECHILD)?.event.recv().await, tid)

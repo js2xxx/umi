@@ -10,21 +10,24 @@ use arsc_rs::Arsc;
 use co_trap::{TrapFrame, UserCx};
 use ksc::{
     async_handler,
-    Error::{self, EINVAL, ENOTDIR},
+    Error::{self, EINVAL, ENOTDIR, EPERM},
     RawReg,
 };
 use ksync::{channel::Broadcast, AtomicArsc};
+use riscv::register::time;
 use sygnal::{Sig, SigCode, SigFields, SigInfo, SigSet, Signals};
 use umifs::types::Permissions;
 
 use crate::{
     executor,
-    mem::{deep_fork, In, Out, UserPtr},
-    syscall::ScRet,
+    mem::{deep_fork, In, Out, UserPtr, USER_RANGE},
+    syscall::{ScRet, Tv},
     task::{
         fd::MAX_PATH_LEN,
         future::{user_loop, TaskFut},
-        init, yield_now, Child, InitTask, Task, TaskEvent, TaskState, TASKS,
+        init,
+        time::Times,
+        yield_now, Child, InitTask, Task, TaskEvent, TaskState, TASKS,
     },
 };
 
@@ -60,8 +63,114 @@ pub async fn times(
     cx: UserCx<'_, fn(UserPtr<u64, Out>) -> Result<(), Error>>,
 ) -> ScRet {
     let mut out = cx.args();
-    let data = [ts.user_times, ts.system_times, 0, 0];
+    let data = ts.task.times.get(true);
     cx.ret(out.write_slice(ts.virt.as_ref(), &data, false).await);
+    Continue(None)
+}
+const RLIMIT_CPU: u32 = 0; // CPU time in sec
+const RLIMIT_DATA: u32 = 2; // max data size
+const RLIMIT_STACK: u32 = 3; // max stack size
+const RLIMIT_NPROC: u32 = 6; // max number of processes
+const RLIMIT_NOFILE: u32 = 7; // max number of open files
+const RLIMIT_AS: u32 = 9; // address space limit
+
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+pub struct Rlimit {
+    cur: usize,
+    max: usize,
+}
+
+#[async_handler]
+pub async fn prlimit(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(usize, u32, UserPtr<Rlimit, In>, UserPtr<Rlimit, Out>) -> Result<(), Error>>,
+) -> ScRet {
+    let (pid, ty, new, mut old) = cx.args();
+    let fut = async move {
+        if pid != 0 {
+            return Err(EPERM);
+        }
+        let (cur, max) = match ty {
+            RLIMIT_AS => (USER_RANGE.len(), USER_RANGE.len()),
+            RLIMIT_NPROC => (65536, 65536),
+            RLIMIT_CPU => {
+                let s = time::read() / config::TIME_FREQ as usize;
+                (s, usize::MAX)
+            }
+            RLIMIT_DATA | RLIMIT_STACK => (8 * 1024 * 1024, usize::MAX),
+            RLIMIT_NOFILE => {
+                let limit = if new.is_null() {
+                    ts.files.get_limit()
+                } else {
+                    ts.files.set_limit(new.read(ts.virt.as_ref()).await?.cur)
+                };
+                (limit, limit)
+            }
+            _ => (usize::MAX, usize::MAX),
+        };
+        if !old.is_null() {
+            old.write(ts.virt.as_ref(), Rlimit { cur, max }).await?;
+        }
+        Ok(())
+    };
+    cx.ret(fut.await);
+    ScRet::Continue(None)
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Rusage {
+    pub utime: Tv,       // user CPU time used
+    pub stime: Tv,       // system CPU time used
+    pub maxrss: usize,   // maximum resident set size
+    pub ixrss: usize,    // integral shared memory size
+    pub idrss: usize,    // integral unshared data size
+    pub isrss: usize,    // integral unshared stack size
+    pub minflt: usize,   // page reclaims (soft page faults)
+    pub majflt: usize,   // page faults (hard page faults)
+    pub nswap: usize,    // swaps
+    pub inblock: usize,  // block input operations
+    pub oublock: usize,  // block output operations
+    pub msgsnd: usize,   // IPC messages sent
+    pub msgrcv: usize,   // IPC messages received
+    pub nsignals: usize, // signals received
+    pub nvcsw: usize,    // voluntary context switches
+    pub nivcsw: usize,   // involuntary context switches
+}
+
+#[async_handler]
+pub async fn getrusage(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(i32, UserPtr<Rusage, Out>) -> Result<(), Error>>,
+) -> ScRet {
+    const RUSAGE_SELF: i32 = 0;
+    const RUSAGE_CHILDREN: i32 = -1;
+    const RUSAGE_THREAD: i32 = 1;
+
+    let (who, mut out) = cx.args();
+    let fut = async move {
+        let [user, system] = match who {
+            RUSAGE_SELF => ts.task.times.get_process(),
+            RUSAGE_CHILDREN => ts.task.times.get_children(),
+            RUSAGE_THREAD => ts.task.times.get_thread(),
+            _ => return Err(EINVAL),
+        };
+        let rusage = Rusage {
+            utime: Tv {
+                sec: user.as_secs(),
+                usec: user.subsec_micros() as _,
+            },
+            stime: Tv {
+                sec: system.as_secs(),
+                usec: system.subsec_micros() as _,
+            },
+            ..Default::default()
+        };
+        out.write(ts.virt.as_ref(), rusage).await?;
+        Ok(())
+    };
+    cx.ret(fut.await);
     Continue(None)
 }
 
@@ -152,6 +261,7 @@ async fn clone_task(
     let new_tid = init::alloc_tid();
     log::trace!("new tid = {new_tid}");
     let task = Arc::new(Task {
+        executable: spin::Mutex::new(ksync::critical(|| ts.task.executable.lock().clone())),
         parent: if flags.intersects(Flags::PARENT | Flags::THREAD) {
             ts.task.parent.clone()
         } else {
@@ -159,6 +269,11 @@ async fn clone_task(
         },
         children: spin::Mutex::new(Vec::new()),
         tid: new_tid,
+        times: if flags.intersects(Flags::THREAD) {
+            Times::new_thread(&ts.task.times)
+        } else {
+            Default::default()
+        },
         sig: Signals::new(),
         shared_sig: AtomicArsc::new(if flags.contains(Flags::THREAD) {
             ts.task.shared_sig.load(SeqCst)
@@ -207,8 +322,6 @@ async fn clone_task(
         sig_mask: SigSet::EMPTY,
         sig_stack: None,
         brk: ts.brk,
-        system_times: 0,
-        user_times: 0,
         virt,
         futex: if flags.contains(Flags::THREAD) {
             ts.futex.clone()
@@ -368,6 +481,7 @@ pub async fn execve(
         log::trace!("task::execve: start loading ELF. No way back.");
 
         let init = InitTask::from_elf(
+            name.into(),
             ts.task.parent.clone(),
             &Arc::new(crate::mem::new_phys(io, true)),
             ts.virt.clone(),

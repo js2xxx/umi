@@ -319,6 +319,46 @@ pub async fn sendfile(
     ScRet::Continue(None)
 }
 
+#[async_handler]
+pub async fn readlinkat(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(i32, UserPtr<u8, In>, UserPtr<u8, Out>, usize) -> Result<usize, Error>>,
+) -> ScRet {
+    let (fd, path, mut out, len) = cx.args();
+    let fut = async move {
+        let mut buf = [0; MAX_PATH_LEN];
+        let (path, root) = path.read_path(ts.virt.as_ref(), &mut buf).await?;
+
+        let options = OpenOptions::RDONLY;
+        let perm = Default::default();
+
+        log::trace!("user readlinkat fd = {fd}, path = {path:?}");
+
+        if root && path == "/proc/self/exe" {
+            let executable = ksync::critical(|| ts.task.executable.lock().clone());
+            if executable.len() + 1 >= len {
+                return Err(ENAMETOOLONG)
+            }
+            out.write_slice(ts.virt.as_ref(), executable.as_bytes(), true).await?;
+            return Ok(executable.len())
+        }
+
+        let _entry = if root {
+            crate::fs::open(path, options, perm).await?.0
+        } else {
+            let base = ts.files.get(fd).await?;
+            match base.open(path, options, perm).await {
+                Ok((entry, _)) => entry,
+                Err(ENOENT) if ts.files.cwd() == "" => crate::fs::open(path, options, perm).await?.0,
+                Err(err) => return Err(err),
+            }
+        };
+        Err(EINVAL)
+    };
+    cx.ret(fut.await);
+    ScRet::Continue(None)
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 #[repr(C, packed)]
 pub struct Kstat {

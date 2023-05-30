@@ -22,25 +22,8 @@ pub async fn brk(ts: &mut TaskState, cx: UserCx<'_, fn(usize) -> Result<usize, E
     const BRK_END: usize = 0x56789000;
 
     let addr = cx.args();
-    log::warn!("user brk addr = {addr:#x}, current brk = {:#x}", ts.brk);
-
     let fut = async move {
-        if addr == 0 {
-            if ts.brk == 0 {
-                let laddr = ts
-                    .virt
-                    .map(
-                        Some(BRK_START.into()),
-                        Arc::new(Phys::new_anon(true)),
-                        0,
-                        1,
-                        Attr::USER_RW,
-                    )
-                    .await?;
-                ts.brk = (laddr + PAGE_SIZE).val();
-            }
-            Ok(BRK_START)
-        } else {
+        Ok(if addr != 0 {
             let old_page = ts.brk & !PAGE_MASK;
             let new_page = (addr + PAGE_MASK) & !PAGE_MASK;
             if new_page >= BRK_END {
@@ -58,11 +41,25 @@ pub async fn brk(ts: &mut TaskState, cx: UserCx<'_, fn(usize) -> Result<usize, E
                     )
                     .await?;
             }
-            Ok(mem::replace(&mut ts.brk, addr))
-        }
+            mem::replace(&mut ts.brk, addr)
+        } else if ts.brk == 0 {
+            let laddr = ts
+                .virt
+                .map(
+                    Some(BRK_START.into()),
+                    Arc::new(Phys::new_anon(true)),
+                    0,
+                    1,
+                    Attr::USER_RW,
+                )
+                .await?;
+            ts.brk = (laddr + PAGE_SIZE).val();
+            BRK_START
+        } else {
+            ts.brk
+        })
     };
     cx.ret(fut.await);
-
     ScRet::Continue(None)
 }
 

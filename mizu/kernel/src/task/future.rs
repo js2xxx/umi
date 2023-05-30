@@ -59,7 +59,7 @@ pub async fn user_loop(mut ts: TaskState, mut tf: TrapFrame) {
         }
 
         let sys = time::read64();
-        ts.system_times += sys - stat_time;
+        ts.task.times.update_system(sys - stat_time);
         stat_time = sys;
 
         log::trace!(
@@ -70,7 +70,7 @@ pub async fn user_loop(mut ts: TaskState, mut tf: TrapFrame) {
         let (scause, fr) = co_trap::yield_to_user(&mut tf);
 
         let usr = time::read64();
-        ts.user_times += usr - stat_time;
+        ts.task.times.update_user(usr - stat_time);
         stat_time = usr;
 
         match fr {

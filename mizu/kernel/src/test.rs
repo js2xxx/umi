@@ -36,6 +36,7 @@ pub async fn libc_test(rt: Arc<dyn Entry>) {
         log::info!("Executing cmd {cmd:?}");
 
         let init = InitTask::from_elf(
+            "/runtest".into(),
             Weak::new(),
             &runner,
             crate::mem::new_virt(),
@@ -60,6 +61,7 @@ async fn run_busybox(rt: Arc<dyn Entry>, script: impl Into<String>) -> (i32, Opt
     let busybox = crate::mem::new_phys(busybox.to_io().unwrap(), true);
 
     let task = crate::task::InitTask::from_elf(
+        "/busybox".into(),
         Default::default(),
         &Arc::new(busybox),
         crate::mem::new_virt(),
