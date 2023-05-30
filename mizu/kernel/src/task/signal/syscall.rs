@@ -274,6 +274,7 @@ pub async fn kill(
             },
         };
         match pid {
+            PidSelection::Task(Some(tid)) if tid == ts.task.tid => ts.task.sig.push(si),
             PidSelection::Task(Some(tid)) => {
                 let child = ksync::critical(|| {
                     let children = ts.task.children.lock();

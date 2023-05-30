@@ -16,7 +16,7 @@ use crossbeam_queue::SegQueue;
 use futures_util::future::{select, select_all, Either};
 use hashbrown::HashMap;
 use kmem::Virt;
-use ksc::Error::{self, ECHILD};
+use ksc::Error::{self, ECHILD, EPERM};
 use ksync::{
     channel::{mpmc::Receiver, unbounded, Broadcast},
     AtomicArsc,
@@ -138,6 +138,7 @@ impl TaskState {
                     }
                 }
             }
+            PidSelection::Task(Some(tid)) if tid == self.task.tid => return Err(EPERM),
             PidSelection::Task(Some(tid)) => {
                 let child = ksync::critical(|| {
                     let children = self.task.children.lock();
