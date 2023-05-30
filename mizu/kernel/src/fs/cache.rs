@@ -101,6 +101,9 @@ impl Entry for CachedDir {
         } else {
             let io = entry.clone().to_io().ok_or(EISDIR)?;
             let phys = crate::mem::new_phys(io, false);
+            if options.contains(OpenOptions::APPEND) {
+                phys.seek(SeekFrom::End(0)).await?;
+            }
             let file = CachedFile {
                 entry,
                 phys: Arc::new(phys),

@@ -166,6 +166,8 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
     sbi_rt::set_timer(0);
 
     run_art(payload);
+    crate::dev::Stdout.flush();
+
     unsafe { ksync::disable() };
 
     if hart_id::is_bsp() {

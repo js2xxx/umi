@@ -5,7 +5,7 @@ use core::{
     pin::Pin,
     sync::atomic,
     task::{ready, Context, Poll},
-    time::Duration,
+    time::Duration, hint,
 };
 
 use crossbeam_queue::SegQueue;
@@ -33,6 +33,16 @@ static SERIAL: Once<Serial> = Once::new();
 pub struct Stdout;
 
 pub struct Stdin(Option<EventListener>);
+
+impl Stdout {
+    pub fn flush(&self) {
+        if let Some(serial) = SERIAL.get() {
+            while !serial.output.is_empty() {
+                hint::spin_loop()
+            }
+        }
+    }
+}
 
 impl fmt::Write for Stdout {
     fn write_str(&mut self, s: &str) -> fmt::Result {
