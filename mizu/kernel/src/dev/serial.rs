@@ -1,11 +1,11 @@
 use core::{
-    fmt,
+    fmt, hint,
     mem::MaybeUninit,
     num::NonZeroU32,
     pin::Pin,
     sync::atomic,
     task::{ready, Context, Poll},
-    time::Duration, hint,
+    time::Duration,
 };
 
 use crossbeam_queue::SegQueue;
@@ -125,7 +125,7 @@ impl core::fmt::Display for OptionU32Display {
     }
 }
 
-struct Logger(Level);
+struct Logger(Level, Mutex<()>);
 
 impl log::Log for Logger {
     fn enabled(&self, metadata: &log::Metadata) -> bool {
@@ -137,19 +137,23 @@ impl log::Log for Logger {
             return;
         }
 
-        let time = Instant::now();
-        let id = hart_id::hart_id();
-        if record.level() < Level::Debug {
-            println!("[{time:?}] {}#{id}: {}", record.level(), record.args())
-        } else {
-            let file = record.file().unwrap_or("<NULL>");
-            let line = OptionU32Display(record.line());
-            println!(
-                "[{time:?}] {}#{id}: [{file}:{line}] {}",
-                record.level(),
-                record.args()
-            )
-        }
+        ksync::critical(|| {
+            let _guard = self.1.lock();
+
+            let time = Instant::now();
+            let id = hart_id::hart_id();
+            if record.level() < Level::Debug {
+                println!("[{time:?}] {}#{id}: {}", record.level(), record.args())
+            } else {
+                let file = record.file().unwrap_or("<NULL>");
+                let line = OptionU32Display(record.line());
+                println!(
+                    "[{time:?}] {}#{id}: [{file}:{line}] {}",
+                    record.level(),
+                    record.args()
+                )
+            }
+        })
     }
 
     fn flush(&self) {}
@@ -208,7 +212,7 @@ pub fn init(node: &FdtNode) -> bool {
             _ => Level::Warn,
         };
         unsafe {
-            let logger = LOGGER.write(Logger(level));
+            let logger = LOGGER.write(Logger(level, Mutex::new(())));
             log::set_logger(logger).unwrap();
             log::set_max_level(level.to_level_filter());
         }

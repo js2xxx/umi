@@ -70,6 +70,7 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         .map(DUP3, fd::dup3)
         .map(FCNTL, fd::fcntl)
         .map(OPENAT, fd::openat)
+        .map(FACCESSAT, fd::faccessat)
         .map(MKDIRAT, fd::mkdirat)
         .map(FSTAT, fd::fstat)
         .map(NEWFSTATAT, fd::fstatat)
@@ -89,10 +90,11 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         // Miscellaneous
         .map(UNAME, uname)
         .map(PRLIMIT64, prlimit)
-        .map(GETEUID, geteuid)
-        .map(GETEGID, getegid)
-        .map(GETPGID, getpgid)
-        .map(GETUID, getuid)
+        .map(GETEUID, dummy_zero)
+        .map(GETEGID, dummy_zero)
+        .map(GETPGID, dummy_zero)
+        .map(GETUID, dummy_zero)
+        .map(GETGID, dummy_zero)
 });
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -244,25 +246,7 @@ async fn prlimit(
 }
 
 #[async_handler]
-async fn geteuid(_: &mut TaskState, cx: UserCx<'_, fn() -> usize>) -> ScRet {
-    cx.ret(0);
-    ScRet::Continue(None)
-}
-
-#[async_handler]
-async fn getegid(_: &mut TaskState, cx: UserCx<'_, fn() -> usize>) -> ScRet {
-    cx.ret(0);
-    ScRet::Continue(None)
-}
-
-#[async_handler]
-async fn getpgid(_: &mut TaskState, cx: UserCx<'_, fn() -> usize>) -> ScRet {
-    cx.ret(0);
-    ScRet::Continue(None)
-}
-
-#[async_handler]
-async fn getuid(_: &mut TaskState, cx: UserCx<'_, fn() -> usize>) -> ScRet {
+async fn dummy_zero(_: &mut TaskState, cx: UserCx<'_, fn() -> usize>) -> ScRet {
     cx.ret(0);
     ScRet::Continue(None)
 }

@@ -238,6 +238,8 @@ unsafe extern "C" fn _start() -> ! {
 fn panic(info: &core::panic::PanicInfo) -> ! {
     use sbi_rt::{Shutdown, SystemFailure};
     log::error!("#{} kernel {info}", hart_id::hart_id());
+
+    crate::dev::Stdout.flush();
     sbi_rt::system_reset(Shutdown, SystemFailure);
     loop {
         unsafe { core::arch::asm!("wfi") }

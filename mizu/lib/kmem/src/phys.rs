@@ -8,6 +8,7 @@ use core::{
     sync::atomic::{AtomicUsize, Ordering::SeqCst},
 };
 
+use arsc_rs::Arsc;
 use async_trait::async_trait;
 use crossbeam_queue::SegQueue;
 use futures_util::Future;
@@ -19,9 +20,12 @@ use ksc_core::{
     handler::Boxed,
     Error::{self, EINVAL, ENOENT, ENOMEM},
 };
-use ksync::channel::{
-    mpmc::{Receiver, Sender},
-    unbounded,
+use ksync::{
+    channel::{
+        mpmc::{Receiver, Sender},
+        unbounded,
+    },
+    event::Event,
 };
 use rand_riscv::RandomState;
 use rv39_paging::{PAddr, ID_OFFSET, PAGE_SHIFT, PAGE_SIZE};
@@ -278,6 +282,7 @@ struct FrameList {
 #[derive(Debug, Clone)]
 struct Flusher {
     sender: Sender<SegQueue<FlushData>>,
+    flushed: Arsc<Event>,
     offset: usize,
 }
 
@@ -297,6 +302,7 @@ impl Phys {
         cow: bool,
     ) -> (Self, impl Future<Output = ()> + Send) {
         let (sender, receiver) = unbounded();
+        let flushed = Arsc::new(Event::new());
         let phys = Phys {
             branch: false,
             list: Mutex::new(FrameList {
@@ -305,9 +311,13 @@ impl Phys {
             }),
             position: initial_pos.into(),
             cow,
-            flusher: cow.then_some(Flusher { sender, offset: 0 }),
+            flusher: cow.then_some(Flusher {
+                sender,
+                flushed: flushed.clone(),
+                offset: 0,
+            }),
         };
-        (phys, flusher(receiver, backend))
+        (phys, flusher(receiver, flushed, backend))
     }
 
     pub fn new_anon(cow: bool) -> Phys {
@@ -512,10 +522,14 @@ impl Phys {
             });
 
             if let Some((frame, len)) = data {
+                let flushed = flusher.flushed.listen();
+
                 let _ = flusher
                     .sender
                     .send(FlushData::Single((index + flusher.offset, frame, len)))
                     .await;
+
+                flushed.await;
 
                 break Ok(());
             }
@@ -558,15 +572,20 @@ impl Phys {
                         .flatten()
                         .map(|(frame, len)| (index + flusher.offset, frame, len))
                 });
-                iter.collect()
+                iter.collect::<Vec<_>>()
             });
+            if !data.is_empty() {
+                let flushed = flusher.flushed.listen();
 
-            let _ = flusher.sender.send(FlushData::Multiple(data)).await;
+                let _ = flusher.sender.send(FlushData::Multiple(data)).await;
+
+                flushed.await;
+            }
 
             let parent = ksync::critical(|| this.list.lock().parent.clone());
             let Some(Parent::Phys { phys, start, .. }) = parent else {
-                    break Ok(())
-                };
+                break Ok(())
+            };
             if Arc::strong_count(&phys) > 1 {
                 break Ok(());
             }
@@ -813,7 +832,7 @@ enum FlushData {
     Multiple(Vec<(usize, Arc<Frame>, usize)>),
 }
 
-async fn flusher(rx: Receiver<SegQueue<FlushData>>, backend: Arc<dyn Io>) {
+async fn flusher(rx: Receiver<SegQueue<FlushData>>, flushed: Arsc<Event>, backend: Arc<dyn Io>) {
     loop {
         let Ok(data) = rx.recv().await else { break };
         match data {
@@ -831,5 +850,6 @@ async fn flusher(rx: Receiver<SegQueue<FlushData>>, backend: Arc<dyn Io>) {
             }
         }
         let _ = backend.flush().await;
+        flushed.notify_additional(1);
     }
 }

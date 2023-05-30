@@ -517,6 +517,36 @@ fssc!(
         files.open(entry, close_on_exec).await
     }
 
+    pub async fn faccessat(
+        virt: Pin<&Virt>,
+        files: &Files,
+        fd: i32,
+        path: UserPtr<u8, In>,
+        options: i32,
+        perm: u32,
+    ) -> Result<(), Error> {
+        let mut buf = [0; MAX_PATH_LEN];
+        let (path, root) = path.read_path(virt, &mut buf).await?;
+
+        let options = OpenOptions::from_bits_truncate(options);
+        let perm = Permissions::from_bits(perm).ok_or(EPERM)?;
+
+        log::trace!(
+            "user accessat fd = {fd}, path = {path:?}, options = {options:?}, perm = {perm:?}"
+        );
+
+        if root {
+            crate::fs::open(path, options, perm).await?;
+        } else {
+            let base = files.get(fd).await?;
+            match base.open(path, options, perm).await {
+                Err(ENOENT) if files.cwd() == "" => crate::fs::open(path, options, perm).await?,
+                res => res?,
+            };
+        };
+        Ok(())
+    }
+
     pub async fn mkdirat(
         virt: Pin<&Virt>,
         files: &Files,
@@ -563,6 +593,8 @@ fssc!(
     ) -> Result<(), Error> {
         let mut buf = [0; MAX_PATH_LEN];
         let (path, root) = path.read_path(virt, &mut buf).await?;
+
+        log::trace!("user fstatat fd = {fd}, path = {path:?}");
 
         let file = if root {
             crate::fs::open(

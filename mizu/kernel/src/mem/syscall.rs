@@ -1,8 +1,8 @@
 use alloc::{boxed::Box, sync::Arc};
-use core::{mem, pin::Pin, time::Duration};
+use core::{mem, time::Duration};
 
 use co_trap::UserCx;
-use kmem::{Phys, Virt};
+use kmem::Phys;
 use ksc::{
     async_handler,
     Error::{self, EAGAIN, EINVAL, EISDIR, ENOMEM, ENOSYS, EPERM, ETIMEDOUT},
@@ -18,12 +18,17 @@ use crate::{
 
 #[async_handler]
 pub async fn brk(ts: &mut TaskState, cx: UserCx<'_, fn(usize) -> Result<usize, Error>>) -> ScRet {
-    async fn inner(virt: Pin<&Virt>, brk: &mut usize, addr: usize) -> Result<(), Error> {
-        const BRK_START: usize = 0x12345000;
-        const BRK_END: usize = 0x56789000;
+    const BRK_START: usize = 0x12345000;
+    const BRK_END: usize = 0x56789000;
+
+    let addr = cx.args();
+    log::warn!("user brk addr = {addr:#x}, current brk = {:#x}", ts.brk);
+
+    let fut = async move {
         if addr == 0 {
-            if (*brk) == 0 {
-                let laddr = virt
+            if ts.brk == 0 {
+                let laddr = ts
+                    .virt
                     .map(
                         Some(BRK_START.into()),
                         Arc::new(Phys::new_anon(true)),
@@ -32,33 +37,31 @@ pub async fn brk(ts: &mut TaskState, cx: UserCx<'_, fn(usize) -> Result<usize, E
                         Attr::USER_RW,
                     )
                     .await?;
-                *brk = laddr.val();
+                ts.brk = (laddr + PAGE_SIZE).val();
             }
+            Ok(BRK_START)
         } else {
-            let old_page = *brk & !PAGE_MASK;
+            let old_page = ts.brk & !PAGE_MASK;
             let new_page = (addr + PAGE_MASK) & !PAGE_MASK;
             if new_page >= BRK_END {
                 return Err(ENOMEM);
             }
             let count = (new_page - old_page) >> PAGE_SHIFT;
             if count > 0 {
-                virt.map(
-                    Some((old_page + PAGE_SIZE).into()),
-                    Arc::new(Phys::new_anon(true)),
-                    0,
-                    count,
-                    Attr::USER_RW,
-                )
-                .await?;
+                ts.virt
+                    .map(
+                        Some((old_page + PAGE_SIZE).into()),
+                        Arc::new(Phys::new_anon(false)),
+                        0,
+                        count,
+                        Attr::USER_RW,
+                    )
+                    .await?;
             }
-            *brk = addr;
+            Ok(mem::replace(&mut ts.brk, addr))
         }
-        Ok(())
-    }
-
-    let addr = cx.args();
-    let res = inner(ts.virt.as_ref(), &mut ts.brk, addr).await;
-    cx.ret(res.map(|_| ts.brk));
+    };
+    cx.ret(fut.await);
 
     ScRet::Continue(None)
 }

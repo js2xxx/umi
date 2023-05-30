@@ -71,8 +71,9 @@ impl TrapFrame {
         self.gpr.tx.a[N]
     }
 
-    pub fn scn(&self) -> Option<Scn> {
-        Scn::from_usize(self.syscall_arg::<7>())
+    pub fn scn(&self) -> Result<Scn, usize> {
+        let raw = self.syscall_arg::<7>();
+        Scn::from_usize(raw).ok_or(raw)
     }
 
     pub fn set_syscall_ret(&mut self, ret: usize) {

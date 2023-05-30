@@ -1,5 +1,6 @@
 use alloc::{boxed::Box, string::ToString, sync::Arc, vec, vec::Vec};
 use core::{
+    mem,
     num::NonZeroUsize,
     ops::ControlFlow::{Break, Continue},
     sync::atomic::Ordering::SeqCst,
@@ -317,7 +318,7 @@ pub async fn execve(
         let mut data = [0; MAX_PATH_LEN];
 
         let (name, root) = name.read_path(ts.virt.as_ref(), &mut data).await?;
-        let name = if root {
+        let mut name = if root {
             name.to_path_buf()
         } else {
             ts.files.cwd().join(name)
@@ -343,9 +344,16 @@ pub async fn execve(
             envs.push(env.to_string());
         }
 
+        if name.as_str().ends_with(".sh") {
+            name = "busybox".into();
+            let mut old = mem::replace(&mut args, vec!["busybox".into(), "sh".into()]);
+            args.append(&mut old);
+        }
+
         log::trace!("task::execve: name = {name:?}, args = {args:?}, envs = {envs:?}");
 
         let (file, _) = crate::fs::open(&name, Default::default(), Permissions::all()).await?;
+        let io = file.to_io().ok_or(ENOTDIR)?;
 
         ts.sig_fatal(
             SigInfo {
@@ -356,16 +364,12 @@ pub async fn execve(
             true,
         );
         ts.virt.clear().await;
-        ts.futex = Arsc::new(Default::default());
-        ts.task.shared_sig.swap(Default::default(), SeqCst);
-
-        let phys = crate::mem::new_phys(file.to_io().ok_or(ENOTDIR)?, true);
 
         log::trace!("task::execve: start loading ELF. No way back.");
 
         let init = InitTask::from_elf(
             ts.task.parent.clone(),
-            &Arc::new(phys),
+            &Arc::new(crate::mem::new_phys(io, true)),
             ts.virt.clone(),
             args,
             envs,

@@ -103,7 +103,7 @@ async fn handle_scause(scause: Scause, ts: &mut TaskState, tf: &mut TrapFrame) -
         Trap::Exception(excep) => match excep {
             Exception::UserEnvCall => {
                 let res = async {
-                    let scn = tf.scn().ok_or(None)?;
+                    let scn = tf.scn().map_err(Err)?;
                     if scn != Scn::WRITE {
                         log::info!(
                             "task {} syscall {scn:?}, sepc = {:#x}",
@@ -114,7 +114,7 @@ async fn handle_scause(scause: Scause, ts: &mut TaskState, tf: &mut TrapFrame) -
                     crate::syscall::SYSCALL
                         .handle(scn, (ts, tf))
                         .await
-                        .ok_or(Some(scn))
+                        .ok_or(Ok(scn))
                 }
                 .await;
                 match res {
