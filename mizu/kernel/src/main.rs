@@ -1,6 +1,7 @@
 #![cfg_attr(not(feature = "test"), no_std)]
 #![cfg_attr(not(feature = "test"), no_main)]
 #![feature(alloc_layout_extra)]
+#![feature(array_methods)]
 #![feature(asm_const)]
 #![feature(const_mut_refs)]
 #![feature(const_trait_impl)]
@@ -39,5 +40,5 @@ async fn main(fdt: usize) {
     let (fs, _) = fs::get("".as_ref()).unwrap();
     let rt = fs.root_dir().await.unwrap();
 
-    self::test::comp2(rt).await;
+    self::test::libc(rt).await;
 }

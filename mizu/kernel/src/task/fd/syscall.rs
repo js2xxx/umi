@@ -337,10 +337,11 @@ pub async fn readlinkat(
         if root && path == "/proc/self/exe" {
             let executable = ksync::critical(|| ts.task.executable.lock().clone());
             if executable.len() + 1 >= len {
-                return Err(ENAMETOOLONG)
+                return Err(ENAMETOOLONG);
             }
-            out.write_slice(ts.virt.as_ref(), executable.as_bytes(), true).await?;
-            return Ok(executable.len())
+            out.write_slice(ts.virt.as_ref(), executable.as_bytes(), true)
+                .await?;
+            return Ok(executable.len());
         }
 
         let _entry = if root {
@@ -349,7 +350,9 @@ pub async fn readlinkat(
             let base = ts.files.get(fd).await?;
             match base.open(path, options, perm).await {
                 Ok((entry, _)) => entry,
-                Err(ENOENT) if ts.files.cwd() == "" => crate::fs::open(path, options, perm).await?.0,
+                Err(ENOENT) if ts.files.cwd() == "" => {
+                    crate::fs::open(path, options, perm).await?.0
+                }
                 Err(err) => return Err(err),
             }
         };

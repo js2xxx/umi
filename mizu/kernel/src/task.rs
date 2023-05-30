@@ -7,8 +7,9 @@ mod syscall;
 mod time;
 
 use alloc::{
+    string::String,
     sync::{Arc, Weak},
-    vec::Vec, string::String,
+    vec::Vec,
 };
 use core::pin::Pin;
 

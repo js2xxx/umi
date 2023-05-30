@@ -12,7 +12,7 @@ use umifs::{path::Path, traits::Entry, types::OpenOptions};
 use crate::task::InitTask;
 
 #[allow(dead_code)]
-pub async fn libc_test(rt: Arc<dyn Entry>) {
+pub async fn libc(rt: Arc<dyn Entry>) {
     let oo = OpenOptions::RDONLY;
     let perm = Default::default();
 
