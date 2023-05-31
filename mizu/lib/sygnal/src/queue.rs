@@ -79,10 +79,11 @@ impl Signals {
         self.set.load(SeqCst) == 0
     }
 
-    pub fn pop(&self, masked: SigSet) -> Option<SigInfo> {
+    pub fn pop(&self, mut masked: SigSet) -> Option<SigInfo> {
         if self.is_empty() {
             return None;
         }
+        masked.clear_never_capture();
         let iter = self.pending.iter().enumerate();
 
         let (info, is_empty) = iter

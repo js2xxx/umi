@@ -6,8 +6,8 @@ export ROOT			:= $(shell pwd)
 export TARGET_DIR 	:= $(ROOT)/target/$(TARGET)/$(MODE)
 export DEBUG_DIR   	:= $(ROOT)/debug
 
-export ROOTFS  ?= $(ROOT)/third-party/img/sdcard.img
-export SBI ?= $(ROOT)/third-party/bin/rustsbi-$(BOARD).bin
+export ROOTFS  ?= $(ROOT)/third-party/img/sdcard-comp2.img
+export SBI ?= $(ROOT)/third-party/bin/opensbi-$(BOARD)
 
 .PHONY: all build run debug test clean
 
@@ -30,7 +30,7 @@ QEMU_ARGS := -monitor stdio \
 
 ifeq ($(BOARD), qemu-virt)
 	QEMU_ARGS += -machine virt \
-		-bios default
+		-bios $(SBI)
 endif
 
 run: build

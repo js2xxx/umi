@@ -204,7 +204,7 @@ pub async fn get_interp(phys: &Phys) -> Result<Option<Vec<u8>>, Error> {
     let (header, _) = parse_header(phys, None).await?;
     let segments = parse_segments(phys, header.e_phoff as usize, header.e_phnum as usize).await?;
 
-    let iter = stream::iter(segments.into_iter()).filter_map(|segment| async move {
+    let iter = stream::iter(segments).filter_map(|segment| async move {
         if segment.p_type == PT_INTERP {
             let offset = segment.p_offset as usize;
             let size = segment.p_filesz as usize;

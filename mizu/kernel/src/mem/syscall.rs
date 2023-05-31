@@ -1,8 +1,8 @@
 use alloc::{boxed::Box, sync::Arc};
-use core::{mem, pin::Pin, time::Duration};
+use core::{mem, time::Duration};
 
 use co_trap::UserCx;
-use kmem::{Phys, Virt};
+use kmem::Phys;
 use ksc::{
     async_handler,
     Error::{self, EAGAIN, EINVAL, EISDIR, ENOMEM, ENOSYS, EPERM, ETIMEDOUT},
@@ -18,48 +18,48 @@ use crate::{
 
 #[async_handler]
 pub async fn brk(ts: &mut TaskState, cx: UserCx<'_, fn(usize) -> Result<usize, Error>>) -> ScRet {
-    async fn inner(virt: Pin<&Virt>, brk: &mut usize, addr: usize) -> Result<(), Error> {
-        const BRK_START: usize = 0x12345000;
-        const BRK_END: usize = 0x56789000;
-        if addr == 0 {
-            if (*brk) == 0 {
-                let laddr = virt
-                    .map(
-                        Some(BRK_START.into()),
-                        Arc::new(Phys::new_anon(true)),
-                        0,
-                        1,
-                        Attr::USER_RW,
-                    )
-                    .await?;
-                *brk = laddr.val();
-            }
-        } else {
-            let old_page = *brk & !PAGE_MASK;
+    const BRK_START: usize = 0x12345000;
+    const BRK_END: usize = 0x56789000;
+
+    let addr = cx.args();
+    let fut = async move {
+        Ok(if addr != 0 {
+            let old_page = ts.brk & !PAGE_MASK;
             let new_page = (addr + PAGE_MASK) & !PAGE_MASK;
             if new_page >= BRK_END {
                 return Err(ENOMEM);
             }
             let count = (new_page - old_page) >> PAGE_SHIFT;
             if count > 0 {
-                virt.map(
-                    Some((old_page + PAGE_SIZE).into()),
+                ts.virt
+                    .map(
+                        Some((old_page + PAGE_SIZE).into()),
+                        Arc::new(Phys::new_anon(false)),
+                        0,
+                        count,
+                        Attr::USER_RW,
+                    )
+                    .await?;
+            }
+            mem::replace(&mut ts.brk, addr)
+        } else if ts.brk == 0 {
+            let laddr = ts
+                .virt
+                .map(
+                    Some(BRK_START.into()),
                     Arc::new(Phys::new_anon(true)),
                     0,
-                    count,
+                    1,
                     Attr::USER_RW,
                 )
                 .await?;
-            }
-            *brk = addr;
-        }
-        Ok(())
-    }
-
-    let addr = cx.args();
-    let res = inner(ts.virt.as_ref(), &mut ts.brk, addr).await;
-    cx.ret(res.map(|_| ts.brk));
-
+            ts.brk = (laddr + PAGE_SIZE).val();
+            BRK_START
+        } else {
+            ts.brk
+        })
+    };
+    cx.ret(fut.await);
     ScRet::Continue(None)
 }
 
@@ -213,7 +213,9 @@ pub async fn mmap(
             .await?;
 
         if flags.contains(Flags::POPULATE) {
-            ts.virt.commit_range(addr..(addr + len)).await?;
+            ts.virt
+                .commit_range(addr..(addr + len), Default::default())
+                .await?;
         }
 
         Ok(addr.val())

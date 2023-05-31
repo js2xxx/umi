@@ -14,7 +14,7 @@ use ksc::{
     Error::{self, EFAULT, EINVAL, ERANGE},
     RawReg,
 };
-use rv39_paging::{LAddr, PAddr, ID_OFFSET, PAGE_MASK, PAGE_SIZE};
+use rv39_paging::{Attr, LAddr, PAddr, ID_OFFSET, PAGE_MASK, PAGE_SIZE};
 use scoped_tls::scoped_thread_local;
 use umifs::path::Path;
 
@@ -148,7 +148,14 @@ impl<T: Copy, D: InPtr> UserPtr<T, D> {
         let mut dst = MaybeUninit::<T>::uninit();
         unsafe {
             let dst_addr = dst.as_mut_ptr().into();
-            checked_copy(virt, self.addr, dst_addr, mem::size_of::<T>()).await?;
+            checked_copy(
+                virt,
+                self.addr,
+                dst_addr,
+                mem::size_of::<T>(),
+                Attr::READABLE,
+            )
+            .await?;
             Ok(dst.assume_init())
         }
     }
@@ -165,7 +172,7 @@ impl<T: Copy, D: InPtr> UserPtr<T, D> {
         }
         unsafe {
             let dst = data.as_mut_ptr().into();
-            checked_copy(virt, self.addr, dst, mem::size_of_val(data)).await
+            checked_copy(virt, self.addr, dst, mem::size_of_val(data), Attr::READABLE).await
         }
     }
 
@@ -185,7 +192,7 @@ impl<T: Copy, D: InPtr> UserPtr<T, D> {
             let count = range.end.val() - range.start.val();
             unsafe {
                 let dst = buf.as_mut_ptr().into();
-                checked_copy(virt, range.start, dst, count).await?;
+                checked_copy(virt, range.start, dst, count, Attr::READABLE).await?;
             }
             let has_zero = buf[..count].contains(&Default::default());
             Ok((&mut buf[count..], !has_zero))
@@ -221,7 +228,7 @@ impl<D: InPtr> UserPtr<u8, D> {
             let count = range.end.val() - range.start.val();
             unsafe {
                 let dst = buf.as_mut_ptr().into();
-                checked_copy(virt, range.start, dst, count).await?;
+                checked_copy(virt, range.start, dst, count, Attr::READABLE).await?;
             }
             let has_zero = buf[..count].contains(&0);
             Ok((&mut buf[count..], !has_zero))
@@ -254,7 +261,7 @@ impl<T: Copy, D: OutPtr> UserPtr<T, D> {
         }
         unsafe {
             let src = (&data as *const T).into();
-            checked_copy(virt, src, self.addr, mem::size_of::<T>()).await
+            checked_copy(virt, src, self.addr, mem::size_of::<T>(), Attr::WRITABLE).await
         }
     }
 
@@ -276,7 +283,7 @@ impl<T: Copy, D: OutPtr> UserPtr<T, D> {
         unsafe {
             let count = mem::size_of_val(data);
             let src = data.as_ptr().into();
-            checked_copy(virt, src, self.addr, count).await?;
+            checked_copy(virt, src, self.addr, count, Attr::WRITABLE).await?;
             if add_tail_zero {
                 checked_zero(virt, 0, self.addr + count, mem::size_of::<T>()).await?;
             }
@@ -318,7 +325,9 @@ impl UserBuffer {
     }
 
     pub async fn as_slice(&self, virt: Pin<&Virt>, len: usize) -> Result<Vec<&[u8]>, Error> {
-        let paddrs = virt.commit_range(self.addr..(self.addr + len)).await?;
+        let paddrs = virt
+            .commit_range(self.addr..(self.addr + len), Attr::READABLE)
+            .await?;
         Ok(paddrs
             .into_iter()
             .map(|range| unsafe { LAddr::as_slice(PAddr::range_to_laddr(range, ID_OFFSET)) })
@@ -330,7 +339,9 @@ impl UserBuffer {
         virt: Pin<&Virt>,
         len: usize,
     ) -> Result<Vec<&mut [u8]>, Error> {
-        let paddrs = virt.commit_range(self.addr..(self.addr + len)).await?;
+        let paddrs = virt
+            .commit_range(self.addr..(self.addr + len), Attr::WRITABLE)
+            .await?;
         Ok(paddrs
             .into_iter()
             .map(|range| unsafe { LAddr::as_mut_slice(PAddr::range_to_laddr(range, ID_OFFSET)) })
@@ -355,6 +366,9 @@ impl RawReg for FutexKey {
 
 impl FutexKey {
     pub async fn load(&self, virt: Pin<&Virt>) -> Result<u32, Error> {
+        if !self.addr.is_aligned() || self.addr.is_null() {
+            return Err(EFAULT);
+        }
         unsafe { checked_load_u32(virt, self.addr) }.await
     }
 }
@@ -365,11 +379,13 @@ async unsafe fn checked_copy(
     src: LAddr,
     dst: LAddr,
     count: usize,
+    expect_attr: Attr,
 ) -> Result<(), Error> {
     extern "C" {
         fn _checked_copy(src: LAddr, dst: LAddr, count: usize) -> usize;
     }
-    checked_op(virt, || unsafe { _checked_copy(src, dst, count) }).await
+    let op = || unsafe { _checked_copy(src, dst, count) };
+    checked_op(virt, op, expect_attr).await
 }
 
 #[inline]
@@ -382,7 +398,8 @@ async unsafe fn checked_zero(
     extern "C" {
         fn _checked_zero(src: u8, dst: LAddr, count: usize) -> usize;
     }
-    checked_op(virt, || unsafe { _checked_zero(src, dst, count) }).await
+    let op = || unsafe { _checked_zero(src, dst, count) };
+    checked_op(virt, op, Attr::WRITABLE).await
 }
 
 async unsafe fn checked_load_u32(virt: Pin<&Virt>, src: LAddr) -> Result<u32, Error> {
@@ -390,26 +407,30 @@ async unsafe fn checked_load_u32(virt: Pin<&Virt>, src: LAddr) -> Result<u32, Er
         fn _checked_load_u32(src: LAddr, dst: &mut u32) -> usize;
     }
     let mut dst = 0;
-    checked_op(virt, || unsafe { _checked_load_u32(src, &mut dst) }).await?;
+    let op = || unsafe { _checked_load_u32(src, &mut dst) };
+    checked_op(virt, op, Attr::READABLE).await?;
     Ok(dst)
 }
 
-async fn checked_op<F: FnMut() -> usize>(virt: Pin<&Virt>, mut op: F) -> Result<(), Error> {
+async fn checked_op<F: FnMut() -> usize>(
+    virt: Pin<&Virt>,
+    mut op: F,
+    expect_attr: Attr,
+) -> Result<(), Error> {
     extern "C" {
         fn _checked_ua_fault();
     }
-    let addr = match UA_FAULT.set(&(_checked_ua_fault as _), &mut op) {
-        0 => return Ok(()),
-        addr => addr,
-    };
 
-    virt.commit(addr.into()).await?;
-    match UA_FAULT.set(&(_checked_ua_fault as _), &mut op) {
-        0 => Ok(()),
-        addr => {
-            log::info!("checked op fault at {addr:?}");
-            Err(EFAULT)
-        }
+    let mut last_addr = None;
+    loop {
+        match UA_FAULT.set(&(_checked_ua_fault as _), &mut op) {
+            0 => break Ok(()),
+            addr if last_addr == Some(addr) => break Err(EFAULT),
+            addr => {
+                virt.commit((*last_addr.insert(addr)).into(), expect_attr)
+                    .await?
+            }
+        };
     }
 }
 

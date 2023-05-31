@@ -6,9 +6,16 @@ use core::{
 };
 
 use async_trait::async_trait;
+use crossbeam_queue::ArrayQueue;
 use futures_util::{stream, Future, FutureExt, StreamExt, TryStreamExt};
 use ksc::Error::{self, EINVAL, EIO, ENOBUFS, ENOMEM, EPERM};
-use ksync::event::{Event, EventListener};
+use ksync::{
+    channel::{
+        oneshot,
+        oneshot::{Receiver, Sender},
+    },
+    event::{Event, EventListener},
+};
 use spin::lock_api::Mutex;
 use static_assertions::const_assert;
 use virtio_drivers::{
@@ -17,6 +24,17 @@ use virtio_drivers::{
 };
 
 use super::{block::Block, HalImpl};
+
+struct Token(ArrayQueue<Request>);
+
+#[derive(Debug)]
+struct Request {
+    buf: Vec<u8>,
+    dir: Direction,
+    req: BlkReq,
+    resp: BlkResp,
+    ret: Sender<Vec<u8>>,
+}
 
 pub struct VirtioBlock {
     virt_queue: Event,
@@ -38,21 +56,20 @@ impl VirtioBlock {
             VirtioBlock {
                 virt_queue: Event::new(),
                 device: Mutex::new(device),
-                token: iter::repeat_with(Token::default).take(size).collect(),
+                token: iter::repeat_with(Token::new).take(size).collect(),
             }
         })
     }
 
     pub fn ack_interrupt(&self) {
-        let used = ksync::critical(|| {
-            let mut blk = self.device.lock();
-            blk.ack_interrupt();
-            blk.peek_used()
-        });
-        if let Some(used) = used {
-            unsafe {
-                self.token[used as usize].receive(used, self);
-            }
+        loop {
+            let used = ksync::critical(|| {
+                let mut blk = self.device.lock();
+                blk.ack_interrupt();
+                blk.peek_used()
+            });
+            let Some(used) = used else { break };
+            unsafe { self.token[used as usize].complete(used, self) }
         }
     }
 
@@ -76,23 +93,23 @@ impl VirtioBlock {
         ksync::critical(|| func(&mut self.device.lock()))
     }
 
-    pub fn read_chunk(&self, block: usize, buf: Vec<u8>) -> ChunkOp {
+    pub fn read_chunk(&self, block: usize, mut buf: Vec<u8>) -> ChunkOp {
+        buf.truncate(Self::SECTOR_SIZE);
         ChunkOp {
             device: self,
-            buf,
             block,
             dir: Direction::Read,
-            state: Default::default(),
+            state: ChunkState::new(buf),
         }
     }
 
-    pub fn write_chunk(&self, block: usize, buf: Vec<u8>) -> ChunkOp {
+    pub fn write_chunk(&self, block: usize, mut buf: Vec<u8>) -> ChunkOp {
+        buf.truncate(Self::SECTOR_SIZE);
         ChunkOp {
             device: self,
-            buf,
             block,
             dir: Direction::Write,
-            state: Default::default(),
+            state: ChunkState::new(buf),
         }
     }
 }
@@ -159,80 +176,26 @@ impl fmt::Debug for Direction {
     }
 }
 
-#[allow(unused)]
-struct Request {
-    buf: Vec<u8>,
-    dir: Direction,
-    req: BlkReq,
-    resp: BlkResp,
-}
-
-struct Token {
-    event: Event,
-    discard: Mutex<Option<Request>>,
-}
-
-impl Token {
-    /// # Safety
-    ///
-    /// The function must be called after the request is completed.
-    unsafe fn receive(&self, token: u16, device: &VirtioBlock) {
-        if let Some(mut request) = ksync::critical(|| mem::take(&mut *self.discard.lock())) {
-            // log::trace!(
-            //     "VirtioBlock::discard: complete obsolete request {:?}({token})",
-            //     request.dir
-            // );
-            let _ = device.i(|blk| match request.dir {
-                Direction::Read => unsafe {
-                    blk.complete_read_block(
-                        token,
-                        &request.req,
-                        &mut request.buf,
-                        &mut request.resp,
-                    )
-                },
-                Direction::Write => unsafe {
-                    blk.complete_write_block(token, &request.req, &request.buf, &mut request.resp)
-                },
-            });
-            device.virt_queue.notify(1);
-        } else {
-            self.event.notify_additional_relaxed(1)
-        }
-    }
-}
-
-impl Default for Token {
-    fn default() -> Self {
-        Token {
-            event: Event::new(),
-            discard: Mutex::new(None),
-        }
-    }
-}
-
 enum ChunkState {
     Submitting {
         req: BlkReq,
         resp: BlkResp,
+        buf: Vec<u8>,
 
         listener: Option<EventListener>,
     },
     Waiting {
-        token: u16,
-        req: BlkReq,
-        resp: BlkResp,
-
-        listener: Option<EventListener>,
+        ret: Receiver<Vec<u8>>,
     },
     Complete,
 }
 
-impl Default for ChunkState {
-    fn default() -> Self {
+impl ChunkState {
+    fn new(buf: Vec<u8>) -> Self {
         ChunkState::Submitting {
             req: Default::default(),
             resp: Default::default(),
+            buf,
             listener: None,
         }
     }
@@ -241,7 +204,6 @@ impl Default for ChunkState {
 #[must_use = "futures do nothing unless you `.await` or poll them"]
 pub struct ChunkOp<'a> {
     device: &'a VirtioBlock,
-    buf: Vec<u8>,
     block: usize,
     dir: Direction,
     state: ChunkState,
@@ -261,14 +223,13 @@ impl Future for ChunkOp<'_> {
                 ChunkState::Submitting {
                     req,
                     resp,
+                    buf,
                     listener,
                 } => {
                     let res = this.device.i(|blk| match dir {
-                        Direction::Read => unsafe {
-                            blk.read_block_nb(this.block, req, &mut this.buf, resp)
-                        },
+                        Direction::Read => unsafe { blk.read_block_nb(this.block, req, buf, resp) },
                         Direction::Write => unsafe {
-                            blk.write_block_nb(this.block, req, &this.buf, resp)
+                            blk.write_block_nb(this.block, req, buf, resp)
                         },
                     });
                     let token = match res {
@@ -287,60 +248,23 @@ impl Future for ChunkOp<'_> {
                         Err(err) => break Poll::Ready(Err(err)),
                     };
                     // log::trace!("VirtioBlock::poll: submitted {dir:?}, token = {token:?}");
-                    this.state = ChunkState::Waiting {
-                        token,
+
+                    let (tx, rx) = oneshot();
+                    let request = Request {
+                        buf: mem::take(buf),
+                        dir: this.dir,
                         req: mem::take(req),
                         resp: mem::take(resp),
-                        listener: None,
-                    }
+                        ret: tx,
+                    };
+                    this.device.token[token as usize].0.push(request).unwrap();
+                    this.state = ChunkState::Waiting { ret: rx }
                 }
-                ChunkState::Waiting {
-                    token,
-                    req,
-                    resp,
-                    listener,
-                } => {
-                    // log::trace!("VirtioBlock::poll: peek used for {dir:?}, token = {token:?}");
-                    let used = this.device.i(|blk| blk.peek_used());
-                    if used != Some(*token) {
-                        match listener {
-                            Some(l) => {
-                                // log::trace!("VirtioBlock::poll: wait for token = {token}");
-                                ready!(l.poll_unpin(cx));
-                                *listener = None;
-                            }
-                            None => {
-                                *listener = Some(this.device.token[*token as usize].event.listen())
-                            }
-                        }
-                        continue;
-                    }
+                ChunkState::Waiting { ret } => {
+                    let buf = ready!(ret.poll_unpin(cx));
 
-                    // log::trace!("VirtioBlock::poll: complete {dir:?}, used = {used:?}");
-                    match this.device.i(|blk| match dir {
-                        Direction::Read => unsafe {
-                            blk.complete_read_block(*token, req, &mut this.buf, resp)
-                        },
-                        Direction::Write => unsafe {
-                            blk.complete_write_block(*token, req, &this.buf, resp)
-                        },
-                    }) {
-                        // Sometimes it returns an erroneous not-ready, resulting from writing
-                        // `BlkResp` with raw `NOT_READY` value (or even not writing it, leaving
-                        // the default `NOT_READY` value). If we
-                        // continue the loop on waiting it, the
-                        // procedure will be hang on waiting the next never-coming event.
-                        //
-                        // We are sure that `peek_used` has returned our token, so we ignore it
-                        // by far. Maybe it results from a potential
-                        // memory access.
-                        Ok(()) | Err(virtio_drivers::Error::NotReady) => {}
-                        Err(err) => return Poll::Ready(Err(err)),
-                    }
-
-                    this.device.virt_queue.notify(1);
                     this.state = ChunkState::Complete;
-                    break Poll::Ready(Ok(mem::take(&mut this.buf)));
+                    break Poll::Ready(buf.map_err(|_| virtio_drivers::Error::DmaError));
                 }
                 ChunkState::Complete => unreachable!("polling after complete"),
             }
@@ -348,24 +272,27 @@ impl Future for ChunkOp<'_> {
     }
 }
 
-impl Drop for ChunkOp<'_> {
-    fn drop(&mut self) {
-        if let ChunkState::Waiting {
-            token, req, resp, ..
-        } = mem::replace(&mut self.state, ChunkState::Complete)
-        {
+impl Token {
+    fn new() -> Self {
+        Token(ArrayQueue::new(1))
+    }
+
+    unsafe fn complete(&self, used: u16, device: &VirtioBlock) {
+        if let Some(mut request) = self.0.pop() {
             // log::trace!(
-            //     "VirtioBlock::drop: sending {:?}({token}) to device's discard slot",
-            //     self.dir
+            //     "VirtioBlock::ack_interrupt: complete request {:?}({used})",
+            //     request.dir
             // );
-            ksync::critical(|| {
-                *(&self.device.token)[token as usize].discard.lock() = Some(Request {
-                    dir: self.dir,
-                    req,
-                    resp,
-                    buf: mem::take(&mut self.buf),
-                })
-            })
+            let _ = device.i(|blk| match request.dir {
+                Direction::Read => unsafe {
+                    blk.complete_read_block(used, &request.req, &mut request.buf, &mut request.resp)
+                },
+                Direction::Write => unsafe {
+                    blk.complete_write_block(used, &request.req, &request.buf, &mut request.resp)
+                },
+            });
+            device.virt_queue.notify(1);
+            let _ = request.ret.send(request.buf);
         }
     }
 }

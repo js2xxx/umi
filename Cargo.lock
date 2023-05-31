@@ -212,9 +212,11 @@ version = "0.1.0"
 dependencies = [
  "arsc-rs",
  "async-trait",
+ "bitflags 2.2.1",
  "crossbeam-queue",
  "futures-lite",
  "futures-util",
+ "hart-id",
  "hashbrown",
  "kmem",
  "ksc",
@@ -360,18 +362,6 @@ version = "0.1.0"
 dependencies = [
  "buddy_system_allocator",
  "ksync-core",
- "spin",
-]
-
-[[package]]
-name = "klog"
-version = "0.1.0"
-dependencies = [
- "hart-id",
- "ksync-core",
- "ktime-core",
- "log",
- "sbi-rt",
  "spin",
 ]
 
@@ -548,7 +538,6 @@ dependencies = [
  "hart-id",
  "hashbrown",
  "kalloc",
- "klog",
  "kmem",
  "ksc",
  "ksync",
@@ -881,6 +870,7 @@ dependencies = [
  "futures-util",
  "ksc-core",
  "ksync",
+ "log",
  "rv39-paging",
  "spin",
 ]

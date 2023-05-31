@@ -159,6 +159,11 @@ impl SigSet {
         self.0
     }
 
+    pub fn clear_never_capture(&mut self) {
+        // Note: must be the same as `Sig::should_never_capture`.
+        self.0 &= !(Sig::SIGKILL.mask() | Sig::SIGSTOP.mask());
+    }
+
     pub const fn contains<S: ~const Into<Self>>(self, other: S) -> bool {
         let other: Self = other.into();
         (!self & other).0 == 0

@@ -24,7 +24,6 @@ pub struct SigAction {
     handler: usize,
     mask: SigSet,
     flags: SigFlags,
-    restorer: LAddr,
 }
 const SIG_DFL: usize = 0;
 const SIG_IGN: usize = 1;
@@ -35,7 +34,6 @@ impl Default for SigAction {
             handler: 0,
             mask: SigSet::EMPTY,
             flags: Default::default(),
-            restorer: 0usize.into(),
         }
     }
 }
@@ -53,30 +51,22 @@ impl From<Action> for SigAction {
             },
             ActionType::User {
                 entry,
-                exit,
                 use_extra_cx,
                 use_alt_stack,
-            } => {
-                let default_exit = exit.val() != SIGRETURN_GUARD;
-                SigAction {
-                    handler: entry.val(),
-                    mask: action.mask,
-                    flags: {
-                        let mut flags = Default::default();
-                        if use_extra_cx {
-                            flags |= SigFlags::SIGINFO
-                        }
-                        if use_alt_stack {
-                            flags |= SigFlags::ONSTACK
-                        }
-                        if !default_exit {
-                            flags |= SigFlags::RESTORER
-                        }
-                        flags
-                    },
-                    restorer: if default_exit { exit } else { 0usize.into() },
-                }
-            }
+            } => SigAction {
+                handler: entry.val(),
+                mask: action.mask,
+                flags: {
+                    let mut flags = Default::default();
+                    if use_extra_cx {
+                        flags |= SigFlags::SIGINFO
+                    }
+                    if use_alt_stack {
+                        flags |= SigFlags::ONSTACK
+                    }
+                    flags
+                },
+            },
         }
     }
 }
@@ -86,7 +76,6 @@ bitflags::bitflags! {
     struct SigFlags: isize {
         const SIGINFO = 4;
         const ONSTACK = 0x08000000;
-        const RESTORER = 0x04000000;
     }
 }
 
@@ -115,11 +104,6 @@ pub async fn sigaction(
                 SIG_IGN => ActionType::Ignore,
                 entry => ActionType::User {
                     entry: entry.into(),
-                    exit: if action.flags.contains(SigFlags::RESTORER) {
-                        action.restorer
-                    } else {
-                        SIGRETURN_GUARD.into()
-                    },
                     use_extra_cx: action.flags.contains(SigFlags::SIGINFO),
                     use_alt_stack: action.flags.contains(SigFlags::ONSTACK),
                 },
@@ -290,6 +274,7 @@ pub async fn kill(
             },
         };
         match pid {
+            PidSelection::Task(Some(tid)) if tid == ts.task.tid => ts.task.sig.push(si),
             PidSelection::Task(Some(tid)) => {
                 let child = ksync::critical(|| {
                     let children = ts.task.children.lock();

@@ -2,7 +2,10 @@ use core::num::NonZeroU32;
 
 use crossbeam_queue::SegQueue;
 use hashbrown::{hash_map::Entry, HashMap};
-use ksync::{unbounded, Receiver, Sender, TryRecvError};
+use ksync::channel::{
+    mpmc::{Receiver, Sender, TryRecvError},
+    unbounded,
+};
 use rand_riscv::RandomState;
 use spin::RwLock;
 
@@ -15,13 +18,18 @@ pub struct IntrManager {
 
 impl IntrManager {
     pub fn new(plic: Plic) -> Self {
+        hart_id::for_each_hart(|hid| plic.set_priority_threshold(Self::hid_to_cx(hid), 0));
         IntrManager {
             plic,
             map: RwLock::new(HashMap::with_hasher(RandomState::new())),
         }
     }
 
-    pub fn insert(&self, mut cx_mask: usize, pin: NonZeroU32) -> Option<Interrupt> {
+    fn hid_to_cx(hid: usize) -> usize {
+        hid * 2 + 1
+    }
+
+    pub fn insert(&self, pin: NonZeroU32) -> Option<Interrupt> {
         let pin = pin.get();
         let rx = ksync::critical(|| match self.map.write().entry(pin) {
             Entry::Occupied(entry) if entry.get().is_closed() => {
@@ -36,12 +44,8 @@ impl IntrManager {
             }
             _ => None,
         })?;
-        while cx_mask > 0 {
-            let cx = cx_mask & (!cx_mask + 1);
-            self.plic.enable(pin, cx.ilog2() as usize, true);
-            cx_mask -= cx;
-        }
-        self.plic.set_priority(pin, 10);
+        hart_id::for_each_hart(|hid| self.plic.enable(pin, Self::hid_to_cx(hid), true));
+        self.plic.set_priority(pin, 1);
         Some(Interrupt(rx))
     }
 
@@ -49,9 +53,10 @@ impl IntrManager {
         self.plic.pending(pin.get())
     }
 
-    pub fn notify(&self, cx: usize) {
-        // log::trace!("Intr::notify cx = {cx}");
+    pub fn notify(&self, hid: usize) {
+        let cx = Self::hid_to_cx(hid);
         let pin = self.plic.claim(cx);
+        // log::trace!("Intr::notify cx = {cx}, pin = {pin}");
         if pin > 0 {
             let exist = ksync::critical(|| {
                 let map = self.map.read();

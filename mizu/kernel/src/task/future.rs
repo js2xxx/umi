@@ -14,6 +14,7 @@ use riscv::register::{
     scause::{Exception, Scause, Trap},
     time,
 };
+use rv39_paging::Attr;
 use sygnal::{Sig, SigCode, SigInfo};
 
 use super::TaskState;
@@ -58,7 +59,7 @@ pub async fn user_loop(mut ts: TaskState, mut tf: TrapFrame) {
         }
 
         let sys = time::read64();
-        ts.system_times += sys - stat_time;
+        ts.task.times.update_system(sys - stat_time);
         stat_time = sys;
 
         log::trace!(
@@ -69,7 +70,7 @@ pub async fn user_loop(mut ts: TaskState, mut tf: TrapFrame) {
         let (scause, fr) = co_trap::yield_to_user(&mut tf);
 
         let usr = time::read64();
-        ts.user_times += usr - stat_time;
+        ts.task.times.update_user(usr - stat_time);
         stat_time = usr;
 
         match fr {
@@ -102,7 +103,7 @@ async fn handle_scause(scause: Scause, ts: &mut TaskState, tf: &mut TrapFrame) -
         Trap::Exception(excep) => match excep {
             Exception::UserEnvCall => {
                 let res = async {
-                    let scn = tf.scn().ok_or(None)?;
+                    let scn = tf.scn().map_err(Err)?;
                     if scn != Scn::WRITE {
                         log::info!(
                             "task {} syscall {scn:?}, sepc = {:#x}",
@@ -113,7 +114,7 @@ async fn handle_scause(scause: Scause, ts: &mut TaskState, tf: &mut TrapFrame) -
                     crate::syscall::SYSCALL
                         .handle(scn, (ts, tf))
                         .await
-                        .ok_or(Some(scn))
+                        .ok_or(Ok(scn))
                 }
                 .await;
                 match res {
@@ -137,7 +138,13 @@ async fn handle_scause(scause: Scause, ts: &mut TaskState, tf: &mut TrapFrame) -
                     return TaskState::resume_from_signal(ts, tf).await;
                 }
 
-                let res = ts.virt.commit(tf.stval.into()).await;
+                let attr = Attr::builder()
+                    .readable(excep == Exception::LoadPageFault)
+                    .writable(excep == Exception::StorePageFault)
+                    .executable(excep == Exception::InstructionPageFault)
+                    .build();
+
+                let res = ts.virt.commit(tf.stval.into(), attr).await;
                 if let Err(err) = res {
                     log::error!("failing to commit pages at address {:#x}: {err}", tf.stval);
                     return Continue(Some(SigInfo {

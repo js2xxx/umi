@@ -14,7 +14,6 @@ pub enum ActionType {
     Resume,
     User {
         entry: LAddr,
-        exit: LAddr,
         use_extra_cx: bool,
         use_alt_stack: bool,
     },

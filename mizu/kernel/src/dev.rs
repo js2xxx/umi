@@ -1,5 +1,6 @@
 mod block;
 mod intr;
+mod serial;
 mod virtio;
 
 use alloc::vec::Vec;
@@ -11,12 +12,14 @@ use spin::{Lazy, Once};
 pub use self::{
     block::{block, blocks},
     intr::INTR,
+    serial::{Stdin, Stdout},
 };
 
 static DEV_INIT: Lazy<Handlers<&str, &FdtNode, bool>> = Lazy::new(|| {
     Handlers::new()
+        .map("ns16550a", serial::init)
         .map("riscv,plic0", intr::init_plic)
-        .map("virtio,mmio", virtio::virtio_mmio_init)
+        .map("virtio,mmio", virtio::init_mmio)
 });
 
 /// Initialize all the possible devices in this crate using FDT.

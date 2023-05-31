@@ -40,7 +40,8 @@ impl TaskState {
                     let _ = self.task.event.send(&TaskEvent::Suspended(si.sig)).await;
                     self.task.sig.wait_one(Sig::SIGCONT).await;
                 }
-                ActionType::User { entry, exit, .. } => {
+                ActionType::User { entry, .. } => {
+                    let exit = SIGRETURN_GUARD.into();
                     if let Err(sig) = self.yield_to_signal(tf, si, entry, exit).await {
                         let sigsegv = SigInfo {
                             sig: Sig::SIGSEGV,

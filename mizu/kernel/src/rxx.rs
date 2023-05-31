@@ -135,9 +135,6 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
     unsafe { crate::trap::init() };
 
     if !GLOBAL_INIT.load(Relaxed) {
-        // Init logger.
-        unsafe { klog::init_logger(log::Level::Warn) };
-
         // Init the kernel heap.
         unsafe { kalloc::init(&mut _sheap, &mut _eheap) };
 
@@ -169,6 +166,7 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
     sbi_rt::set_timer(0);
 
     run_art(payload);
+
     unsafe { ksync::disable() };
 
     if hart_id::is_bsp() {
@@ -239,6 +237,7 @@ unsafe extern "C" fn _start() -> ! {
 fn panic(info: &core::panic::PanicInfo) -> ! {
     use sbi_rt::{Shutdown, SystemFailure};
     log::error!("#{} kernel {info}", hart_id::hart_id());
+
     sbi_rt::system_reset(Shutdown, SystemFailure);
     loop {
         unsafe { core::arch::asm!("wfi") }

@@ -1,9 +1,7 @@
 use alloc::{boxed::Box, sync::Arc};
-use core::time::Duration;
 
 use async_trait::async_trait;
 use ksc::Error;
-use ktime::{TimeOutExt, Timer};
 use umio::Io;
 
 use crate::Interrupt;
@@ -27,8 +25,7 @@ pub trait Block: Io {
 
     async fn intr_dispatch(self: Arc<Self>, intr: Interrupt) {
         loop {
-            let timer = Timer::after(Duration::from_millis(2));
-            if !intr.wait().on_timeout(timer, || true).await {
+            if !intr.wait().await {
                 break;
             }
             self.ack_interrupt();

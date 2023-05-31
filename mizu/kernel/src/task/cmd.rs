@@ -15,12 +15,15 @@ use arsc_rs::Arsc;
 use co_trap::TrapFrame;
 use kmem::{Phys, Virt};
 use ksc::Error::{self, EISDIR, ENOSYS};
-use ksync::Broadcast;
+use ksync::channel::Broadcast;
 use rand_riscv::rand_core::RngCore;
 use riscv::register::sstatus;
 use rv39_paging::{Attr, LAddr, ID_OFFSET, PAGE_MASK, PAGE_SHIFT, PAGE_SIZE};
 use sygnal::{ActionSet, Sig, SigSet, Signals};
-use umifs::types::{OpenOptions, Permissions};
+use umifs::{
+    path::Path,
+    types::{OpenOptions, Permissions},
+};
 
 use crate::{
     executor,
@@ -33,7 +36,115 @@ use crate::{
     },
 };
 
-pub struct InitTask {
+#[derive(Default)]
+pub struct Command {
+    image: Option<Arc<Phys>>,
+    executable: String,
+    virt: Option<Pin<Arsc<Virt>>>,
+    parent: Weak<Task>,
+    args: Vec<String>,
+    envs: Vec<String>,
+}
+
+impl Command {
+    pub fn new(executable: impl Into<String>) -> Self {
+        Command {
+            executable: executable.into(),
+            ..Default::default()
+        }
+    }
+
+    pub fn parent(&mut self, parent: Weak<Task>) -> &mut Self {
+        self.parent = parent;
+        self
+    }
+
+    pub async fn open(&mut self, path: impl AsRef<Path>) -> Result<&mut Self, Error> {
+        let (entry, _) = crate::fs::open(
+            path.as_ref(),
+            OpenOptions::RDONLY,
+            Permissions::SELF_R | Permissions::SELF_X,
+        )
+        .await?;
+        let io = entry.to_io().ok_or(EISDIR)?;
+        self.image = Some(Arc::new(crate::mem::new_phys(io, true)));
+        Ok(self)
+    }
+
+    pub async fn open_executable(&mut self) -> Result<&mut Self, Error> {
+        let (entry, _) = crate::fs::open(
+            self.executable.as_ref(),
+            OpenOptions::RDONLY,
+            Permissions::SELF_R | Permissions::SELF_X,
+        )
+        .await?;
+        let io = entry.to_io().ok_or(EISDIR)?;
+        self.image = Some(Arc::new(crate::mem::new_phys(io, true)));
+        Ok(self)
+    }
+
+    pub fn image(&mut self, image: Arc<Phys>) -> &mut Self {
+        self.image = Some(image);
+        self
+    }
+
+    pub fn virt(&mut self, virt: Pin<Arsc<Virt>>) -> &mut Self {
+        self.virt = Some(virt);
+        self
+    }
+
+    pub fn arg(&mut self, arg: impl Into<String>) -> &mut Self {
+        self.args.push(arg.into());
+        self
+    }
+
+    pub fn args<A: Into<String>>(&mut self, args: impl IntoIterator<Item = A>) -> &mut Self {
+        self.args.extend(args.into_iter().map(Into::into));
+        self
+    }
+
+    pub fn env(&mut self, env: impl Into<String>) -> &mut Self {
+        self.envs.push(env.into());
+        self
+    }
+
+    pub fn envs<A: Into<String>>(&mut self, envs: impl IntoIterator<Item = A>) -> &mut Self {
+        self.envs.extend(envs.into_iter().map(Into::into));
+        self
+    }
+
+    async fn build(&mut self) -> Result<InitTask, Error> {
+        let Command {
+            image,
+            executable,
+            virt,
+            parent,
+            args,
+            envs,
+        } = mem::take(self);
+        InitTask::from_elf(
+            executable,
+            parent,
+            &image.expect("Require an image"),
+            virt.unwrap_or_else(crate::mem::new_virt),
+            args,
+            envs,
+        )
+        .await
+    }
+
+    pub async fn spawn(&mut self) -> Result<Arc<Task>, Error> {
+        self.build().await?.spawn()
+    }
+
+    pub async fn exec(&mut self, ts: &mut TaskState, tf: &mut TrapFrame) -> Result<(), Error> {
+        self.build().await?.reset(ts, tf).await;
+        Ok(())
+    }
+}
+
+struct InitTask {
+    executable: String,
     parent: Weak<Task>,
     virt: Pin<Arsc<Virt>>,
     tf: TrapFrame,
@@ -44,9 +155,9 @@ impl InitTask {
     async unsafe fn populate_args(
         stack: LAddr,
         virt: Pin<&Virt>,
-        args: Vec<String>,
-        envs: Vec<String>,
-        auxv: Vec<(u8, usize)>,
+        args: &[String],
+        envs: &[String],
+        auxv: &[(u8, usize)],
     ) -> Result<LAddr, Error> {
         let argc_len = mem::size_of::<usize>();
         let argv_len = mem::size_of::<usize>() * (args.len() + 1);
@@ -59,7 +170,7 @@ impl InitTask {
         let len = argc_len + argv_len + envp_len + auxv_len + rand_len + args_len + envs_len;
         let ret = LAddr::from((stack - len).val() & !7);
 
-        let paddr = virt.commit(ret).await?;
+        let paddr = virt.commit(ret, Default::default()).await?;
 
         let argc_ptr = paddr.to_laddr(ID_OFFSET);
         let mut argv_ptr = argc_ptr + argc_len;
@@ -99,7 +210,7 @@ impl InitTask {
             envs_addr += src.len() + 1;
         }
 
-        for (idx, val) in auxv {
+        for (idx, val) in auxv.iter().copied() {
             let val = if val == 0xdeadbeef {
                 rand_addr.val()
             } else {
@@ -120,9 +231,9 @@ impl InitTask {
     pub(super) async fn load_stack(
         virt: Pin<&Virt>,
         stack: Option<(usize, Attr)>,
-        args: Vec<String>,
-        envs: Vec<String>,
-        auxv: Vec<(u8, usize)>,
+        args: &[String],
+        envs: &[String],
+        auxv: &[(u8, usize)],
     ) -> Result<LAddr, Error> {
         log::trace!("InitTask::load_stack {stack:?}");
 
@@ -171,7 +282,8 @@ impl InitTask {
         }
     }
 
-    pub async fn from_elf(
+    async fn from_elf(
+        executable: String,
         parent: Weak<Task>,
         phys: &Arc<Phys>,
         virt: Pin<Arsc<Virt>>,
@@ -210,16 +322,17 @@ impl InitTask {
                 (loaded, args)
             }
         };
-        virt.commit(loaded.entry).await?;
+        virt.commit(loaded.entry, Attr::READABLE | Attr::EXECUTABLE)
+            .await?;
 
         let base = loaded.range.start;
 
         let stack = Self::load_stack(
             virt.as_ref(),
             loaded.stack,
-            args,
-            envs,
-            vec![
+            &args,
+            &envs,
+            &[
                 (AT_PAGESZ, PAGE_SIZE),
                 (AT_RANDOM, 0xdeadbeef),
                 (AT_BASE, base.val()),
@@ -233,6 +346,7 @@ impl InitTask {
         let tf = Self::trap_frame(loaded.entry, stack, 0);
 
         Ok(InitTask {
+            executable,
             parent,
             virt,
             tf,
@@ -240,12 +354,15 @@ impl InitTask {
         })
     }
 
-    pub fn spawn(self) -> Result<Arc<Task>, ksc::Error> {
+    fn spawn(self) -> Result<Arc<Task>, ksc::Error> {
         let tid = alloc_tid();
         let task = Arc::new(Task {
+            executable: spin::Mutex::new(self.executable),
             parent: self.parent,
             children: spin::Mutex::new(Default::default()),
             tid,
+
+            times: Default::default(),
 
             sig: Signals::new(),
             shared_sig: Default::default(),
@@ -258,8 +375,6 @@ impl InitTask {
             sig_mask: SigSet::EMPTY,
             sig_stack: None,
             brk: 0,
-            system_times: 0,
-            user_times: 0,
             virt: self.virt,
             futex: Arsc::new(Futexes::new()),
             files: self.files,
@@ -276,7 +391,11 @@ impl InitTask {
     }
 
     pub async fn reset(self, ts: &mut TaskState, tf: &mut TrapFrame) {
+        ksync::critical(|| *ts.task.executable.lock() = self.executable);
+        ts.task.shared_sig.swap(Default::default(), SeqCst);
+        ts.brk = 0;
         ts.virt = self.virt;
+        ts.futex = Arsc::new(Default::default());
         ts.files.append_afterlife(&self.files).await;
         *tf = self.tf;
     }

@@ -1,4 +1,4 @@
-use alloc::{boxed::Box, vec::Vec};
+use alloc::{boxed::Box, vec, vec::Vec};
 use core::{
     alloc::Layout,
     mem::{self, MaybeUninit},
@@ -20,7 +20,7 @@ use umifs::types::{FileType, Metadata, OpenOptions, Permissions, SeekFrom};
 
 use super::Files;
 use crate::{
-    mem::{In, Out, UserBuffer, UserPtr},
+    mem::{In, InOut, Out, UserBuffer, UserPtr},
     syscall::{ScRet, Ts},
     task::TaskState,
 };
@@ -271,6 +271,97 @@ pub async fn lseek(
     ScRet::Continue(None)
 }
 
+#[async_handler]
+pub async fn sendfile(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(i32, i32, UserPtr<usize, InOut>, usize) -> Result<usize, Error>>,
+) -> ScRet {
+    let (output, input, mut offset_ptr, mut count) = cx.args();
+    let fut = async move {
+        let output = ts.files.get(output).await?.to_io().ok_or(EISDIR)?;
+        let input = ts.files.get(input).await?.to_io().ok_or(EISDIR)?;
+
+        let mut buf = vec![0; count.min(MAX_PATH_LEN)];
+        if offset_ptr.is_null() {
+            let mut ret = 0;
+            while count > 0 {
+                let len = count.min(MAX_PATH_LEN);
+                let read_len = input.read(&mut [&mut buf[..len]]).await?;
+                let written_len = output.write(&mut [&buf[..read_len]]).await?;
+                ret += written_len;
+                count -= written_len;
+
+                if written_len == 0 || written_len < read_len {
+                    break;
+                }
+            }
+            Ok(ret)
+        } else {
+            let mut offset = offset_ptr.read(ts.virt.as_ref()).await?;
+            let mut ret = 0;
+            while count > 0 {
+                let len = count.min(MAX_PATH_LEN);
+                let read_len = input.read_at(offset, &mut [&mut buf[..len]]).await?;
+                let written_len = output.write(&mut [&buf[..read_len]]).await?;
+
+                offset += written_len;
+                ret += written_len;
+                count -= written_len;
+                if written_len == 0 {
+                    break;
+                }
+            }
+            offset_ptr.write(ts.virt.as_ref(), offset).await?;
+            Ok(ret)
+        }
+    };
+    cx.ret(fut.await);
+    ScRet::Continue(None)
+}
+
+#[async_handler]
+pub async fn readlinkat(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(i32, UserPtr<u8, In>, UserPtr<u8, Out>, usize) -> Result<usize, Error>>,
+) -> ScRet {
+    let (fd, path, mut out, len) = cx.args();
+    let fut = async move {
+        let mut buf = [0; MAX_PATH_LEN];
+        let (path, root) = path.read_path(ts.virt.as_ref(), &mut buf).await?;
+
+        let options = OpenOptions::RDONLY;
+        let perm = Default::default();
+
+        log::trace!("user readlinkat fd = {fd}, path = {path:?}");
+
+        if root && path == "/proc/self/exe" {
+            let executable = ksync::critical(|| ts.task.executable.lock().clone());
+            if executable.len() + 1 >= len {
+                return Err(ENAMETOOLONG);
+            }
+            out.write_slice(ts.virt.as_ref(), executable.as_bytes(), true)
+                .await?;
+            return Ok(executable.len());
+        }
+
+        let _entry = if root {
+            crate::fs::open(path, options, perm).await?.0
+        } else {
+            let base = ts.files.get(fd).await?;
+            match base.open(path, options, perm).await {
+                Ok((entry, _)) => entry,
+                Err(ENOENT) if ts.files.cwd() == "" => {
+                    crate::fs::open(path, options, perm).await?.0
+                }
+                Err(err) => return Err(err),
+            }
+        };
+        Err(EINVAL)
+    };
+    cx.ret(fut.await);
+    ScRet::Continue(None)
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 #[repr(C, packed)]
 pub struct Kstat {
@@ -469,6 +560,36 @@ fssc!(
         files.open(entry, close_on_exec).await
     }
 
+    pub async fn faccessat(
+        virt: Pin<&Virt>,
+        files: &Files,
+        fd: i32,
+        path: UserPtr<u8, In>,
+        options: i32,
+        perm: u32,
+    ) -> Result<(), Error> {
+        let mut buf = [0; MAX_PATH_LEN];
+        let (path, root) = path.read_path(virt, &mut buf).await?;
+
+        let options = OpenOptions::from_bits_truncate(options);
+        let perm = Permissions::from_bits(perm).ok_or(EPERM)?;
+
+        log::trace!(
+            "user accessat fd = {fd}, path = {path:?}, options = {options:?}, perm = {perm:?}"
+        );
+
+        if root {
+            crate::fs::open(path, options, perm).await?;
+        } else {
+            let base = files.get(fd).await?;
+            match base.open(path, options, perm).await {
+                Err(ENOENT) if files.cwd() == "" => crate::fs::open(path, options, perm).await?,
+                res => res?,
+            };
+        };
+        Ok(())
+    }
+
     pub async fn mkdirat(
         virt: Pin<&Virt>,
         files: &Files,
@@ -515,6 +636,8 @@ fssc!(
     ) -> Result<(), Error> {
         let mut buf = [0; MAX_PATH_LEN];
         let (path, root) = path.read_path(virt, &mut buf).await?;
+
+        log::trace!("user fstatat fd = {fd}, path = {path:?}");
 
         let file = if root {
             crate::fs::open(

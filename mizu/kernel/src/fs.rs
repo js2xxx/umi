@@ -11,7 +11,7 @@ use afat32::NullTimeProvider;
 use arsc_rs::Arsc;
 use crossbeam_queue::ArrayQueue;
 use ksc::Error::{self, EACCES, ENOENT};
-use ksync::{Sender, TryRecvError};
+use ksync::channel::mpmc::{Sender, TryRecvError};
 use ktime::sleep;
 use spin::RwLock;
 use umifs::{
@@ -40,7 +40,7 @@ static FS: RwLock<FsCollection> = RwLock::new(BTreeMap::new());
 
 pub fn mount(path: PathBuf, fs: Arsc<dyn FileSystem>) {
     let fs2 = fs.clone();
-    let (tx, rx) = ksync::bounded(1);
+    let (tx, rx) = ksync::channel::bounded(1);
     let task = async move {
         loop {
             sleep(Duration::from_secs(1)).await;

@@ -84,7 +84,7 @@ impl<T> Flavor for ArrayQueue<T> {
     }
 }
 
-struct Channel<F: Flavor> {
+pub(super) struct Channel<F: Flavor> {
     queue: F,
     send: Event,
     recv: Event,
@@ -94,6 +94,17 @@ struct Channel<F: Flavor> {
 }
 
 impl<F: Flavor> Channel<F> {
+    pub fn new(queue: F) -> Self {
+        Channel {
+            queue,
+            send: Event::new(),
+            recv: Event::new(),
+            closed: AtomicBool::new(false),
+            sender: AtomicUsize::new(1),
+            receiver: AtomicUsize::new(1),
+        }
+    }
+
     fn close(&self) -> bool {
         if !self.closed.swap(true, SeqCst) {
             self.send.notify(usize::MAX);
@@ -122,6 +133,10 @@ impl<F: Flavor> fmt::Debug for Sender<F> {
 }
 
 impl<F: Flavor> Sender<F> {
+    pub(super) fn new(channel: Arsc<Channel<F>>) -> Self {
+        Sender { channel }
+    }
+
     pub fn try_send(&self, data: F::Item) -> Result<(), TrySendError<F::Item>> {
         if self.channel.is_closed() {
             return Err(TrySendError { data, closed: true });
@@ -242,6 +257,10 @@ impl<F: Flavor> fmt::Debug for Receiver<F> {
 }
 
 impl<F: Flavor> Receiver<F> {
+    pub(super) fn new(channel: Arsc<Channel<F>>) -> Self {
+        Receiver { channel }
+    }
+
     pub fn try_recv(&self) -> Result<F::Item, TryRecvError<F::Item>> {
         let data = self.channel.queue.pop();
         if self.channel.is_closed() {
@@ -488,31 +507,6 @@ impl<T> fmt::Display for RecvError<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "receiving from a closed channel")
     }
-}
-
-pub fn with_flavor<F: Flavor>(queue: F) -> (Sender<F>, Receiver<F>) {
-    let channel = Arsc::new(Channel {
-        queue,
-        send: Event::new(),
-        recv: Event::new(),
-        closed: AtomicBool::new(false),
-        sender: AtomicUsize::new(1),
-        receiver: AtomicUsize::new(1),
-    });
-    (
-        Sender {
-            channel: channel.clone(),
-        },
-        Receiver { channel },
-    )
-}
-
-pub fn bounded<T>(capacity: usize) -> (Sender<ArrayQueue<T>>, Receiver<ArrayQueue<T>>) {
-    self::with_flavor(ArrayQueue::new(capacity))
-}
-
-pub fn unbounded<T>() -> (Sender<SegQueue<T>>, Receiver<SegQueue<T>>) {
-    self::with_flavor(SegQueue::new())
 }
 
 // #[cfg(test)]

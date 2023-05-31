@@ -10,7 +10,6 @@ qemu-virt = ["config/qemu-virt"]
 test = [
   "art/test",
   "kalloc/test",
-  "klog/test",
   "ktime/test",
 ]
 
@@ -23,7 +22,6 @@ config = {path = "../lib/config", default-features = false}
 devices = {path = "../lib/devices"}
 hart-id = {path = "../lib/hart-id"}
 kalloc = {path = "../lib/kalloc"}
-klog = {path = "../lib/klog"}
 kmem = {path = "../lib/kmem"}
 ksc = {path = "../lib/ksc"}
 ksync = {path = "../lib/ksync"}

@@ -1,11 +1,13 @@
+mod cmd;
 mod elf;
 pub mod fd;
 mod future;
-mod init;
 pub mod signal;
 mod syscall;
+mod time;
 
 use alloc::{
+    string::String,
     sync::{Arc, Weak},
     vec::Vec,
 };
@@ -16,15 +18,18 @@ use crossbeam_queue::SegQueue;
 use futures_util::future::{select, select_all, Either};
 use hashbrown::HashMap;
 use kmem::Virt;
-use ksc::Error::{self, ECHILD};
-use ksync::{unbounded, AtomicArsc, Broadcast, Receiver};
+use ksc::Error::{self, ECHILD, EPERM};
+use ksync::{
+    channel::{mpmc::Receiver, unbounded, Broadcast},
+    AtomicArsc,
+};
 use rand_riscv::RandomState;
 use rv39_paging::{Attr, PAGE_SIZE};
 use spin::{Lazy, Mutex};
 use sygnal::{ActionSet, Sig, SigInfo, SigSet, Signals};
 
-use self::{fd::Files, signal::SigStack};
-pub use self::{future::yield_now, init::InitTask, syscall::*};
+pub use self::{cmd::Command, future::yield_now, syscall::*};
+use self::{fd::Files, signal::SigStack, time::Times};
 use crate::mem::{Futexes, Out, UserPtr};
 
 const DEFAULT_STACK_SIZE: usize = PAGE_SIZE * 8;
@@ -50,6 +55,9 @@ pub struct Task {
     parent: Weak<Task>,
     children: spin::Mutex<Vec<Child>>,
     tid: usize,
+    executable: spin::Mutex<String>,
+
+    times: Arc<Times>,
 
     sig: Signals,
     shared_sig: AtomicArsc<Signals>,
@@ -86,9 +94,6 @@ pub struct TaskState {
     sig_stack: Option<SigStack>,
     pub(crate) brk: usize,
 
-    system_times: u64,
-    user_times: u64,
-
     pub(crate) virt: Pin<Arsc<Virt>>,
     pub(crate) futex: Arsc<Futexes>,
     sig_actions: Arsc<ActionSet>,
@@ -121,6 +126,9 @@ impl TaskState {
                 let children = ksync::critical(|| self.task.children.lock().clone());
                 log::trace!("task::wait found {} child(ren)", children.len());
 
+                for c in children.iter() {
+                    self.task.times.append_child(&c.task.times)
+                }
                 match &children[..] {
                     [] => return Err(ECHILD),
                     [a] => (a.event.recv().await, a.task.tid),
@@ -135,9 +143,13 @@ impl TaskState {
                     }
                 }
             }
+            PidSelection::Task(Some(tid)) if tid == self.task.tid => return Err(EPERM),
             PidSelection::Task(Some(tid)) => {
                 let child = ksync::critical(|| {
                     let children = self.task.children.lock();
+                    for c in children.iter() {
+                        self.task.times.append_child(&c.task.times)
+                    }
                     children.iter().find(|c| c.task.tid == tid).cloned()
                 });
                 (child.ok_or(ECHILD)?.event.recv().await, tid)
