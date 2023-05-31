@@ -25,7 +25,7 @@ use virtio_drivers::{
 
 use super::{block::Block, HalImpl};
 
-type Token = ArrayQueue<Request>;
+struct Token(ArrayQueue<Request>);
 
 #[derive(Debug)]
 struct Request {
@@ -56,9 +56,7 @@ impl VirtioBlock {
             VirtioBlock {
                 virt_queue: Event::new(),
                 device: Mutex::new(device),
-                token: iter::repeat_with(|| ArrayQueue::new(1))
-                    .take(size)
-                    .collect(),
+                token: iter::repeat_with(Token::new).take(size).collect(),
             }
         })
     }
@@ -71,33 +69,7 @@ impl VirtioBlock {
                 blk.peek_used()
             });
             let Some(used) = used else { break };
-
-            if let Some(mut request) = self.token[used as usize].pop() {
-                // log::trace!(
-                //     "VirtioBlock::ack_interrupt: complete request {:?}({used})",
-                //     request.dir
-                // );
-                let _ = self.i(|blk| match request.dir {
-                    Direction::Read => unsafe {
-                        blk.complete_read_block(
-                            used,
-                            &request.req,
-                            &mut request.buf,
-                            &mut request.resp,
-                        )
-                    },
-                    Direction::Write => unsafe {
-                        blk.complete_write_block(
-                            used,
-                            &request.req,
-                            &request.buf,
-                            &mut request.resp,
-                        )
-                    },
-                });
-                self.virt_queue.notify(1);
-                let _ = request.ret.send(request.buf);
-            }
+            unsafe { self.token[used as usize].complete(used, self) }
         }
     }
 
@@ -278,15 +250,14 @@ impl Future for ChunkOp<'_> {
                     // log::trace!("VirtioBlock::poll: submitted {dir:?}, token = {token:?}");
 
                     let (tx, rx) = oneshot();
-                    this.device.token[token as usize]
-                        .push(Request {
-                            buf: mem::take(buf),
-                            dir: this.dir,
-                            req: mem::take(req),
-                            resp: mem::take(resp),
-                            ret: tx,
-                        })
-                        .unwrap();
+                    let request = Request {
+                        buf: mem::take(buf),
+                        dir: this.dir,
+                        req: mem::take(req),
+                        resp: mem::take(resp),
+                        ret: tx,
+                    };
+                    this.device.token[token as usize].0.push(request).unwrap();
                     this.state = ChunkState::Waiting { ret: rx }
                 }
                 ChunkState::Waiting { ret } => {
@@ -297,6 +268,31 @@ impl Future for ChunkOp<'_> {
                 }
                 ChunkState::Complete => unreachable!("polling after complete"),
             }
+        }
+    }
+}
+
+impl Token {
+    fn new() -> Self {
+        Token(ArrayQueue::new(1))
+    }
+
+    unsafe fn complete(&self, used: u16, device: &VirtioBlock) {
+        if let Some(mut request) = self.0.pop() {
+            // log::trace!(
+            //     "VirtioBlock::ack_interrupt: complete request {:?}({used})",
+            //     request.dir
+            // );
+            let _ = device.i(|blk| match request.dir {
+                Direction::Read => unsafe {
+                    blk.complete_read_block(used, &request.req, &mut request.buf, &mut request.resp)
+                },
+                Direction::Write => unsafe {
+                    blk.complete_write_block(used, &request.req, &request.buf, &mut request.resp)
+                },
+            });
+            device.virt_queue.notify(1);
+            let _ = request.ret.send(request.buf);
         }
     }
 }
