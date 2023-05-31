@@ -64,12 +64,14 @@ impl VirtioBlock {
     }
 
     pub fn ack_interrupt(&self) {
-        let used = ksync::critical(|| {
-            let mut blk = self.device.lock();
-            blk.ack_interrupt();
-            blk.peek_used()
-        });
-        if let Some(used) = used {
+        loop {
+            let used = ksync::critical(|| {
+                let mut blk = self.device.lock();
+                blk.ack_interrupt();
+                blk.peek_used()
+            });
+            let Some(used) = used else { break };
+
             if let Some(mut request) = self.token[used as usize].pop() {
                 // log::trace!(
                 //     "VirtioBlock::ack_interrupt: complete request {:?}({used})",

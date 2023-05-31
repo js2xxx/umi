@@ -20,7 +20,10 @@ use rand_riscv::rand_core::RngCore;
 use riscv::register::sstatus;
 use rv39_paging::{Attr, LAddr, ID_OFFSET, PAGE_MASK, PAGE_SHIFT, PAGE_SIZE};
 use sygnal::{ActionSet, Sig, SigSet, Signals};
-use umifs::types::{OpenOptions, Permissions};
+use umifs::{
+    path::Path,
+    types::{OpenOptions, Permissions},
+};
 
 use crate::{
     executor,
@@ -33,7 +36,114 @@ use crate::{
     },
 };
 
-pub struct InitTask {
+#[derive(Default)]
+pub struct Command {
+    image: Option<Arc<Phys>>,
+    executable: String,
+    virt: Option<Pin<Arsc<Virt>>>,
+    parent: Weak<Task>,
+    args: Vec<String>,
+    envs: Vec<String>,
+}
+
+impl Command {
+    pub fn new(executable: impl Into<String>) -> Self {
+        Command {
+            executable: executable.into(),
+            ..Default::default()
+        }
+    }
+
+    pub fn parent(&mut self, parent: Weak<Task>) -> &mut Self {
+        self.parent = parent;
+        self
+    }
+
+    pub async fn open(&mut self, path: impl AsRef<Path>) -> Result<&mut Self, Error> {
+        let (entry, _) = crate::fs::open(
+            path.as_ref(),
+            OpenOptions::RDONLY,
+            Permissions::SELF_R | Permissions::SELF_X,
+        )
+        .await?;
+        let io = entry.to_io().ok_or(EISDIR)?;
+        self.image = Some(Arc::new(crate::mem::new_phys(io, true)));
+        Ok(self)
+    }
+
+    pub async fn open_executable(&mut self) -> Result<&mut Self, Error> {
+        let (entry, _) = crate::fs::open(
+            self.executable.as_ref(),
+            OpenOptions::RDONLY,
+            Permissions::SELF_R | Permissions::SELF_X,
+        )
+        .await?;
+        let io = entry.to_io().ok_or(EISDIR)?;
+        self.image = Some(Arc::new(crate::mem::new_phys(io, true)));
+        Ok(self)
+    }
+
+    pub fn image(&mut self, image: Arc<Phys>) -> &mut Self {
+        self.image = Some(image);
+        self
+    }
+
+    pub fn virt(&mut self, virt: Pin<Arsc<Virt>>) -> &mut Self {
+        self.virt = Some(virt);
+        self
+    }
+
+    pub fn arg(&mut self, arg: impl Into<String>) -> &mut Self {
+        self.args.push(arg.into());
+        self
+    }
+
+    pub fn args<A: Into<String>>(&mut self, args: impl IntoIterator<Item = A>) -> &mut Self {
+        self.args.extend(args.into_iter().map(Into::into));
+        self
+    }
+
+    pub fn env(&mut self, env: impl Into<String>) -> &mut Self {
+        self.envs.push(env.into());
+        self
+    }
+
+    pub fn envs<A: Into<String>>(&mut self, envs: impl IntoIterator<Item = A>) -> &mut Self {
+        self.envs.extend(envs.into_iter().map(Into::into));
+        self
+    }
+
+    async fn build(&mut self) -> Result<InitTask, Error> {
+        let Command {
+            image,
+            executable,
+            virt,
+            parent,
+            args,
+            envs,
+        } = mem::take(self);
+        InitTask::from_elf(
+            executable,
+            parent,
+            &image.expect("Require an image"),
+            virt.unwrap_or_else(crate::mem::new_virt),
+            args,
+            envs,
+        )
+        .await
+    }
+
+    pub async fn spawn(&mut self) -> Result<Arc<Task>, Error> {
+        self.build().await?.spawn()
+    }
+
+    pub async fn exec(&mut self, ts: &mut TaskState, tf: &mut TrapFrame) -> Result<(), Error> {
+        self.build().await?.reset(ts, tf).await;
+        Ok(())
+    }
+}
+
+struct InitTask {
     executable: String,
     parent: Weak<Task>,
     virt: Pin<Arsc<Virt>>,
@@ -172,7 +282,7 @@ impl InitTask {
         }
     }
 
-    pub async fn from_elf(
+    async fn from_elf(
         executable: String,
         parent: Weak<Task>,
         phys: &Arc<Phys>,
@@ -244,7 +354,7 @@ impl InitTask {
         })
     }
 
-    pub fn spawn(self) -> Result<Arc<Task>, ksc::Error> {
+    fn spawn(self) -> Result<Arc<Task>, ksc::Error> {
         let tid = alloc_tid();
         let task = Arc::new(Task {
             executable: spin::Mutex::new(self.executable),

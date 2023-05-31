@@ -127,15 +127,6 @@ impl MmioSerialPort {
         }
     }
 
-    pub fn try_send(&mut self, data: u8) -> bool {
-        let self_data = self.data.load(Relaxed);
-        let ret = self.line_sts().contains(LineStsFlags::OUTPUT_EMPTY);
-        if ret {
-            unsafe { self_data.write(data) };
-        }
-        ret
-    }
-
     pub fn can_recv(&mut self) -> bool {
         self.line_sts().contains(LineStsFlags::INPUT_READY)
     }

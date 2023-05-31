@@ -32,7 +32,7 @@ pub fn init_mmio(node: &FdtNode) -> bool {
             let device = tryb!(VirtioBlock::new(mmio).inspect_err(|err| {
                 log::debug!("Failed to initialize VirtIO block device: {err}");
             }));
-            let intr = someb!(intr_manager.insert(hart_id::hart_ids(), intr_pin));
+            let intr = someb!(intr_manager.insert(intr_pin));
 
             let device = Arc::new(device);
             executor()

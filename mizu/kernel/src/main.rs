@@ -37,8 +37,5 @@ async fn main(fdt: usize) {
 
     mem::test_phys().await;
 
-    let (fs, _) = fs::get("".as_ref()).unwrap();
-    let rt = fs.root_dir().await.unwrap();
-
-    self::test::libc(rt).await;
+    self::test::libc().await;
 }

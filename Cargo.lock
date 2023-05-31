@@ -216,6 +216,7 @@ dependencies = [
  "crossbeam-queue",
  "futures-lite",
  "futures-util",
+ "hart-id",
  "hashbrown",
  "kmem",
  "ksc",

@@ -50,9 +50,12 @@ impl Io for Serial {
         if !self.write {
             return Err(EBADF);
         }
-        Ok(buffer.iter().fold(0, |acc, buf| {
-            crate::dev::Stdout.write_bytes(buf);
-            acc + buf.len()
+        Ok(ksync::critical(|| {
+            let mut stdout = crate::dev::Stdout::new();
+            buffer.iter().fold(0, |acc, buf| {
+                stdout.write_bytes(buf);
+                acc + buf.len()
+            })
         }))
     }
 

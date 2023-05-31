@@ -481,7 +481,8 @@ impl Phys {
                     } => {
                         if end.map_or(true, |end| (0..(end - start)).contains(&index)) {
                             let parent_index = start + index;
-                            // log::trace!("Phys::commit_impl: return from parent, parent index = {parent_index}");
+                            // log::trace!("Phys::commit_impl: return from parent, parent index =
+                            // {parent_index}");
                             return match parent.commit_impl(parent_index, write, pin, cow).await {
                                 Ok(s @ Commit::Shared(..)) => Ok(s),
                                 Ok(Commit::Unique(fi)) => ksync::critical(|| {

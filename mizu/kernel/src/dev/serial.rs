@@ -1,11 +1,10 @@
 use core::{
-    fmt, hint,
+    fmt,
     mem::MaybeUninit,
     num::NonZeroU32,
     pin::Pin,
     sync::atomic,
     task::{ready, Context, Poll},
-    time::Duration,
 };
 
 use crossbeam_queue::SegQueue;
@@ -13,10 +12,10 @@ use devices::{dev::MmioSerialPort, Interrupt};
 use fdt::node::FdtNode;
 use futures_util::{FutureExt, Stream};
 use ksync::event::{Event, EventListener};
-use ktime::{Instant, TimeOutExt, Timer};
+use ktime::Instant;
 use log::Level;
 use rv39_paging::{PAddr, ID_OFFSET};
-use spin::{Mutex, Once};
+use spin::{Mutex, MutexGuard, Once};
 
 use super::intr::intr_man;
 use crate::someb;
@@ -25,38 +24,31 @@ struct Serial {
     device: Mutex<MmioSerialPort>,
     input: SegQueue<u8>,
     input_ready: Event,
-    output: SegQueue<u8>,
 }
 
 static SERIAL: Once<Serial> = Once::new();
 
-pub struct Stdout;
+pub struct Stdout<'a>(Option<MutexGuard<'a, MmioSerialPort>>);
 
 pub struct Stdin(Option<EventListener>);
 
-impl Stdout {
-    pub fn flush(&self) {
-        if let Some(serial) = SERIAL.get() {
-            while !serial.output.is_empty() {
-                hint::spin_loop()
-            }
-        }
-    }
-}
-
-impl fmt::Write for Stdout {
+impl fmt::Write for Stdout<'_> {
     fn write_str(&mut self, s: &str) -> fmt::Result {
-        if let Some(serial) = SERIAL.get() {
-            s.bytes().for_each(|b| serial.output.push(b))
+        if let Some(serial) = &mut self.0 {
+            serial.write_str(s)?;
         }
         Ok(())
     }
 }
 
-impl Stdout {
+impl Stdout<'_> {
+    pub fn new() -> Self {
+        Stdout(SERIAL.get().map(|s| s.device.lock()))
+    }
+
     pub fn write_bytes(&mut self, buffer: &[u8]) {
-        if let Some(serial) = SERIAL.get() {
-            buffer.iter().for_each(|&b| serial.output.push(b))
+        if let Some(serial) = &mut self.0 {
+            buffer.iter().for_each(|&b| serial.send(b))
         }
     }
 }
@@ -92,7 +84,7 @@ macro_rules! print {
     ($($arg:tt)*) => {
         ksync::critical(|| {
             use core::fmt::Write;
-            write!($crate::dev::Stdout, $($arg)*).unwrap()
+            write!($crate::dev::Stdout::new(), $($arg)*).unwrap()
         })
     };
 }
@@ -102,13 +94,13 @@ macro_rules! println {
     () => {
         ksync::critical(|| {
             use core::fmt::Write;
-            $crate::dev::Stdout.write_char('\n').unwrap()
+            $crate::dev::Stdout::new().write_char('\n').unwrap()
         })
     };
     ($($arg:tt)*) => {
         ksync::critical(|| {
             use core::fmt::Write;
-            writeln!($crate::dev::Stdout, $($arg)*).unwrap()
+            writeln!($crate::dev::Stdout::new(), $($arg)*).unwrap()
         })
     };
 }
@@ -163,8 +155,7 @@ static mut LOGGER: MaybeUninit<Logger> = MaybeUninit::uninit();
 
 async fn dispatcher(intr: Interrupt) {
     loop {
-        let timer = Timer::after(Duration::from_millis(1));
-        if !intr.wait().on_timeout(timer, || true).await {
+        if !intr.wait().await {
             break;
         }
         if let Some(serial) = SERIAL.get() {
@@ -173,10 +164,6 @@ async fn dispatcher(intr: Interrupt) {
                 while let Some(b) = device.try_recv() {
                     serial.input.push(b);
                     serial.input_ready.notify(1);
-                }
-                while device.can_send() {
-                    let Some(b) = serial.output.pop() else { break };
-                    device.send(b);
                 }
             })
         }
@@ -191,7 +178,7 @@ pub fn init(node: &FdtNode) -> bool {
     let pin = someb!(intrs.next().and_then(|i| NonZeroU32::new(i as u32)));
 
     let intr_man = someb!(intr_man());
-    let intr = someb!(intr_man.insert(hart_id::hart_ids(), pin));
+    let intr = someb!(intr_man.insert(pin));
 
     SERIAL.call_once(|| {
         let paddr = PAddr::new(reg.starting_address as usize);
@@ -221,7 +208,6 @@ pub fn init(node: &FdtNode) -> bool {
             device: Mutex::new(dev),
             input: SegQueue::new(),
             input_ready: Default::default(),
-            output: SegQueue::new(),
         }
     });
     true

@@ -1,7 +1,7 @@
+mod cmd;
 mod elf;
 pub mod fd;
 mod future;
-mod init;
 pub mod signal;
 mod syscall;
 mod time;
@@ -28,8 +28,8 @@ use rv39_paging::{Attr, PAGE_SIZE};
 use spin::{Lazy, Mutex};
 use sygnal::{ActionSet, Sig, SigInfo, SigSet, Signals};
 
+pub use self::{cmd::Command, future::yield_now, syscall::*};
 use self::{fd::Files, signal::SigStack, time::Times};
-pub use self::{future::yield_now, init::InitTask, syscall::*};
 use crate::mem::{Futexes, Out, UserPtr};
 
 const DEFAULT_STACK_SIZE: usize = PAGE_SIZE * 8;

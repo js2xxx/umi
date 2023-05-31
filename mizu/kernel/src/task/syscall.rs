@@ -7,27 +7,27 @@ use core::{
 };
 
 use arsc_rs::Arsc;
+use cmd::Command;
 use co_trap::{TrapFrame, UserCx};
 use ksc::{
     async_handler,
-    Error::{self, EINVAL, ENOTDIR, EPERM},
+    Error::{self, EINVAL, EPERM},
     RawReg,
 };
 use ksync::{channel::Broadcast, AtomicArsc};
 use riscv::register::time;
 use sygnal::{Sig, SigCode, SigFields, SigInfo, SigSet, Signals};
-use umifs::types::Permissions;
 
 use crate::{
     executor,
     mem::{deep_fork, In, Out, UserPtr, USER_RANGE},
     syscall::{ScRet, Tv},
     task::{
+        cmd,
         fd::MAX_PATH_LEN,
         future::{user_loop, TaskFut},
-        init,
         time::Times,
-        yield_now, Child, InitTask, Task, TaskEvent, TaskState, TASKS,
+        yield_now, Child, Task, TaskEvent, TaskState, TASKS,
     },
 };
 
@@ -258,7 +258,7 @@ async fn clone_task(
 
     log::trace!("clone_task: flags = {flags:?}");
 
-    let new_tid = init::alloc_tid();
+    let new_tid = cmd::alloc_tid();
     log::trace!("new tid = {new_tid}");
     let task = Arc::new(Task {
         executable: spin::Mutex::new(ksync::critical(|| ts.task.executable.lock().clone())),
@@ -465,8 +465,8 @@ pub async fn execve(
 
         log::trace!("task::execve: name = {name:?}, args = {args:?}, envs = {envs:?}");
 
-        let (file, _) = crate::fs::open(&name, Default::default(), Permissions::all()).await?;
-        let io = file.to_io().ok_or(ENOTDIR)?;
+        let mut cmd = Command::new(name);
+        cmd.open_executable().await?;
 
         ts.sig_fatal(
             SigInfo {
@@ -480,16 +480,12 @@ pub async fn execve(
 
         log::trace!("task::execve: start loading ELF. No way back.");
 
-        let init = InitTask::from_elf(
-            name.into(),
-            ts.task.parent.clone(),
-            &Arc::new(crate::mem::new_phys(io, true)),
-            ts.virt.clone(),
-            args,
-            envs,
-        )
-        .await?;
-        init.reset(ts, tf).await;
+        cmd.parent(ts.task.parent.clone())
+            .virt(ts.virt.clone())
+            .args(args)
+            .envs(envs)
+            .exec(ts, tf)
+            .await?;
 
         Ok(())
     }

@@ -1,26 +1,21 @@
-use alloc::{
-    string::{String, ToString},
-    sync::{Arc, Weak},
-    vec,
-};
+use alloc::sync::Arc;
 use core::pin::pin;
 
 use futures_util::{stream, StreamExt};
 use sygnal::Sig;
-use umifs::{path::Path, traits::Entry, types::OpenOptions};
+use umifs::{path::Path, types::OpenOptions};
 
-use crate::task::InitTask;
+use crate::task::Command;
 
 #[allow(dead_code)]
-pub async fn libc(rt: Arc<dyn Entry>) {
+pub async fn libc() {
     let oo = OpenOptions::RDONLY;
     let perm = Default::default();
 
     let scripts = ["run-dynamic.sh", "run-static.sh"];
 
-    let rt2 = rt.clone();
     let stream = stream::iter(scripts)
-        .then(|sh| rt2.clone().open(sh.as_ref(), oo, perm))
+        .then(|sh| crate::fs::open(sh.as_ref(), oo, perm))
         .flat_map(|res| {
             let (sh, _) = res.unwrap();
             let io = sh.to_io().unwrap();
@@ -28,24 +23,20 @@ pub async fn libc(rt: Arc<dyn Entry>) {
         });
     let mut cmd = pin!(stream);
 
-    let (runner, _) = rt.open("runtest".as_ref(), oo, perm).await.unwrap();
+    let (runner, _) = crate::fs::open("runtest".as_ref(), oo, perm).await.unwrap();
     let runner = Arc::new(crate::mem::new_phys(runner.to_io().unwrap(), true));
 
     log::warn!("Start testing");
     while let Some(cmd) = cmd.next().await {
         log::info!("Executing cmd {cmd:?}");
 
-        let init = InitTask::from_elf(
-            "/runtest".into(),
-            Weak::new(),
-            &runner,
-            crate::mem::new_virt(),
-            cmd.split(' ').map(|s| s.to_string()).collect(),
-            vec![],
-        )
-        .await
-        .unwrap();
-        let task = init.spawn().unwrap();
+        let task = Command::new("/runtest")
+            .image(runner.clone())
+            .args(cmd.split(' '))
+            .spawn()
+            .await
+            .unwrap();
+
         let code = task.wait().await;
         log::info!("cmd {cmd:?} returned with {code:?}\n");
     }
@@ -53,25 +44,17 @@ pub async fn libc(rt: Arc<dyn Entry>) {
     log::warn!("Goodbye!");
 }
 
-async fn run_busybox(rt: Arc<dyn Entry>, script: impl Into<String>) -> (i32, Option<Sig>) {
-    let oo = OpenOptions::RDONLY;
-    let perm = Default::default();
+async fn run_busybox(script: &str) -> (i32, Option<Sig>) {
+    let task = Command::new("/busybox")
+        .open("busybox")
+        .await
+        .unwrap()
+        .args(["busybox", "sh", script])
+        .envs(["PATH=/", "LD_LIBRARY_PATH=/"])
+        .spawn()
+        .await
+        .unwrap();
 
-    let (busybox, _) = rt.open("busybox".as_ref(), oo, perm).await.unwrap();
-    let busybox = crate::mem::new_phys(busybox.to_io().unwrap(), true);
-
-    let task = crate::task::InitTask::from_elf(
-        "/busybox".into(),
-        Default::default(),
-        &Arc::new(busybox),
-        crate::mem::new_virt(),
-        vec!["busybox".into(), "sh".into(), script.into()],
-        vec!["PATH=/".into(), "LD_LIBRARY_PATH=/".into()],
-    )
-    .await
-    .unwrap();
-
-    let task = task.spawn().unwrap();
     task.wait().await
 }
 
@@ -86,8 +69,8 @@ async fn print_file(path: impl AsRef<Path>) {
 }
 
 #[allow(dead_code)]
-pub async fn busybox(rt: Arc<dyn Entry>) {
-    let exit = run_busybox(rt, "busybox_testcode.sh").await;
+pub async fn busybox() {
+    let exit = run_busybox("busybox_testcode.sh").await;
     log::info!("Busybox test returned with {exit:?}");
 
     log::info!("result.txt:");
@@ -98,13 +81,13 @@ pub async fn busybox(rt: Arc<dyn Entry>) {
 }
 
 #[allow(dead_code)]
-pub async fn lua(rt: Arc<dyn Entry>) {
-    let exit = run_busybox(rt, "lua_testcode.sh").await;
+pub async fn lua() {
+    let exit = run_busybox("lua_testcode.sh").await;
     log::info!("Lua test returned with {exit:?}");
 }
 
 #[allow(dead_code)]
-pub async fn lmbench(rt: Arc<dyn Entry>) {
-    let exit = run_busybox(rt, "lmbench_testcode.sh").await;
+pub async fn lmbench() {
+    let exit = run_busybox("lmbench_testcode.sh").await;
     log::info!("LMBench test returned with {exit:?}");
 }

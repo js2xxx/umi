@@ -166,7 +166,6 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
     sbi_rt::set_timer(0);
 
     run_art(payload);
-    crate::dev::Stdout.flush();
 
     unsafe { ksync::disable() };
 
@@ -239,7 +238,6 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     use sbi_rt::{Shutdown, SystemFailure};
     log::error!("#{} kernel {info}", hart_id::hart_id());
 
-    crate::dev::Stdout.flush();
     sbi_rt::system_reset(Shutdown, SystemFailure);
     loop {
         unsafe { core::arch::asm!("wfi") }

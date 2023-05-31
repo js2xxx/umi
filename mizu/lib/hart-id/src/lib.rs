@@ -46,3 +46,12 @@ pub fn count() -> usize {
 pub fn hart_ids() -> usize {
     HIDS.load(Relaxed)
 }
+
+pub fn for_each_hart<F: FnMut(usize)>(mut f: F) {
+    let mut mask = hart_ids();
+    while mask > 0 {
+        let bit = mask & (!mask + 1);
+        f(bit.ilog2() as usize);
+        mask -= bit;
+    }
+}

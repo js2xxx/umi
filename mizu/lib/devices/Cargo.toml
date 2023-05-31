@@ -9,6 +9,7 @@ test = []
 
 [dependencies]
 # Local crates
+hart-id = {path = "../hart-id"}
 kmem = {path = "../kmem"}
 ksc = {path = "../ksc"}
 ksync = {path = "../ksync"}
