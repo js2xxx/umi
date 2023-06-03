@@ -113,6 +113,17 @@ pub async fn busybox() {
 }
 
 #[allow(dead_code)]
+pub async fn busybox_debug() {
+    let exit = run_busybox(Some("busybox_testcode_debug.sh")).await;
+    log::info!("Busybox test returned with {exit:?}");
+
+    log::info!("result.txt:");
+    print_file("result.txt").await;
+
+    log::warn!("Goodbye!");
+}
+
+#[allow(dead_code)]
 pub async fn lua() {
     let exit = run_busybox(Some("lua_testcode.sh")).await;
     log::info!("Lua test returned with {exit:?}");

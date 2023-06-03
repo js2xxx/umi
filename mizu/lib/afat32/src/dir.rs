@@ -172,7 +172,7 @@ impl<T: TimeProvider> FatDir<T> {
                 let e = node.find_entry(comp.as_str(), Some(true), None).await?;
                 node = storage.insert(e.to_dir().await?);
             } else {
-                let e = node.find_entry(comp.as_str(), Some(false), None).await?;
+                let e = node.find_entry(comp.as_str(), None, None).await?;
                 return Ok(e);
             }
         }
