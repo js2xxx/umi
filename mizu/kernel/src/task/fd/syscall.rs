@@ -543,7 +543,7 @@ fssc!(
         let (path, root) = path.read_path(virt, &mut buf).await?;
 
         let options = OpenOptions::from_bits_truncate(options);
-        let perm = Permissions::from_bits(perm).ok_or(EPERM)?;
+        let perm = Permissions::from_bits_truncate(perm);
 
         log::trace!(
             "user openat fd = {fd}, path = {path:?}, options = {options:?}, perm = {perm:?}"
@@ -801,6 +801,27 @@ fssc!(
         Ok(read_len)
     }
 
+    pub async fn renameat(
+        virt: Pin<&Virt>,
+        files: &Files,
+        src: i32,
+        src_path: UserPtr<u8, In>,
+        dst: i32,
+        dst_path: UserPtr<u8, In>,
+    ) -> Result<(), Error> {
+        let [mut src_buf, mut dst_buf] = [[0; MAX_PATH_LEN]; 2];
+        let (src_path, _) = src_path.read_path(virt, &mut src_buf).await?;
+        let (dst_path, _) = dst_path.read_path(virt, &mut dst_buf).await?;
+
+        log::trace!("user renameat src = {src}/{src_path:?}, dst = {dst}/{dst_path:?}");
+
+        let src = files.get(src).await?.to_dir_mut().ok_or(ENOTDIR)?;
+        let dst = files.get(dst).await?.to_dir_mut().ok_or(ENOTDIR)?;
+
+        src.rename(src_path, dst, dst_path).await?;
+        Ok(())
+    }
+
     pub async fn unlinkat(
         virt: Pin<&Virt>,
         files: &Files,
@@ -811,7 +832,7 @@ fssc!(
         let mut buf = [0; MAX_PATH_LEN];
         let (path, root) = path.read_path(virt, &mut buf).await?;
 
-        log::trace!("user mkdir fd = {fd}, path = {path:?}, flags = {flags}");
+        log::trace!("user unlinkat fd = {fd}, path = {path:?}, flags = {flags}");
 
         if root {
             crate::fs::unlink(path).await
