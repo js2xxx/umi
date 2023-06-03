@@ -19,6 +19,7 @@ use umifs::{
     traits::{Entry, FileSystem},
     types::{OpenOptions, Permissions},
 };
+use umio::IoExt;
 
 pub use self::pipe::pipe;
 use crate::{dev::blocks, executor};
@@ -129,5 +130,52 @@ pub async fn fs_init() {
             mount("".into(), cache::CachedFs::new(fs).await.unwrap());
             break;
         }
+    }
+}
+
+#[allow(dead_code)]
+pub async fn test_file() {
+    let options = OpenOptions::RDWR | OpenOptions::APPEND | OpenOptions::CREAT;
+    let perm = Permissions::all_same(true, true, false);
+
+    {
+        log::trace!("First attempt:");
+        log::trace!("OPEN");
+        let (file, created) = crate::fs::open("123.txt".as_ref(), options, perm)
+            .await
+            .unwrap();
+        log::trace!("TEST CREATE");
+        assert!(created);
+        let file = file.to_io().unwrap();
+        log::trace!("WRITE 1, 2, 3, 4, 5");
+        file.write_all(&[1, 2, 3, 4, 5]).await.unwrap();
+        file.flush().await.unwrap();
+    }
+    {
+        log::trace!("Second attempt:");
+        log::trace!("OPEN");
+        let (file, created) = crate::fs::open("123.txt".as_ref(), options, perm)
+            .await
+            .unwrap();
+        log::trace!("TEST CREATE");
+        assert!(!created);
+        let file = file.to_io().unwrap();
+        log::trace!("WRITE 6, 7, 8, 9, 10");
+        file.write_all(&[6, 7, 8, 9, 10]).await.unwrap();
+        file.flush().await.unwrap();
+    }
+    {
+        log::trace!("Third attempt:");
+        log::trace!("OPEN");
+        let (file, created) = crate::fs::open("123.txt".as_ref(), options, perm)
+            .await
+            .unwrap();
+        log::trace!("TEST CREATE");
+        assert!(!created);
+        let file = file.to_io().unwrap();
+        let mut buf = [0; 10];
+        log::trace!("READ 10 ELEMENTS");
+        file.read_exact_at(0, &mut buf).await.unwrap();
+        assert_eq!(buf, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
     }
 }

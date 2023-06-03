@@ -87,7 +87,12 @@ impl Entry for CachedDir {
                 EntryCache::Dir(_) if !expect_dir => return Err(EISDIR),
                 EntryCache::File(_) if expect_dir => return Err(ENOTDIR),
                 EntryCache::Dir(dir) => dir,
-                EntryCache::File(file) => Arc::new(file),
+                EntryCache::File(file) => {
+                    if options.contains(OpenOptions::APPEND) {
+                        file.phys.seek(SeekFrom::End(0)).await?;
+                    }
+                    Arc::new(file)
+                }
             };
             return Ok((entry, false));
         }
@@ -100,15 +105,15 @@ impl Entry for CachedDir {
             (EntryCache::Dir(dir.clone()), dir)
         } else {
             let io = entry.clone().to_io().ok_or(EISDIR)?;
-            let phys = crate::mem::new_phys(io, false);
-            if options.contains(OpenOptions::APPEND) {
-                phys.seek(SeekFrom::End(0)).await?;
-            }
             let file = CachedFile {
                 entry,
-                phys: Arc::new(phys),
+                phys: Arc::new(crate::mem::new_phys(io, false)),
             };
-            (EntryCache::File(file.clone()), Arc::new(file))
+            let ec = EntryCache::File(file.clone());
+            if options.contains(OpenOptions::APPEND) {
+                file.phys.seek(SeekFrom::End(0)).await?;
+            }
+            (ec, Arc::new(file))
         };
         ksync::critical(|| self.cache.write().insert(path.to_path_buf(), ec));
         Ok((entry, created))

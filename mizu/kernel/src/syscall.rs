@@ -4,7 +4,8 @@ use core::{ops::ControlFlow, pin::Pin, time::Duration};
 use co_trap::{TrapFrame, UserCx};
 use kmem::Virt;
 use ksc::{
-    async_handler, AHandlers, Error,
+    async_handler, AHandlers,
+    Error::{self, EINVAL},
     Scn::{self, *},
 };
 use ktime::{Instant, InstantExt};
@@ -161,9 +162,12 @@ async fn sleep(
         input: UserPtr<Ts, In>,
         mut output: UserPtr<Ts, Out>,
     ) -> Result<(), Error> {
-        let tv = input.read(virt).await?;
+        let Ts { sec, nsec } = input.read(virt).await?;
+        if sec >= isize::MAX as _ || nsec >= 1_000_000_000 {
+            return Err(EINVAL);
+        }
 
-        let dur = Duration::from_secs(tv.sec) + Duration::from_nanos(tv.nsec);
+        let dur = Duration::from_secs(sec) + Duration::from_nanos(nsec);
         if dur.is_zero() {
             crate::task::yield_now().await
         } else {
