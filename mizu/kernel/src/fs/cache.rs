@@ -81,10 +81,11 @@ impl Entry for CachedDir {
         perm: Permissions,
     ) -> Result<(Arc<dyn Entry>, bool), Error> {
         let expect_dir = options.contains(OpenOptions::DIRECTORY);
+        let create = options.contains(OpenOptions::CREAT);
 
         if let Some(ec) = ksync::critical(|| self.cache.read().get(path).cloned()) {
             let entry: Arc<dyn Entry> = match ec {
-                EntryCache::Dir(_) if !expect_dir => return Err(EISDIR),
+                EntryCache::Dir(_) if !expect_dir && create => return Err(EISDIR),
                 EntryCache::File(_) if expect_dir => return Err(ENOTDIR),
                 EntryCache::Dir(dir) => dir,
                 EntryCache::File(file) => {

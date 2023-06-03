@@ -36,6 +36,7 @@ async fn main(fdt: usize) {
     println!("Hello from UMI ^_^");
 
     mem::test_phys().await;
+    fs::test_file().await;
 
-    self::test::libc().await;
+    self::test::busybox().await;
 }

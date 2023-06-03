@@ -92,16 +92,12 @@ pub async fn busybox() {
 
     log::warn!("Start testing");
     while let Some(cmd) = cmd.next().await {
-        if cmd.starts_with("du") || cmd.starts_with("ls") {
-            continue;
-        }
-
-        let cmd = "busybox ".to_string() + cmd.trim();
+        let cmd = "/busybox ".to_string() + cmd.trim();
         println!(">>> Executing CMD {cmd:?}");
 
         let task = Command::new("/busybox")
             .image(runner.clone())
-            .args(cmd.split(' '))
+            .args(["busybox", "sh", "-c", &cmd])
             .spawn()
             .await
             .unwrap();

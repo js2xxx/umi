@@ -22,7 +22,10 @@ use super::Files;
 use crate::{
     mem::{In, InOut, Out, UserBuffer, UserPtr},
     syscall::{ScRet, Ts},
-    task::TaskState,
+    task::{
+        fd::{FdInfo, SavedNextDirent},
+        TaskState,
+    },
 };
 
 #[async_handler]
@@ -523,7 +526,7 @@ fssc!(
             F_DUPFD => files.dup(fd, None).await,
             F_DUPFD_CLOEXEC => files.dup(fd, Some(arg != 0)).await,
             F_GETFD => files.get_fi(fd).await.map(|fi| fi.close_on_exec as i32),
-            F_SETFD => files.set_fi(fd, arg != 0).await.map(|_| 0),
+            F_SETFD => files.set_fi(fd, arg != 0, None).await.map(|_| 0),
             _ => Err(EINVAL),
         }
     }
@@ -740,23 +743,34 @@ fssc!(
             reclen: u16,
             ty: FileType,
         }
-        let entry = files.get(fd).await?;
+        let FdInfo {
+            entry,
+            close_on_exec,
+            mut saved_next_dirent,
+        } = files.get_fi(fd).await?;
+        let saved_next_dirent = saved_next_dirent.get_mut();
+
         let dir = entry.to_dir().ok_or(ENOTDIR)?;
 
-        let mut d = dir.next_dirent(None).await?;
-        let mut count = 0;
+        let first = match saved_next_dirent {
+            SavedNextDirent::Start => None,
+            SavedNextDirent::Next(dirent) => Some(&*dirent),
+            SavedNextDirent::End => return Ok(0),
+        };
+        let mut d = dir.next_dirent(first).await?;
+        let mut read_len = 0;
         loop {
-            let Some(entry) = d else { break Ok(count) };
+            let Some(entry) = &d else { break };
 
             let layout = Layout::new::<D>()
                 .extend_packed(Layout::for_value(&*entry.name))?
                 .extend_packed(Layout::new::<u8>())?
                 .pad_to_align();
             if layout.size() > len {
-                break Ok(count);
+                break;
             }
             let Ok(reclen) = layout.size().try_into() else {
-                break Ok(count);
+                break;
             };
 
             let mut out = MaybeUninit::<D>::uninit();
@@ -773,10 +787,18 @@ fssc!(
 
             ptr.advance(layout.size() - mem::size_of::<D>());
             len -= layout.size();
+            read_len += layout.size();
 
-            d = dir.next_dirent(Some(&entry)).await?;
-            count += 1;
+            d = dir.next_dirent(Some(entry)).await?;
         }
+
+        let s = match d {
+            None => SavedNextDirent::End,
+            Some(dirent) => SavedNextDirent::Next(dirent),
+        };
+        files.set_fi(fd, close_on_exec, Some(s)).await?;
+
+        Ok(read_len)
     }
 
     pub async fn unlinkat(

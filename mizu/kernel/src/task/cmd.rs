@@ -396,7 +396,6 @@ impl InitTask {
         ts.brk = 0;
         ts.virt = self.virt;
         ts.futex = Arsc::new(Default::default());
-        ts.files.append_afterlife(&self.files).await;
         *tf = self.tf;
     }
 }
