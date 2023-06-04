@@ -71,7 +71,7 @@ async fn print_file(path: impl AsRef<Path>) {
         .unwrap();
     let mut lines = core::pin::pin!(umio::lines(file.to_io().unwrap()));
     while let Some(result) = lines.next().await {
-        log::info!("{}", result.unwrap());
+        println!("{}", result.unwrap());
     }
 }
 
@@ -92,7 +92,11 @@ pub async fn busybox() {
 
     log::warn!("Start testing");
     while let Some(cmd) = cmd.next().await {
-        let cmd = "/busybox ".to_string() + cmd.trim();
+        let cmd = cmd.trim();
+        if cmd.is_empty() {
+            continue;
+        }
+        let cmd = "/busybox ".to_string() + cmd;
         println!(">>> Executing CMD {cmd:?}");
 
         let task = Command::new("/busybox")
@@ -106,19 +110,23 @@ pub async fn busybox() {
         println!(">>> CMD {cmd:?} returned with {code:?}\n");
     }
 
-    log::info!("test.txt:");
-    print_file("test.txt").await;
-
     log::warn!("Goodbye!");
 }
 
 #[allow(dead_code)]
-pub async fn busybox_debug() {
-    let exit = run_busybox(Some("busybox_testcode_debug.sh")).await;
+pub async fn busybox_debug(print_result: bool) {
+    let script = if print_result {
+        "busybox_testcode_debug.sh"
+    } else {
+        "busybox_testcode.sh"
+    };
+    let exit = run_busybox(Some(script)).await;
     log::info!("Busybox test returned with {exit:?}");
 
-    log::info!("result.txt:");
-    print_file("result.txt").await;
+    if print_result {
+        println!("result.txt:");
+        print_file("result.txt").await;
+    }
 
     log::warn!("Goodbye!");
 }

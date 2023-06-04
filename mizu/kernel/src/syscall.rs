@@ -64,6 +64,7 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         .map(PREADV64, fd::preadv)
         .map(PWRITEV64, fd::pwritev)
         .map(LSEEK, fd::lseek)
+        .map(PPOLL, dummy_ppoll)
         .map(SENDFILE, fd::sendfile)
         .map(CHDIR, fd::chdir)
         .map(GETCWD, fd::getcwd)
@@ -102,6 +103,12 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
 #[async_handler]
 async fn dummy_zero(_: &mut TaskState, cx: UserCx<'_, fn() -> usize>) -> ScRet {
     cx.ret(0);
+    ScRet::Continue(None)
+}
+
+#[async_handler]
+async fn dummy_ppoll(_: &mut TaskState, cx: UserCx<'_, fn() -> usize>) -> ScRet {
+    cx.ret(1);
     ScRet::Continue(None)
 }
 

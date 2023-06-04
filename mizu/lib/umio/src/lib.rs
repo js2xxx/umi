@@ -1,10 +1,6 @@
 #![cfg_attr(not(test), no_std)]
 
-use alloc::{
-    boxed::Box,
-    string::{String, ToString},
-    sync::Arc,
-};
+use alloc::{boxed::Box, string::String, sync::Arc};
 use core::{any::Any, mem, slice, str};
 
 use arsc_rs::Arsc;
@@ -247,45 +243,35 @@ pub trait IoExt: Io {
         }
     }
 
-    async fn read_line(&self, out: &mut String) -> Result<String, Error> {
-        if let Some(pos) = out.find('\n') {
-            let next = out.split_off(pos + 1);
-            out.pop();
-            return Ok(next);
-        }
+    async fn read_line(&self, out: &mut String) -> Result<Option<String>, Error> {
         let mut buf = [0; 64];
         loop {
+            if let Some(pos) = out.find('\n') {
+                let next = out.split_off(pos + 1);
+                out.pop();
+                return Ok(Some(next));
+            }
+
             let len = self.read(&mut [&mut buf]).await?;
             if len == 0 {
-                return Ok(String::new());
+                return Ok(None);
             }
 
-            let (line, b) = match buf.iter().position(|&b| b == b'\n') {
-                Some(pos) => (pos, true),
-                None => (len, false),
-            };
-            let s = str::from_utf8(&buf[..line])?;
+            let s = str::from_utf8(&buf[..len])?;
             out.push_str(s);
-
-            if b {
-                let rest = buf.get(line + 1..len);
-                return Ok(match rest {
-                    Some(rest) => str::from_utf8(rest)?.to_string(),
-                    None => String::new(),
-                });
-            }
         }
     }
 }
 impl<T: Io + ?Sized> IoExt for T {}
 
 pub fn lines(io: Arc<dyn Io>) -> impl Stream<Item = Result<String, Error>> + Send {
-    stream::unfold((io, String::new()), |(io, mut buf)| async move {
+    stream::unfold((io, Some(String::new())), |(io, buf)| async move {
+        let mut buf = buf?;
         let next_buf = io.read_line(&mut buf).await;
-        match next_buf {
-            Ok(next) => (!buf.is_empty()).then_some((Ok(buf), (io, next))),
-            Err(err) => Some((Err(err), (io, String::new()))),
-        }
+        Some(match next_buf {
+            Ok(next) => (Ok(buf), (io, next)),
+            Err(err) => (Err(err), (io, None)),
+        })
     })
 }
 
