@@ -41,15 +41,15 @@ pub async fn deep_fork(virt: &Pin<Arsc<Virt>>) -> Result<Pin<Arsc<Virt>>, Error>
 pub async fn test_phys() {
     let p = Phys::new_anon(false);
 
-    let p1 = p.clone_as(true, 0, None);
-
     p.write_all_at(0, &[1, 2, 3, 4, 5]).await.unwrap();
+
+    let p1 = p.clone_as(true, 0, None);
 
     let mut buf = [0; 5];
     p1.read_exact_at(0, &mut buf).await.unwrap();
     assert_eq!(buf, [1, 2, 3, 4, 5]);
 
-    let p2 = p.clone_as(true, 0, None);
+    let p2 = p.clone_as(false, 0, None);
 
     p.write_all_at(PAGE_SIZE, &[6, 7, 8, 9, 10]).await.unwrap();
 
@@ -58,5 +58,5 @@ pub async fn test_phys() {
     p2.read_exact_at(PAGE_SIZE, &mut buf).await.unwrap();
     assert_eq!(buf, [6, 7, 8, 9, 10]);
     p1.read_exact_at(PAGE_SIZE, &mut buf).await.unwrap();
-    assert_eq!(buf, [6, 7, 8, 9, 10]);
+    assert_eq!(buf, [0; 5]);
 }

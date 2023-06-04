@@ -146,7 +146,11 @@ async fn handle_scause(scause: Scause, ts: &mut TaskState, tf: &mut TrapFrame) -
 
                 let res = ts.virt.commit(tf.stval.into(), attr).await;
                 if let Err(err) = res {
-                    log::error!("failing to commit pages at address {:#x}: {err}", tf.stval);
+                    log::error!(
+                        "task {} committing pages failed at address {:#x}: {err}",
+                        ts.task.tid,
+                        tf.stval
+                    );
                     return Continue(Some(SigInfo {
                         sig: Sig::SIGSEGV,
                         code: SigCode::KERNEL as _,

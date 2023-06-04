@@ -78,6 +78,7 @@ impl Frame {
 
     pub fn copy(&self, len: usize) -> Result<Frame, Error> {
         let mut f = Self::new()?;
+        log::trace!("Frame::copy: self = {:?}, len = {len}", self.base);
         f[..len].copy_from_slice(&self[..len]);
         Ok(f)
     }
@@ -173,7 +174,7 @@ impl FrameInfo {
                 }
                 Some(new_len) if !cow => {
                     let len = len.max(new_len);
-                    self.dirty |= write.is_some();
+                    self.dirty = true;
                     self.state = Some(FrameState::Shared(frame.clone(), len));
                     self.pin += pin as usize;
                     Ok((Commit::Shared(frame, len), false))
@@ -356,7 +357,7 @@ impl Phys {
                     parent: list.parent.clone(),
                     frames: mem::take(&mut list.frames),
                 }),
-                cow: false,
+                cow: self.cow || cow,
                 flusher: None,
             });
 
@@ -489,7 +490,6 @@ impl Phys {
                             // );
                             return match parent.commit_impl(parent_index, write, pin, cow).await {
                                 Ok(s @ Commit::Shared(..)) => Ok(s),
-                                Ok(s @ Commit::Unique(..)) if self.branch => Ok(s),
                                 Ok(Commit::Unique(fi)) => ksync::critical(|| {
                                     let mut list = self.list.lock();
                                     let ent = list.frames.entry(index).insert(fi);

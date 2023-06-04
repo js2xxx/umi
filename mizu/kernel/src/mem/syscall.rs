@@ -8,7 +8,7 @@ use ksc::{
     Error::{self, EAGAIN, EINVAL, EISDIR, ENOSYS, EPERM, ETIMEDOUT},
 };
 use ktime::{TimeOutExt, Timer};
-use rv39_paging::{Attr, LAddr, PAGE_MASK, PAGE_SHIFT, PAGE_SIZE};
+use rv39_paging::{Attr, LAddr, PAGE_MASK, PAGE_SHIFT};
 
 use crate::{
     mem::{futex::RobustListHead, user::FutexKey, In, InOut, Out, UserPtr},
@@ -24,11 +24,7 @@ pub async fn brk(ts: &mut TaskState, cx: UserCx<'_, fn(usize) -> Result<usize, E
     let addr = cx.args();
     let fut = async {
         if ts.brk == 0 {
-            let phys = Arc::new(Phys::new_anon(true));
-            ts.virt
-                .map(Some(BRK_START.into()), phys, 0, 1, Attr::USER_RW)
-                .await?;
-            ts.brk = BRK_START + PAGE_SIZE;
+            ts.brk = BRK_START;
         }
         if !(BRK_START..BRK_END).contains(&addr) {
             return Ok(ts.brk);
