@@ -188,7 +188,7 @@ pub trait IoExt: Io {
         if buffer.is_empty() {
             Ok(())
         } else {
-            log::error!("unexpected EOF");
+            log::trace!("unexpected EOF");
             Err(EIO)
         }
     }
@@ -205,7 +205,7 @@ pub trait IoExt: Io {
         if buffer.is_empty() {
             Ok(())
         } else {
-            log::error!("unexpected EOF");
+            log::trace!("unexpected EOF");
             Err(EIO)
         }
     }
@@ -225,7 +225,7 @@ pub trait IoExt: Io {
         if buffer.is_empty() {
             Ok(())
         } else {
-            log::error!("write zero");
+            log::trace!("write zero");
             Err(EIO)
         }
     }
@@ -242,7 +242,7 @@ pub trait IoExt: Io {
         if buffer.is_empty() {
             Ok(())
         } else {
-            log::error!("write zero");
+            log::trace!("write zero");
             Err(EIO)
         }
     }

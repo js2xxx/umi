@@ -103,7 +103,7 @@ impl Files {
                         .map(|(i, entry)| {
                             let fd_info = FdInfo {
                                 entry,
-                                close_on_exec: true,
+                                close_on_exec: false,
                                 saved_next_dirent: Default::default(),
                             };
                             (i as i32, fd_info)
@@ -250,6 +250,16 @@ impl Files {
                     limit: LIMIT_DEFAULT.into(),
                 })
             },
+        }
+    }
+
+    pub async fn close_on_exec(&self) {
+        let mut map = self.fds.map.write().await;
+        for (fd, fi) in map.drain_filter(|_, fi| fi.close_on_exec) {
+            ksync::critical(|| self.fds.id_alloc.lock().dealloc(fd));
+            if let Some(io) = fi.entry.to_io() {
+                let _ = io.flush().await;
+            }
         }
     }
 }

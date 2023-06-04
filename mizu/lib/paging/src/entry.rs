@@ -28,9 +28,10 @@ bitflags! {
         const KERNEL_RW = Self::KERNEL_R.bits() | Self::WRITABLE.bits();
         const KERNEL_RWX = Self::KERNEL_RW.bits() | Self::EXECUTABLE.bits();
 
-        const USER_R = Self::KERNEL_R.bits() | Self::USER_ACCESS.bits();
-        const USER_RW = Self::KERNEL_RW.bits() | Self::USER_ACCESS.bits();
-        const USER_RWX = Self::KERNEL_RWX.bits() | Self::USER_ACCESS.bits();
+        const USER_R = Self::VALID.bits() | Self::READABLE.bits() | Self::USER_ACCESS.bits();
+        const USER_RW = Self::USER_R.bits() | Self::WRITABLE.bits();
+        const USER_RX = Self::USER_R.bits() | Self::EXECUTABLE.bits();
+        const USER_RWX = Self::USER_RW.bits() | Self::EXECUTABLE.bits();
     }
 }
 

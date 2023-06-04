@@ -322,8 +322,7 @@ impl InitTask {
                 (loaded, args)
             }
         };
-        virt.commit(loaded.entry, Attr::READABLE | Attr::EXECUTABLE)
-            .await?;
+        virt.commit(loaded.entry, Attr::USER_RX).await?;
 
         let base = loaded.range.start;
 
@@ -395,6 +394,7 @@ impl InitTask {
         ts.task.shared_sig.swap(Default::default(), SeqCst);
         ts.brk = 0;
         ts.virt = self.virt;
+        ts.files.close_on_exec().await;
         ts.futex = Arsc::new(Default::default());
         *tf = self.tf;
     }
