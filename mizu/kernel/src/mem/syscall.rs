@@ -1,5 +1,5 @@
 use alloc::{boxed::Box, sync::Arc};
-use core::{mem, time::Duration};
+use core::mem;
 
 use co_trap::UserCx;
 use kmem::Phys;
@@ -12,7 +12,7 @@ use rv39_paging::{Attr, LAddr, PAGE_MASK, PAGE_SHIFT};
 
 use crate::{
     mem::{futex::RobustListHead, user::FutexKey, In, InOut, Out, UserPtr},
-    syscall::{ScRet, Ts},
+    syscall::{ffi::Ts, ScRet},
     task::TaskState,
 };
 
@@ -75,8 +75,7 @@ pub async fn futex(
                 if t.is_null() {
                     ts.futex.wait(key).await
                 } else {
-                    let t = t.read(ts.virt.as_ref()).await?;
-                    let timeout = Duration::from_secs(t.sec) + Duration::from_nanos(t.nsec);
+                    let timeout = t.read(ts.virt.as_ref()).await?.into();
                     let wait = ts.futex.wait(key);
                     wait.ok_or_timeout(Timer::after(timeout), || ETIMEDOUT)
                         .await?;

@@ -3,6 +3,7 @@ mod dev;
 mod pipe;
 mod serial;
 mod tmp;
+mod proc;
 
 use alloc::{collections::BTreeMap, sync::Arc};
 use core::{fmt, time::Duration};
@@ -120,6 +121,7 @@ pub async fn unlink(path: &Path) -> Result<(), Error> {
 pub async fn fs_init() {
     mount("dev/shm".into(), Arsc::new(tmp::TmpFs::new()));
     mount("dev".into(), Arsc::new(dev::DevFs));
+    mount("proc".into(), Arsc::new(proc::ProcFs));
     mount("tmp".into(), Arsc::new(tmp::TmpFs::new()));
     for block in blocks() {
         let block_shift = block.block_shift();

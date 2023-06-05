@@ -158,6 +158,10 @@ impl Arena {
     pub fn used_count(&self) -> usize {
         self.count.load(Relaxed)
     }
+
+    pub fn total_count(&self) -> usize {
+        (self.end.val() - self.base.val()) >> PAGE_SHIFT
+    }
 }
 
 unsafe impl PageAlloc for Arena {

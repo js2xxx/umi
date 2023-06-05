@@ -1,3 +1,5 @@
+pub mod ffi;
+
 use alloc::boxed::Box;
 use core::{ops::ControlFlow, pin::Pin, time::Duration};
 
@@ -8,10 +10,11 @@ use ksc::{
     Error::{self, EINVAL},
     Scn::{self, *},
 };
-use ktime::{Instant, InstantExt};
+use ktime::Instant;
 use spin::Lazy;
 use sygnal::SigInfo;
 
+use self::ffi::{Ts, Tv};
 use crate::{
     mem::{In, Out, UserPtr},
     task::{self, fd, signal, TaskState},
@@ -112,20 +115,6 @@ async fn dummy_ppoll(_: &mut TaskState, cx: UserCx<'_, fn() -> usize>) -> ScRet 
     ScRet::Continue(None)
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-#[repr(C, packed)]
-pub struct Tv {
-    pub sec: u64,
-    pub usec: u64,
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-#[repr(C, packed)]
-pub struct Ts {
-    pub sec: u64,
-    pub nsec: u64,
-}
-
 #[async_handler]
 async fn gettimeofday(
     ts: &mut TaskState,
@@ -133,9 +122,8 @@ async fn gettimeofday(
 ) -> ScRet {
     let (mut out, _) = cx.args();
 
-    let now = Instant::now();
-    let (sec, usec) = now.to_su();
-    let ret = out.write(ts.virt.as_ref(), Tv { sec, usec }).await;
+    let t = Instant::now().into();
+    let ret = out.write(ts.virt.as_ref(), t).await;
     cx.ret(ret);
 
     ScRet::Continue(None)
@@ -148,12 +136,7 @@ async fn clock_gettime(
 ) -> ScRet {
     let (_, mut out) = cx.args();
 
-    let now = Instant::now();
-    let (sec, usec) = now.to_su();
-    let t = Ts {
-        sec,
-        nsec: usec * 1000,
-    };
+    let t = Instant::now().into();
     let ret = out.write(ts.virt.as_ref(), t).await;
     cx.ret(ret);
 
@@ -170,12 +153,12 @@ async fn sleep(
         input: UserPtr<Ts, In>,
         mut output: UserPtr<Ts, Out>,
     ) -> Result<(), Error> {
-        let Ts { sec, nsec } = input.read(virt).await?;
-        if sec >= isize::MAX as _ || nsec >= 1_000_000_000 {
+        let ts = input.read(virt).await?;
+        if ts.sec >= isize::MAX as _ || ts.nsec >= 1_000_000_000 {
             return Err(EINVAL);
         }
 
-        let dur = Duration::from_secs(sec) + Duration::from_nanos(nsec);
+        let dur: Duration = ts.into();
         if dur.is_zero() {
             crate::task::yield_now().await
         } else {

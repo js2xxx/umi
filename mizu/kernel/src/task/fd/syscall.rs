@@ -14,14 +14,14 @@ use ksc::{
     async_handler,
     Error::{self, *},
 };
-use ktime::{Instant, InstantExt};
+use ktime::Instant;
 use rand_riscv::RandomState;
 use umifs::types::{FileType, Metadata, OpenOptions, Permissions, SeekFrom};
 
 use super::Files;
 use crate::{
     mem::{In, InOut, Out, UserBuffer, UserPtr},
-    syscall::{ScRet, Ts},
+    syscall::{ffi::Ts, ScRet},
     task::{
         fd::{FdInfo, SavedNextDirent},
         TaskState,
@@ -393,13 +393,7 @@ impl From<Metadata> for Kstat {
         }
 
         fn time(i: Option<Instant>) -> Ts {
-            i.map_or(Default::default(), |i| {
-                let (s, u) = i.to_su();
-                Ts {
-                    sec: s,
-                    nsec: u * 1000,
-                }
-            })
+            i.map_or(Default::default(), Into::into)
         }
 
         Kstat {
@@ -714,12 +708,12 @@ fssc!(
             let a = match a.nsec {
                 UTIME_NOW => Some(now),
                 UTIME_OMIT => None,
-                _ => Some(Instant::from_su(a.sec, a.nsec / 1000)),
+                _ => Some(a.into()),
             };
             let m = match m.nsec {
                 UTIME_NOW => Some(now),
                 UTIME_OMIT => None,
-                _ => Some(Instant::from_su(m.sec, m.nsec / 1000)),
+                _ => Some(m.into()),
             };
             (a, m)
         };

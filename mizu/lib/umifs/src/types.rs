@@ -41,15 +41,15 @@ bitflags! {
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
     pub struct Permissions: u32 {
-        const SELF_R = 1;
-        const SELF_W = 1 << 1;
-        const SELF_X = 1 << 2;
-        const GROUP_R = 1 << 3;
-        const GROUP_W = 1 << 4;
-        const GROUP_X = 1 << 5;
-        const OTHERS_R = 1 << 6;
-        const OTHERS_W = 1 << 7;
-        const OTHERS_X = 1 << 8;
+        const SELF_R =   1 << 8;
+        const SELF_W =   1 << 7;
+        const SELF_X =   1 << 6;
+        const GROUP_R =  1 << 5;
+        const GROUP_W =  1 << 4;
+        const GROUP_X =  1 << 3;
+        const OTHERS_R = 1 << 2;
+        const OTHERS_W = 1 << 1;
+        const OTHERS_X = 1 << 0;
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

@@ -21,7 +21,7 @@ use sygnal::{Sig, SigCode, SigFields, SigInfo, SigSet, Signals};
 use crate::{
     executor,
     mem::{deep_fork, In, Out, UserPtr, USER_RANGE},
-    syscall::{ScRet, Tv},
+    syscall::{ffi::Tv, ScRet},
     task::{
         cmd,
         fd::MAX_PATH_LEN,
