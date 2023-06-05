@@ -19,7 +19,7 @@ jobs:
           components: clippy
 
       - name: Check clippy
-        run: cargo clippy --target riscv64imac-unknown-none-elf
+        run: cargo clippy --target riscv64gc-unknown-none-elf
 
   format:
     runs-on: ubuntu-latest

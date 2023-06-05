@@ -101,6 +101,7 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         .map(GETPGID, dummy_zero)
         .map(GETUID, dummy_zero)
         .map(GETGID, dummy_zero)
+        .map(SYSLOG, dummy_zero)
 });
 
 #[async_handler]

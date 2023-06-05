@@ -4,6 +4,8 @@ use core::{
     time::Duration,
 };
 
+use crate::InstantExt;
+
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Instant(u128);
 
@@ -94,8 +96,8 @@ impl Sub for Instant {
 
 impl fmt::Debug for Instant {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let display = self.0 as f64 / 1_000_000.0;
-        write!(f, "{display:.6}")
+        let (secs, usecs) = self.to_su();
+        write!(f, "{secs}.{usecs:06}")
     }
 }
 

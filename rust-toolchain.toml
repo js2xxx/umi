@@ -2,4 +2,4 @@
 channel = "nightly-2023-03-29"
 components = ["rustfmt", "rustc", "rust-std", "rust-src", "cargo", "clippy", "llvm-tools"]
 profile = "default"
-targets = ["riscv64imac-unknown-none-elf"]
+targets = ["riscv64gc-unknown-none-elf"]

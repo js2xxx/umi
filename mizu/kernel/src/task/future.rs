@@ -18,18 +18,27 @@ use rv39_paging::Attr;
 use sygnal::{Sig, SigCode, SigInfo};
 
 use super::TaskState;
-use crate::{syscall::ScRet, task::signal::SIGRETURN_GUARD};
+use crate::{
+    syscall::ScRet,
+    task::signal::SIGRETURN_GUARD,
+    trap::{Fp, FP},
+};
 
 #[pin_project]
 pub struct TaskFut<F> {
     virt: Pin<Arsc<Virt>>,
+    fp: Fp,
     #[pin]
     fut: F,
 }
 
 impl<F> TaskFut<F> {
     pub fn new(virt: Pin<Arsc<Virt>>, fut: F) -> Self {
-        TaskFut { virt, fut }
+        TaskFut {
+            virt,
+            fp: FP.try_with(Fp::copy).unwrap_or_default(),
+            fut,
+        }
     }
 }
 
@@ -41,7 +50,12 @@ impl<F: Future> Future for TaskFut<F> {
         if let Some(clear) = clear {
             crate::executor().spawn(clear).detach();
         }
-        self.project().fut.poll(cx)
+        let this = self.project();
+        let ret = FP.set(this.fp, || this.fut.poll(cx));
+        if ret.is_pending() {
+            this.fp.yield_now();
+        }
+        ret
     }
 }
 
@@ -67,7 +81,7 @@ pub async fn user_loop(mut ts: TaskState, mut tf: TrapFrame) {
             ts.task.tid,
             tf.sepc
         );
-        let (scause, fr) = co_trap::yield_to_user(&mut tf);
+        let (scause, fr) = crate::trap::yield_to_user(&mut tf);
 
         let usr = time::read64();
         ts.task.times.update_user(usr - stat_time);

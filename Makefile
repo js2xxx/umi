@@ -1,4 +1,4 @@
-export TARGET := riscv64imac-unknown-none-elf
+export TARGET := riscv64gc-unknown-none-elf
 export MODE   ?= release
 export BOARD  ?= qemu-virt
 

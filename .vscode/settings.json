@@ -1,7 +1,7 @@
 {
-    "rust-analyzer.cargo.target": "riscv64imac-unknown-none-elf",
+    "rust-analyzer.cargo.target": "riscv64gc-unknown-none-elf",
     "rust-analyzer.check.targets": [
-        "riscv64imac-unknown-none-elf",
+        "riscv64gc-unknown-none-elf",
         "x86_64-unknown-linux-gnu",
     ],
     "rust-analyzer.check.allTargets": false,
