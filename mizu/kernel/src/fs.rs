@@ -1,11 +1,11 @@
 mod cache;
 mod dev;
 mod pipe;
+mod proc;
 mod serial;
 mod tmp;
-mod proc;
 
-use alloc::{collections::BTreeMap, sync::Arc};
+use alloc::{borrow::Cow, collections::BTreeMap, format, sync::Arc};
 use core::{fmt, time::Duration};
 
 use afat32::NullTimeProvider;
@@ -27,7 +27,9 @@ use crate::{dev::blocks, executor};
 
 type FsCollection = BTreeMap<PathBuf, FsHandle>;
 
+#[derive(Clone)]
 struct FsHandle {
+    dev: Cow<'static, str>,
     fs: Arsc<dyn FileSystem>,
     unmount: Sender<ArrayQueue<()>>,
 }
@@ -40,7 +42,7 @@ impl fmt::Debug for FsHandle {
 
 static FS: RwLock<FsCollection> = RwLock::new(BTreeMap::new());
 
-pub fn mount(path: PathBuf, fs: Arsc<dyn FileSystem>) {
+pub fn mount(path: PathBuf, dev: Cow<'static, str>, fs: Arsc<dyn FileSystem>) {
     let fs2 = fs.clone();
     let (tx, rx) = ksync::channel::bounded(1);
     let task = async move {
@@ -54,7 +56,11 @@ pub fn mount(path: PathBuf, fs: Arsc<dyn FileSystem>) {
         }
     };
     executor().spawn(task).detach();
-    let handle = FsHandle { fs, unmount: tx };
+    let handle = FsHandle {
+        dev,
+        fs,
+        unmount: tx,
+    };
 
     let old = ksync::critical(|| FS.write().insert(path, handle));
     if let Some(old) = old {
@@ -119,17 +125,25 @@ pub async fn unlink(path: &Path) -> Result<(), Error> {
 }
 
 pub async fn fs_init() {
-    mount("dev/shm".into(), Arsc::new(tmp::TmpFs::new()));
-    mount("dev".into(), Arsc::new(dev::DevFs));
-    mount("proc".into(), Arsc::new(proc::ProcFs));
-    mount("tmp".into(), Arsc::new(tmp::TmpFs::new()));
-    for block in blocks() {
+    mount(
+        "dev/shm".into(),
+        "tmpfs".into(),
+        Arsc::new(tmp::TmpFs::new()),
+    );
+    mount("dev".into(), "devfs".into(), Arsc::new(dev::DevFs));
+    mount("proc".into(), "procfs".into(), Arsc::new(proc::ProcFs));
+    mount("tmp".into(), "tmpfs".into(), Arsc::new(tmp::TmpFs::new()));
+    for (index, block) in blocks().into_iter().enumerate() {
         let block_shift = block.block_shift();
         let phys = crate::mem::new_phys(block.to_io().unwrap(), false);
         if let Ok(fs) =
             afat32::FatFileSystem::new(Arc::new(phys), block_shift, NullTimeProvider).await
         {
-            mount("".into(), cache::CachedFs::new(fs).await.unwrap());
+            mount(
+                "".into(),
+                format!("/dev/block/{index}").into(),
+                cache::CachedFs::new(fs).await.unwrap(),
+            );
             break;
         }
     }

@@ -1,7 +1,7 @@
 #![cfg_attr(not(test), no_std)]
 
 use alloc::{boxed::Box, string::String, sync::Arc};
-use core::{any::Any, fmt, mem, slice, str};
+use core::{any::Any, mem, slice, str};
 
 use arsc_rs::Arsc;
 use async_trait::async_trait;
@@ -100,28 +100,6 @@ pub fn advance_slices(bufs: &mut &mut [impl IoSliceExt], n: usize) {
         );
     } else {
         bufs[0].advance(n - accumulated_len)
-    }
-}
-
-pub struct FormatWriter<'a, 's, 'u>(pub &'a mut &'s mut [IoSliceMut<'u>], pub usize);
-
-impl fmt::Write for FormatWriter<'_, '_, '_> {
-    fn write_str(&mut self, s: &str) -> fmt::Result {
-        let mut bytes = s.as_bytes();
-        loop {
-            if bytes.is_empty() {
-                break;
-            }
-            let Some(first) = self.0.first_mut() else { break };
-
-            let len = bytes.len().min(first.len());
-            first[..len].copy_from_slice(&bytes[..len]);
-
-            bytes = &bytes[len..];
-            self.1 += len;
-            advance_slices(&mut *self.0, len);
-        }
-        Ok(())
     }
 }
 

@@ -908,7 +908,7 @@ fssc!(
             let fatfs =
                 afat32::FatFileSystem::new(io, metadata.block_size.ilog2(), NullTimeProvider)
                     .await?;
-            crate::fs::mount(dst.to_path_buf(), fatfs);
+            crate::fs::mount(dst.to_path_buf(), "<UNKNOWN>".into(), fatfs);
         } else {
             return Err(ENODEV);
         }
