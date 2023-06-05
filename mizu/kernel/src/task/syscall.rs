@@ -21,7 +21,10 @@ use sygnal::{Sig, SigCode, SigFields, SigInfo, SigSet, Signals};
 use crate::{
     executor,
     mem::{deep_fork, In, Out, UserPtr, USER_RANGE},
-    syscall::{ffi::Tv, ScRet},
+    syscall::{
+        ffi::{Itv, Tv},
+        ScRet,
+    },
     task::{
         cmd,
         fd::MAX_PATH_LEN,
@@ -67,6 +70,39 @@ pub async fn times(
     cx.ret(out.write_slice(ts.virt.as_ref(), &data, false).await);
     Continue(None)
 }
+
+#[async_handler]
+pub async fn setitimer(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(usize, UserPtr<Itv, In>, UserPtr<Itv, Out>) -> Result<(), Error>>,
+) -> ScRet {
+    let (index, new, mut old_ptr) = cx.args();
+    let fut = async {
+        let new = if new.is_null() {
+            None
+        } else {
+            let Itv {
+                interval,
+                next_diff,
+            } = new.read(ts.virt.as_ref()).await?;
+            Some((interval.into(), next_diff.into()))
+        };
+        let counter = ts.counters.get_mut(index).ok_or(EINVAL)?;
+        let (interval, next_diff) = counter.set(&ts.task.times, new);
+        if !old_ptr.is_null() {
+            let data = Itv {
+                interval: interval.into(),
+                next_diff: next_diff.into(),
+            };
+            old_ptr.write(ts.virt.as_ref(), data).await?;
+        }
+
+        Ok(())
+    };
+    cx.ret(fut.await);
+    Continue(None)
+}
+
 const RLIMIT_CPU: u32 = 0; // CPU time in sec
 const RLIMIT_DATA: u32 = 2; // max data size
 const RLIMIT_STACK: u32 = 3; // max stack size
@@ -319,6 +355,7 @@ async fn clone_task(
         } else {
             Arsc::new((new_tid, spin::RwLock::new(vec![task.clone()])))
         },
+        counters: super::time::counters(),
         sig_mask: SigSet::EMPTY,
         sig_stack: None,
         brk: ts.brk,

@@ -40,6 +40,7 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         .map(GETPID, task::pid)
         .map(GETPPID, task::ppid)
         .map(TIMES, task::times)
+        .map(SETITIMER, task::setitimer)
         .map(PRLIMIT64, task::prlimit)
         .map(GETRUSAGE, task::getrusage)
         .map(SET_TID_ADDRESS, task::set_tid_addr)

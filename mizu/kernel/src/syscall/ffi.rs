@@ -27,6 +27,13 @@ impl From<Duration> for Tv {
         }
     }
 }
+
+impl From<Tv> for Instant {
+    fn from(value: Tv) -> Self {
+        Instant::from_su(value.sec, value.usec)
+    }
+}
+
 impl From<Tv> for Duration {
     fn from(value: Tv) -> Self {
         Duration::from_secs(value.sec) + Duration::from_micros(value.usec)
@@ -69,4 +76,11 @@ impl From<Ts> for Duration {
     fn from(value: Ts) -> Self {
         Duration::from_secs(value.sec) + Duration::from_nanos(value.nsec)
     }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+#[repr(C, packed)]
+pub struct Itv {
+    pub interval: Tv,
+    pub next_diff: Tv,
 }

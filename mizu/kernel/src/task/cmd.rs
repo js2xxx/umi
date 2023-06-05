@@ -371,6 +371,7 @@ impl InitTask {
         let ts = TaskState {
             task: task.clone(),
             tgroup: Arsc::new((tid, spin::RwLock::new(vec![task.clone()]))),
+            counters: super::time::counters(),
             sig_mask: SigSet::EMPTY,
             sig_stack: None,
             brk: 0,

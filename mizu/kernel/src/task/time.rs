@@ -7,6 +7,9 @@ use core::{
     time::Duration,
 };
 
+use ktime::{Instant, InstantExt};
+use sygnal::{Sig, SigCode, SigFields, SigInfo};
+
 const USER: usize = 0;
 const SYSTEM: usize = 1;
 
@@ -62,16 +65,17 @@ impl Times {
         ]
     }
 
-    pub fn get_process(&self) -> [Duration; 2] {
+    fn get_process_raw(&self) -> [u64; 2] {
         let mut storage = None;
         let times = match self.tgroup_submitter.upgrade() {
             Some(tg) => &*storage.insert(tg),
             _ => self,
         };
-        times
-            .process
-            .each_ref()
-            .map(|s| config::to_duration(s.load(Relaxed)))
+        times.process.each_ref().map(|s| s.load(Relaxed))
+    }
+
+    pub fn get_process(&self) -> [Duration; 2] {
+        self.get_process_raw().map(config::to_duration)
     }
 
     pub fn get_thread(&self) -> [Duration; 2] {
@@ -91,4 +95,85 @@ impl Times {
             .each_ref()
             .map(|s| config::to_duration(s.load(Relaxed)))
     }
+}
+
+#[derive(Debug)]
+pub struct Counter {
+    interval: Duration,
+    next_tick: Instant,
+    now: fn(&Times) -> Instant,
+    sig: Sig,
+}
+
+impl Counter {
+    pub fn new_real() -> Self {
+        Counter {
+            interval: Duration::ZERO,
+            next_tick: Instant::now(),
+            now: |_| Instant::now(),
+            sig: Sig::SIGALRM,
+        }
+    }
+
+    pub fn new_virtual() -> Self {
+        Counter {
+            interval: Duration::ZERO,
+            next_tick: Instant::from_su(0, 0),
+            now: |times| {
+                let [user, _] = times.get_process_raw();
+                unsafe { Instant::from_raw(user) }
+            },
+            sig: Sig::SIGVTALRM,
+        }
+    }
+
+    pub fn new_profile() -> Self {
+        Counter {
+            interval: Duration::ZERO,
+            next_tick: Instant::from_su(0, 0),
+            now: |times| {
+                let [user, system] = times.get_process_raw();
+                unsafe { Instant::from_raw(user + system) }
+            },
+            sig: Sig::SIGPROF,
+        }
+    }
+
+    pub fn update(&mut self, times: &Times) -> Option<SigInfo> {
+        let now = (self.now)(times);
+        if self.interval.is_zero() {
+            return None;
+        }
+        if self.next_tick >= now {
+            self.next_tick = now + self.interval;
+            return Some(SigInfo {
+                sig: self.sig,
+                code: SigCode::TIMER as _,
+                fields: SigFields::None,
+            });
+        }
+        None
+    }
+
+    pub fn set(
+        &mut self,
+        times: &Times,
+        set: Option<(Duration, Duration)>,
+    ) -> (Duration, Duration) {
+        let now = (self.now)(times);
+        let old = (self.interval, self.next_tick - now);
+        if let Some((interval, next_diff)) = set {
+            self.interval = interval;
+            self.next_tick = now + next_diff;
+        }
+        old
+    }
+}
+
+pub fn counters() -> [Counter; 3] {
+    [
+        Counter::new_real(),
+        Counter::new_virtual(),
+        Counter::new_profile(),
+    ]
 }

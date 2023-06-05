@@ -107,6 +107,12 @@ pub async fn user_loop(mut ts: TaskState, mut tf: TrapFrame) {
             yield_now().await;
             log::trace!("task {} yielded", ts.task.tid);
         }
+
+        for c in ts.counters.iter_mut() {
+            if let Some(si) = c.update(&ts.task.times) {
+                ts.task.sig.push(si)
+            }
+        }
     };
     ts.cleanup(code, sig).await
 }
