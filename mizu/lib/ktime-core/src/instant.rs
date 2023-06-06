@@ -20,14 +20,6 @@ impl Instant {
         riscv::register::time::read64()
     }
 
-    /// # Safety
-    ///
-    /// The `raw` must be a valid value that can be transformed into an instant.
-    pub unsafe fn from_raw(raw: u64) -> Self {
-        let micros = config::TIME_FREQ_M.numer() * raw as u128 / config::TIME_FREQ_M.denom();
-        Instant(micros)
-    }
-
     #[must_use]
     pub fn checked_duration_since(&self, earlier: Self) -> Option<Duration> {
         let micros = self.0.checked_sub(earlier.0)?;
@@ -108,5 +100,10 @@ impl super::InstantExt for Instant {
 
     fn from_su(secs: u64, micros: u64) -> Self {
         Instant(secs as u128 * 1_000_000 + micros as u128)
+    }
+
+    unsafe fn from_raw(raw: u64) -> Self {
+        let micros = config::TIME_FREQ_M.numer() * raw as u128 / config::TIME_FREQ_M.denom();
+        Instant(micros)
     }
 }

@@ -140,10 +140,10 @@ impl Counter {
     }
 
     pub fn update(&mut self, times: &Times) -> Option<SigInfo> {
-        let now = (self.now)(times);
         if self.interval.is_zero() {
             return None;
         }
+        let now = (self.now)(times);
         if self.next_tick >= now {
             self.next_tick = now + self.interval;
             return Some(SigInfo {

@@ -25,5 +25,8 @@ pub unsafe fn init<T: Copy>(start: &mut T, end: &mut T) {
 }
 
 pub fn stat() -> Stat {
-    GLOBAL_ALLOC.stat()
+    #[cfg(not(feature = "test"))]
+    return GLOBAL_ALLOC.stat();
+    #[cfg(feature = "test")]
+    Default::default()
 }

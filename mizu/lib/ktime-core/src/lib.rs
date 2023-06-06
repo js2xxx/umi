@@ -14,6 +14,11 @@ pub trait InstantExt {
     fn to_su(&self) -> (u64, u64);
 
     fn from_su(secs: u64, micros: u64) -> Self;
+
+    /// # Safety
+    ///
+    /// The `raw` must be a valid value that can be transformed into an instant.
+    unsafe fn from_raw(raw: u64) -> Self;
 }
 
 #[cfg(feature = "test")]
@@ -24,5 +29,9 @@ impl InstantExt for Instant {
 
     fn from_su(secs: u64, micros: u64) -> Self {
         unimplemented!("{secs} * 1000000 + {micros}")
+    }
+
+    unsafe fn from_raw(raw: u64) -> Self {
+        unimplemented!("Instant::from_raw({raw})")
     }
 }

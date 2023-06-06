@@ -8,6 +8,7 @@ use spin::Mutex;
 
 pub struct Allocator(Mutex<Heap<30>>);
 
+#[derive(Debug, Default)]
 pub struct Stat {
     pub total: usize,
     pub used: usize,
