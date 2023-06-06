@@ -8,9 +8,25 @@ use spin::Mutex;
 
 pub struct Allocator(Mutex<Heap<30>>);
 
+#[derive(Debug, Default)]
+pub struct Stat {
+    pub total: usize,
+    pub used: usize,
+}
+
 impl Allocator {
     pub const fn new() -> Self {
         Allocator(Mutex::new(Heap::new()))
+    }
+
+    pub fn stat(&self) -> Stat {
+        ksync_core::critical(|| {
+            let heap = self.0.lock();
+            Stat {
+                total: heap.stats_total_bytes(),
+                used: heap.stats_alloc_actual(),
+            }
+        })
     }
 
     /// # Safety

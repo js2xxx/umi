@@ -276,7 +276,7 @@ impl InitTask {
             sepc: entry.val(),
             sstatus: {
                 let sstatus: usize = unsafe { mem::transmute(sstatus::read()) };
-                (sstatus | (1 << 5) | (1 << 18)) & !(1 << 8)
+                (sstatus | (1 << 5) | (1 << 18) | (1 << 13)) & !(1 << 8)
             },
             ..Default::default()
         }
@@ -322,8 +322,7 @@ impl InitTask {
                 (loaded, args)
             }
         };
-        virt.commit(loaded.entry, Attr::READABLE | Attr::EXECUTABLE)
-            .await?;
+        virt.commit(loaded.entry, Attr::USER_RX).await?;
 
         let base = loaded.range.start;
 
@@ -372,6 +371,7 @@ impl InitTask {
         let ts = TaskState {
             task: task.clone(),
             tgroup: Arsc::new((tid, spin::RwLock::new(vec![task.clone()]))),
+            counters: super::time::counters(),
             sig_mask: SigSet::EMPTY,
             sig_stack: None,
             brk: 0,
@@ -392,12 +392,14 @@ impl InitTask {
 
     pub async fn reset(self, ts: &mut TaskState, tf: &mut TrapFrame) {
         ksync::critical(|| *ts.task.executable.lock() = self.executable);
+        crate::trap::FP.with(|fp| fp.mark_reset());
         ts.task.shared_sig.swap(Default::default(), SeqCst);
         ts.brk = 0;
         ts.virt = self.virt;
+        ts.files.close_on_exec().await;
         ts.futex = Arsc::new(Default::default());
-        ts.files.append_afterlife(&self.files).await;
         *tf = self.tf;
+        super::yield_now().await
     }
 }
 

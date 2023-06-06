@@ -37,7 +37,7 @@ impl FileSystem for TmpFs {
         FsStat {
             ty: "tmpfs",
             block_size: PAGE_SIZE,
-            block_count: 0xdeadbeef,
+            block_count: 0,
             block_free: 0,
             file_count: ksync::critical(|| self.0 .0.lock().len()),
         }

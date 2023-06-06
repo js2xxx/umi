@@ -1,11 +1,11 @@
-use alloc::sync::Arc;
+use alloc::{string::ToString, sync::Arc};
 use core::pin::pin;
 
 use futures_util::{stream, StreamExt};
 use sygnal::Sig;
 use umifs::{path::Path, types::OpenOptions};
 
-use crate::task::Command;
+use crate::{println, task::Command};
 
 #[allow(dead_code)]
 pub async fn libc() {
@@ -44,16 +44,23 @@ pub async fn libc() {
     log::warn!("Goodbye!");
 }
 
-async fn run_busybox(script: &str) -> (i32, Option<Sig>) {
-    let task = Command::new("/busybox")
-        .open("busybox")
-        .await
-        .unwrap()
-        .args(["busybox", "sh", script])
-        .envs(["PATH=/", "LD_LIBRARY_PATH=/"])
-        .spawn()
-        .await
-        .unwrap();
+async fn run_busybox(script: Option<&str>) -> (i32, Option<Sig>) {
+    let mut cmd = Command::new("/busybox");
+    cmd.open("busybox").await.unwrap();
+    match script {
+        Some(script) => cmd.args(["busybox", "sh", script]),
+        None => cmd.args(["busybox", "sh"]),
+    };
+    let envs = [
+        "PATH=/",
+        "USER=root",
+        "_=busybox",
+        "SHELL=/busybox",
+        "LD_LIBRARY_PATH=/",
+        "LOGNAME=root",
+        "HOME=/",
+    ];
+    let task = cmd.envs(envs).spawn().await.unwrap();
 
     task.wait().await
 }
@@ -64,30 +71,80 @@ async fn print_file(path: impl AsRef<Path>) {
         .unwrap();
     let mut lines = core::pin::pin!(umio::lines(file.to_io().unwrap()));
     while let Some(result) = lines.next().await {
-        log::info!("{}", result.unwrap());
+        println!("{}", result.unwrap());
     }
 }
 
 #[allow(dead_code)]
 pub async fn busybox() {
-    let exit = run_busybox("busybox_testcode.sh").await;
+    let oo = OpenOptions::RDONLY;
+    let perm = Default::default();
+
+    let (txt, _) = crate::fs::open("busybox_cmd.txt".as_ref(), oo, perm)
+        .await
+        .unwrap();
+    let txt = txt.to_io().unwrap();
+    let stream = umio::lines(txt).map(|s| s.unwrap());
+    let mut cmd = pin!(stream);
+
+    let (runner, _) = crate::fs::open("busybox".as_ref(), oo, perm).await.unwrap();
+    let runner = Arc::new(crate::mem::new_phys(runner.to_io().unwrap(), true));
+
+    log::warn!("Start testing");
+    while let Some(cmd) = cmd.next().await {
+        let cmd = cmd.trim();
+        if cmd.is_empty() {
+            continue;
+        }
+        let cmd = "/busybox ".to_string() + cmd;
+        println!(">>> Executing CMD {cmd:?}");
+
+        let task = Command::new("/busybox")
+            .image(runner.clone())
+            .args(["busybox", "sh", "-c", &cmd])
+            .spawn()
+            .await
+            .unwrap();
+
+        let code = task.wait().await;
+        println!(">>> CMD {cmd:?} returned with {code:?}\n");
+    }
+
+    log::warn!("Goodbye!");
+}
+
+#[allow(dead_code)]
+pub async fn busybox_debug(print_result: bool) {
+    let script = if print_result {
+        "busybox_testcode_debug.sh"
+    } else {
+        "busybox_testcode.sh"
+    };
+    let exit = run_busybox(Some(script)).await;
     log::info!("Busybox test returned with {exit:?}");
 
-    log::info!("result.txt:");
-    print_file("result.txt").await;
+    if print_result {
+        println!("result.txt:");
+        print_file("result.txt").await;
+    }
 
-    log::info!("test.txt:");
-    print_file("test.txt").await;
+    log::warn!("Goodbye!");
 }
 
 #[allow(dead_code)]
 pub async fn lua() {
-    let exit = run_busybox("lua_testcode.sh").await;
+    let exit = run_busybox(Some("lua_testcode.sh")).await;
     log::info!("Lua test returned with {exit:?}");
 }
 
 #[allow(dead_code)]
 pub async fn lmbench() {
-    let exit = run_busybox("lmbench_testcode.sh").await;
+    let exit = run_busybox(Some("lmbench_testcode.sh")).await;
     log::info!("LMBench test returned with {exit:?}");
+}
+
+#[allow(dead_code)]
+pub async fn busybox_interact() {
+    let exit = run_busybox(None).await;
+    println!("<<< {:?}", exit);
 }

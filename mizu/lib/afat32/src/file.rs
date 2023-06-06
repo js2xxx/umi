@@ -47,7 +47,7 @@ impl<T: TimeProvider> FatFile<T> {
             .and_then(|e| e.inner().size().map(|s| s as usize))
             .unwrap_or(clusters.len() << cluster_shift);
 
-        // log::trace!("FatFile::new: clusters = {clusters:#?}");
+        // log::trace!("FatFile::new: cluster count = {}", len);
 
         Ok(FatFile {
             fs,
@@ -148,6 +148,7 @@ impl<T: TimeProvider> FatFile<T> {
     }
 
     async fn update_write(&self, offset: u32) {
+        // log::trace!("FAT32 file update write: offset = {offset:?}");
         self.len.fetch_max(offset as _, SeqCst);
         if let Some(ref entry) = self.entry {
             let now = self.fs.time_provider.get_current_date_time();
@@ -201,7 +202,7 @@ impl<T: TimeProvider> Io for FatFile<T> {
     async fn read_at(&self, offset: usize, mut buffer: &mut [IoSliceMut]) -> Result<usize, Error> {
         // log::trace!(
         //     "FatFile::read_at {offset:#x}, buffer len = {}",
-        //     ioslice_len(&buffer)
+        //     umifs::types::ioslice_len(&buffer)
         // );
 
         let cluster_shift = self.cluster_shift;
@@ -262,7 +263,7 @@ impl<T: TimeProvider> Io for FatFile<T> {
     ) -> Result<usize, Error> {
         // log::trace!(
         //     "FatFile::write_at {offset:#x}, buffer len = {}",
-        //     ioslice_len(&buffer)
+        //     umifs::types::ioslice_len(&buffer)
         // );
 
         let cluster_shift = self.cluster_shift;

@@ -43,16 +43,14 @@ impl Entry for Null {
         options: OpenOptions,
         perm: Permissions,
     ) -> Result<(Arc<dyn Entry>, bool), Error> {
-        if !path.as_str().is_empty() || options.contains(OpenOptions::DIRECTORY) {
-            return Err(ENOTDIR);
-        }
-        if options.contains(OpenOptions::CREAT) {
-            return Err(EEXIST);
-        }
-        if !Permissions::all_same(true, true, false).contains(perm) {
-            return Err(EPERM);
-        }
-        Ok((self, false))
+        open_file(
+            self,
+            path,
+            options,
+            perm,
+            Permissions::all_same(true, true, false),
+        )
+        .await
     }
 
     async fn metadata(&self) -> Metadata {
@@ -106,16 +104,14 @@ impl Entry for Zero {
         options: OpenOptions,
         perm: Permissions,
     ) -> Result<(Arc<dyn Entry>, bool), Error> {
-        if !path.as_str().is_empty() || options.contains(OpenOptions::DIRECTORY) {
-            return Err(ENOTDIR);
-        }
-        if options.contains(OpenOptions::CREAT) {
-            return Err(EEXIST);
-        }
-        if !Permissions::all_same(true, true, false).contains(perm) {
-            return Err(EPERM);
-        }
-        Ok((self, false))
+        open_file(
+            self,
+            path,
+            options,
+            perm,
+            Permissions::all_same(true, true, false),
+        )
+        .await
     }
 
     async fn metadata(&self) -> Metadata {
@@ -131,4 +127,23 @@ impl Entry for Zero {
             last_created: None,
         }
     }
+}
+
+pub async fn open_file<E: Entry>(
+    this: Arc<E>,
+    path: &Path,
+    options: OpenOptions,
+    perm: Permissions,
+    self_perm: Permissions,
+) -> Result<(Arc<dyn Entry>, bool), Error> {
+    if !path.as_str().is_empty() || options.contains(OpenOptions::DIRECTORY) {
+        return Err(ENOTDIR);
+    }
+    if options.contains(OpenOptions::CREAT) {
+        return Err(EEXIST);
+    }
+    if !self_perm.contains(perm) {
+        return Err(EPERM);
+    }
+    Ok((this, false))
 }

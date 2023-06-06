@@ -16,7 +16,7 @@ use spin::Mutex;
 use umifs::{
     path::{Path, PathBuf},
     traits::Entry,
-    types::{OpenOptions, Permissions},
+    types::{DirEntry, OpenOptions, Permissions},
 };
 
 pub use self::syscall::*;
@@ -24,10 +24,39 @@ pub use self::syscall::*;
 pub const MAX_FDS: usize = 65536;
 const CWD: i32 = -100;
 
-#[derive(Clone)]
 pub struct FdInfo {
     pub entry: Arc<dyn Entry>,
     pub close_on_exec: bool,
+    pub saved_next_dirent: spin::Mutex<SavedNextDirent>,
+}
+
+impl Clone for FdInfo {
+    fn clone(&self) -> Self {
+        FdInfo {
+            entry: self.entry.clone(),
+            close_on_exec: self.close_on_exec,
+            saved_next_dirent: ksync::critical(|| self.saved_next_dirent.lock().clone()).into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum SavedNextDirent {
+    Start,
+    Next(DirEntry),
+    End,
+}
+
+impl Default for SavedNextDirent {
+    fn default() -> Self {
+        Self::Start
+    }
+}
+
+impl SavedNextDirent {
+    pub fn take(&mut self) -> SavedNextDirent {
+        mem::replace(self, Self::End)
+    }
 }
 
 #[derive(Clone)]
@@ -74,7 +103,8 @@ impl Files {
                         .map(|(i, entry)| {
                             let fd_info = FdInfo {
                                 entry,
-                                close_on_exec: true,
+                                close_on_exec: false,
+                                saved_next_dirent: Default::default(),
                             };
                             (i as i32, fd_info)
                         })
@@ -102,6 +132,7 @@ impl Files {
         let fi = FdInfo {
             entry,
             close_on_exec,
+            saved_next_dirent: Default::default(),
         };
         if let Some(old) = self.fds.map.write().await.insert(fd, fi) {
             if let Some(io) = old.entry.to_io() {
@@ -122,6 +153,7 @@ impl Files {
         let fi = FdInfo {
             entry,
             close_on_exec,
+            saved_next_dirent: Default::default(),
         };
         let mut map = self.fds.map.write().await;
         if map.len() >= self.fds.limit.load(SeqCst) {
@@ -144,18 +176,28 @@ impl Files {
                 Ok(FdInfo {
                     entry,
                     close_on_exec: false,
+                    saved_next_dirent: Default::default(),
                 })
             }
             _ => (self.fds.map.read().await).get(&fd).cloned().ok_or(EBADF),
         }
     }
 
-    pub async fn set_fi(&self, fd: i32, close_on_exec: bool) -> Result<(), Error> {
+    pub async fn set_fi(
+        &self,
+        fd: i32,
+        close_on_exec: bool,
+        saved_next_dirent: Option<SavedNextDirent>,
+    ) -> Result<(), Error> {
         if fd == CWD {
             return Ok(());
         }
         let mut map = self.fds.map.write().await;
-        map.get_mut(&fd).ok_or(EBADF)?.close_on_exec = close_on_exec;
+        let fd_info = &mut map.get_mut(&fd).ok_or(EBADF)?;
+        fd_info.close_on_exec = close_on_exec;
+        if let Some(saved) = saved_next_dirent {
+            ksync::critical(|| *fd_info.saved_next_dirent.lock() = saved);
+        }
         Ok(())
     }
 
@@ -211,11 +253,14 @@ impl Files {
         }
     }
 
-    pub async fn append_afterlife(&self, afterlife: &Self) {
-        let afterlife = mem::take(&mut *afterlife.fds.map.write().await);
+    pub async fn close_on_exec(&self) {
         let mut map = self.fds.map.write().await;
-        map.retain(|_, fi| !fi.close_on_exec);
-        map.extend(afterlife.into_iter());
+        for (fd, fi) in map.drain_filter(|_, fi| fi.close_on_exec) {
+            ksync::critical(|| self.fds.id_alloc.lock().dealloc(fd));
+            if let Some(io) = fi.entry.to_io() {
+                let _ = io.flush().await;
+            }
+        }
     }
 }
 

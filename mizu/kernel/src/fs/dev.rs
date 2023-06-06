@@ -30,7 +30,7 @@ impl FileSystem for DevFs {
         FsStat {
             ty: "devfs",
             block_size: PAGE_SIZE,
-            block_count: 0xdeadbeef,
+            block_count: 0,
             block_free: 0,
             file_count: 3 + crate::dev::blocks().len(),
         }

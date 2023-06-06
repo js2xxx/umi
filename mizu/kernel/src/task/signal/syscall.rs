@@ -1,5 +1,5 @@
 use alloc::boxed::Box;
-use core::{mem, num::NonZeroI32, pin::pin, sync::atomic::Ordering::SeqCst, time::Duration};
+use core::{mem, num::NonZeroI32, pin::pin, sync::atomic::Ordering::SeqCst};
 
 use co_trap::UserCx;
 use futures_util::future::{select, Either};
@@ -14,7 +14,7 @@ use sygnal::{Action, ActionType, Sig, SigCode, SigFields, SigInfo, SigSet};
 use super::UsigInfo;
 use crate::{
     mem::{In, Out, UserPtr},
-    syscall::{ScRet, Tv},
+    syscall::{ffi::Tv, ScRet},
     task::{PidSelection, TaskState},
 };
 
@@ -224,8 +224,7 @@ pub async fn sigtimedwait(
             return Err(EINVAL);
         }
         let set = set.read(ts.virt.as_ref()).await?;
-        let tv = tv.read(ts.virt.as_ref()).await?;
-        let dur = Duration::from_secs(tv.sec) + Duration::from_micros(tv.usec);
+        let dur = tv.read(ts.virt.as_ref()).await?.into();
 
         let shared_sig = ts.task.shared_sig.load(SeqCst);
 

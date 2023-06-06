@@ -1,16 +1,20 @@
+pub mod ffi;
+
 use alloc::boxed::Box;
 use core::{ops::ControlFlow, pin::Pin, time::Duration};
 
 use co_trap::{TrapFrame, UserCx};
 use kmem::Virt;
 use ksc::{
-    async_handler, AHandlers, Error,
+    async_handler, AHandlers,
+    Error::{self, EINVAL},
     Scn::{self, *},
 };
-use ktime::{Instant, InstantExt};
+use ktime::Instant;
 use spin::Lazy;
 use sygnal::SigInfo;
 
+use self::ffi::{Ts, Tv};
 use crate::{
     mem::{In, Out, UserPtr},
     task::{self, fd, signal, TaskState},
@@ -36,6 +40,7 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         .map(GETPID, task::pid)
         .map(GETPPID, task::ppid)
         .map(TIMES, task::times)
+        .map(SETITIMER, task::setitimer)
         .map(PRLIMIT64, task::prlimit)
         .map(GETRUSAGE, task::getrusage)
         .map(SET_TID_ADDRESS, task::set_tid_addr)
@@ -63,6 +68,7 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         .map(PREADV64, fd::preadv)
         .map(PWRITEV64, fd::pwritev)
         .map(LSEEK, fd::lseek)
+        .map(PPOLL, dummy_ppoll)
         .map(SENDFILE, fd::sendfile)
         .map(CHDIR, fd::chdir)
         .map(GETCWD, fd::getcwd)
@@ -77,6 +83,7 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         .map(NEWFSTATAT, fd::fstatat)
         .map(UTIMENSAT, fd::utimensat)
         .map(GETDENTS64, fd::getdents64)
+        .map(RENAMEAT2, fd::renameat)
         .map(UNLINKAT, fd::unlinkat)
         .map(CLOSE, fd::close)
         .map(PIPE2, fd::pipe)
@@ -95,6 +102,7 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         .map(GETPGID, dummy_zero)
         .map(GETUID, dummy_zero)
         .map(GETGID, dummy_zero)
+        .map(SYSLOG, dummy_zero)
 });
 
 #[async_handler]
@@ -103,18 +111,10 @@ async fn dummy_zero(_: &mut TaskState, cx: UserCx<'_, fn() -> usize>) -> ScRet {
     ScRet::Continue(None)
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-#[repr(C, packed)]
-pub struct Tv {
-    pub sec: u64,
-    pub usec: u64,
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-#[repr(C, packed)]
-pub struct Ts {
-    pub sec: u64,
-    pub nsec: u64,
+#[async_handler]
+async fn dummy_ppoll(_: &mut TaskState, cx: UserCx<'_, fn() -> usize>) -> ScRet {
+    cx.ret(1);
+    ScRet::Continue(None)
 }
 
 #[async_handler]
@@ -124,9 +124,8 @@ async fn gettimeofday(
 ) -> ScRet {
     let (mut out, _) = cx.args();
 
-    let now = Instant::now();
-    let (sec, usec) = now.to_su();
-    let ret = out.write(ts.virt.as_ref(), Tv { sec, usec }).await;
+    let t = Instant::now().into();
+    let ret = out.write(ts.virt.as_ref(), t).await;
     cx.ret(ret);
 
     ScRet::Continue(None)
@@ -139,12 +138,7 @@ async fn clock_gettime(
 ) -> ScRet {
     let (_, mut out) = cx.args();
 
-    let now = Instant::now();
-    let (sec, usec) = now.to_su();
-    let t = Ts {
-        sec,
-        nsec: usec * 1000,
-    };
+    let t = Instant::now().into();
     let ret = out.write(ts.virt.as_ref(), t).await;
     cx.ret(ret);
 
@@ -161,9 +155,12 @@ async fn sleep(
         input: UserPtr<Ts, In>,
         mut output: UserPtr<Ts, Out>,
     ) -> Result<(), Error> {
-        let tv = input.read(virt).await?;
+        let ts = input.read(virt).await?;
+        if ts.sec >= isize::MAX as _ || ts.nsec >= 1_000_000_000 {
+            return Err(EINVAL);
+        }
 
-        let dur = Duration::from_secs(tv.sec) + Duration::from_nanos(tv.nsec);
+        let dur: Duration = ts.into();
         if dur.is_zero() {
             crate::task::yield_now().await
         } else {

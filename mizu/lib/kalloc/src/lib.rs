@@ -3,7 +3,7 @@
 
 mod imp;
 
-pub use imp::Allocator;
+pub use imp::{Allocator, Stat};
 
 #[cfg(not(feature = "test"))]
 #[global_allocator]
@@ -22,4 +22,11 @@ pub unsafe fn init<T: Copy>(start: &mut T, end: &mut T) {
     let end_ptr = (end as *mut T).cast::<u8>();
     let len = end_ptr.offset_from(start_ptr);
     GLOBAL_ALLOC.init(start_ptr as usize, len as usize)
+}
+
+pub fn stat() -> Stat {
+    #[cfg(not(feature = "test"))]
+    return GLOBAL_ALLOC.stat();
+    #[cfg(feature = "test")]
+    Default::default()
 }

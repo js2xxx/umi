@@ -78,6 +78,7 @@ impl Frame {
 
     pub fn copy(&self, len: usize) -> Result<Frame, Error> {
         let mut f = Self::new()?;
+        log::trace!("Frame::copy: self = {:?}, len = {len}", self.base);
         f[..len].copy_from_slice(&self[..len]);
         Ok(f)
     }
@@ -173,6 +174,7 @@ impl FrameInfo {
                 }
                 Some(new_len) if !cow => {
                     let len = len.max(new_len);
+                    self.dirty = true;
                     self.state = Some(FrameState::Shared(frame.clone(), len));
                     self.pin += pin as usize;
                     Ok((Commit::Shared(frame, len), false))
@@ -189,8 +191,9 @@ impl FrameInfo {
             },
             Some(FrameState::Unique(frame, len)) => Ok((
                 Commit::Unique(FrameInfo {
+                    state: Some(FrameState::Shared(frame, len)),
+                    dirty: self.dirty,
                     pin: self.pin,
-                    ..FrameInfo::new(frame, len)
                 }),
                 true,
             )),
@@ -321,7 +324,7 @@ impl Phys {
             }),
             position: initial_pos.into(),
             cow,
-            flusher: cow.then_some(Flusher {
+            flusher: (!cow).then_some(Flusher {
                 sender,
                 flushed: flushed.clone(),
                 offset: 0,
@@ -354,7 +357,7 @@ impl Phys {
                     parent: list.parent.clone(),
                     frames: mem::take(&mut list.frames),
                 }),
-                cow: false,
+                cow: self.cow || cow,
                 flusher: None,
             });
 
@@ -380,7 +383,7 @@ impl Phys {
             position: Default::default(),
             cow,
             flusher: self.flusher.clone().and_then(|flusher| {
-                cow.then_some(Flusher {
+                (!cow).then_some(Flusher {
                     offset: flusher.offset + index_offset,
                     ..flusher
                 })
@@ -481,8 +484,10 @@ impl Phys {
                     } => {
                         if end.map_or(true, |end| (0..(end - start)).contains(&index)) {
                             let parent_index = start + index;
-                            // log::trace!("Phys::commit_impl: return from parent, parent index =
-                            // {parent_index}");
+                            // log::trace!(
+                            //     "Phys::commit_impl: return from parent, parent index = {}",
+                            //     parent_index
+                            // );
                             return match parent.commit_impl(parent_index, write, pin, cow).await {
                                 Ok(s @ Commit::Shared(..)) => Ok(s),
                                 Ok(Commit::Unique(fi)) => ksync::critical(|| {
@@ -626,6 +631,7 @@ impl Phys {
     }
 
     pub async fn flush_all(&self) -> Result<(), Error> {
+        // log::trace!("Phys::flush_all len = {}", self.position.load(SeqCst));
         let Some(mut flusher) = self.flusher.clone() else {
             return Ok(())
         };
@@ -657,9 +663,6 @@ impl Phys {
             let Some(Parent::Phys { phys, start, .. }) = parent else {
                 break Ok(())
             };
-            if Arsc::count(&phys) > 1 {
-                break Ok(());
-            }
 
             flusher.offset -= start;
             this = &**storage.insert(phys);
@@ -688,8 +691,10 @@ impl Drop for Phys {
                     .flatten()
                     .map(|(frame, len)| (index + flusher.offset, frame, len))
             });
-
-            let _ = flusher.sender.try_send(FlushData::Multiple(data.collect()));
+            let data = data.collect::<Vec<_>>();
+            if !data.is_empty() {
+                let _ = flusher.sender.try_send(FlushData::Multiple(data));
+            }
 
             let Some(Parent::Phys { phys, start, .. }) = list.parent.take() else {
                 break
@@ -920,6 +925,7 @@ async fn flusher(rx: Receiver<SegQueue<FlushData>>, flushed: Arsc<Event>, backen
                 }
             }
         }
+        // log::trace!("BACKEND flush");
         let _ = backend.flush().await;
         flushed.notify_additional(1);
     }

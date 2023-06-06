@@ -81,34 +81,44 @@ impl Entry for CachedDir {
         perm: Permissions,
     ) -> Result<(Arc<dyn Entry>, bool), Error> {
         let expect_dir = options.contains(OpenOptions::DIRECTORY);
+        let create = options.contains(OpenOptions::CREAT);
 
         if let Some(ec) = ksync::critical(|| self.cache.read().get(path).cloned()) {
             let entry: Arc<dyn Entry> = match ec {
-                EntryCache::Dir(_) if !expect_dir => return Err(EISDIR),
+                EntryCache::Dir(_) if !expect_dir && create => return Err(EISDIR),
                 EntryCache::File(_) if expect_dir => return Err(ENOTDIR),
                 EntryCache::Dir(dir) => dir,
-                EntryCache::File(file) => Arc::new(file),
+                EntryCache::File(file) => {
+                    if options.contains(OpenOptions::APPEND) {
+                        file.phys.seek(SeekFrom::End(0)).await?;
+                    }
+                    Arc::new(file)
+                }
             };
             return Ok((entry, false));
         }
         let (entry, created) = self.entry.clone().open(path, options, perm).await?;
-        let (ec, entry): (_, Arc<dyn Entry>) = if expect_dir {
-            let dir = Arc::new(CachedDir {
-                entry,
-                cache: RwLock::new(Default::default()),
-            });
-            (EntryCache::Dir(dir.clone()), dir)
-        } else {
-            let io = entry.clone().to_io().ok_or(EISDIR)?;
-            let phys = crate::mem::new_phys(io, false);
-            if options.contains(OpenOptions::APPEND) {
-                phys.seek(SeekFrom::End(0)).await?;
+        let (ec, entry): (_, Arc<dyn Entry>) = match entry.clone().to_dir() {
+            None if expect_dir => return Err(ENOTDIR),
+            Some(_) => {
+                let dir = Arc::new(CachedDir {
+                    entry,
+                    cache: RwLock::new(Default::default()),
+                });
+                (EntryCache::Dir(dir.clone()), dir)
             }
-            let file = CachedFile {
-                entry,
-                phys: Arc::new(phys),
-            };
-            (EntryCache::File(file.clone()), Arc::new(file))
+            None => {
+                let io = entry.clone().to_io().ok_or(EISDIR)?;
+                let file = CachedFile {
+                    entry,
+                    phys: Arc::new(crate::mem::new_phys(io, false)),
+                };
+                let ec = EntryCache::File(file.clone());
+                if options.contains(OpenOptions::APPEND) {
+                    file.phys.seek(SeekFrom::End(0)).await?;
+                }
+                (ec, Arc::new(file))
+            }
         };
         ksync::critical(|| self.cache.write().insert(path.to_path_buf(), ec));
         Ok((entry, created))
@@ -130,7 +140,7 @@ impl Entry for CachedDir {
 #[async_trait]
 impl Directory for CachedDir {
     async fn next_dirent(&self, last: Option<&DirEntry>) -> Result<Option<DirEntry>, Error> {
-        let dir = self.entry.clone().to_dir().ok_or(EPERM)?;
+        let dir = self.entry.clone().to_dir().ok_or(ENOTDIR)?;
         dir.next_dirent(last).await
     }
 }
@@ -144,6 +154,8 @@ impl DirectoryMut for CachedDir {
         dst_path: &Path,
     ) -> Result<(), Error> {
         let dir = self.entry.clone().to_dir_mut().ok_or(EPERM)?;
+        let dst_cached = dst_parent.downcast::<Self>().ok_or(ENOSYS)?;
+        let dst_parent = dst_cached.entry.clone().to_dir_mut().ok_or(EPERM)?;
         dir.rename(src_path, dst_parent, dst_path).await
     }
 
@@ -154,6 +166,8 @@ impl DirectoryMut for CachedDir {
         dst_path: &Path,
     ) -> Result<(), Error> {
         let dir = self.entry.clone().to_dir_mut().ok_or(EPERM)?;
+        let dst_cached = dst_parent.downcast::<Self>().ok_or(ENOSYS)?;
+        let dst_parent = dst_cached.entry.clone().to_dir_mut().ok_or(EPERM)?;
         dir.link(src_path, dst_parent, dst_path).await
     }
 

@@ -29,7 +29,11 @@ use spin::{Lazy, Mutex};
 use sygnal::{ActionSet, Sig, SigInfo, SigSet, Signals};
 
 pub use self::{cmd::Command, future::yield_now, syscall::*};
-use self::{fd::Files, signal::SigStack, time::Times};
+use self::{
+    fd::Files,
+    signal::SigStack,
+    time::{Counter, Times},
+};
 use crate::mem::{Futexes, Out, UserPtr};
 
 const DEFAULT_STACK_SIZE: usize = PAGE_SIZE * 8;
@@ -89,6 +93,7 @@ impl Task {
 pub struct TaskState {
     pub(crate) task: Arc<Task>,
     tgroup: Arsc<(usize, spin::RwLock<Vec<Arc<Task>>>)>,
+    counters: [Counter; 3],
 
     sig_mask: SigSet,
     sig_stack: Option<SigStack>,

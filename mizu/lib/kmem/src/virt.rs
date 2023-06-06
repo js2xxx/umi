@@ -264,7 +264,7 @@ impl Virt {
 
     pub async fn commit(&self, addr: LAddr, expect_attr: Attr) -> Result<PAddr, Error> {
         let paddr = self.commit_range(addr..(addr + 1), expect_attr).await?;
-        paddr.first().cloned().ok_or(EFAULT).map(|r| r.start)
+        paddr.first().map(|r| r.start).ok_or(EFAULT)
     }
 
     pub async fn decommit_range(&self, range: Range<LAddr>) -> Result<(), Error> {

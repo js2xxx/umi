@@ -1,18 +1,18 @@
 use alloc::{boxed::Box, sync::Arc};
-use core::{mem, time::Duration};
+use core::mem;
 
 use co_trap::UserCx;
 use kmem::Phys;
 use ksc::{
     async_handler,
-    Error::{self, EAGAIN, EINVAL, EISDIR, ENOMEM, ENOSYS, EPERM, ETIMEDOUT},
+    Error::{self, EAGAIN, EINVAL, EISDIR, ENOSYS, EPERM, ETIMEDOUT},
 };
 use ktime::{TimeOutExt, Timer};
-use rv39_paging::{Attr, LAddr, PAGE_MASK, PAGE_SHIFT, PAGE_SIZE};
+use rv39_paging::{Attr, LAddr, PAGE_MASK, PAGE_SHIFT};
 
 use crate::{
     mem::{futex::RobustListHead, user::FutexKey, In, InOut, Out, UserPtr},
-    syscall::{ScRet, Ts},
+    syscall::{ffi::Ts, ScRet},
     task::TaskState,
 };
 
@@ -22,44 +22,30 @@ pub async fn brk(ts: &mut TaskState, cx: UserCx<'_, fn(usize) -> Result<usize, E
     const BRK_END: usize = 0x56789000;
 
     let addr = cx.args();
-    let fut = async move {
-        Ok(if addr != 0 {
-            let old_page = ts.brk & !PAGE_MASK;
+    let fut = async {
+        if ts.brk == 0 {
+            ts.brk = BRK_START;
+        }
+        if !(BRK_START..BRK_END).contains(&addr) {
+            return Ok(ts.brk);
+        }
+        if addr > ts.brk {
+            let old_page = (ts.brk + PAGE_MASK) & !PAGE_MASK;
             let new_page = (addr + PAGE_MASK) & !PAGE_MASK;
-            if new_page >= BRK_END {
-                return Err(ENOMEM);
-            }
             let count = (new_page - old_page) >> PAGE_SHIFT;
             if count > 0 {
+                let phys = Arc::new(Phys::new_anon(true));
                 ts.virt
-                    .map(
-                        Some((old_page + PAGE_SIZE).into()),
-                        Arc::new(Phys::new_anon(false)),
-                        0,
-                        count,
-                        Attr::USER_RW,
-                    )
+                    .map(Some(old_page.into()), phys, 0, count, Attr::USER_RW)
                     .await?;
             }
-            mem::replace(&mut ts.brk, addr)
-        } else if ts.brk == 0 {
-            let laddr = ts
-                .virt
-                .map(
-                    Some(BRK_START.into()),
-                    Arc::new(Phys::new_anon(true)),
-                    0,
-                    1,
-                    Attr::USER_RW,
-                )
-                .await?;
-            ts.brk = (laddr + PAGE_SIZE).val();
-            BRK_START
-        } else {
-            ts.brk
-        })
+        }
+        ts.brk = addr;
+        Ok(addr)
     };
-    cx.ret(fut.await);
+    let ret = fut.await;
+    log::trace!("user brk addr = {addr:x}, ret = {ret:x?}");
+    cx.ret(ret);
     ScRet::Continue(None)
 }
 
@@ -89,8 +75,7 @@ pub async fn futex(
                 if t.is_null() {
                     ts.futex.wait(key).await
                 } else {
-                    let t = t.read(ts.virt.as_ref()).await?;
-                    let timeout = Duration::from_secs(t.sec) + Duration::from_nanos(t.nsec);
+                    let timeout = t.read(ts.virt.as_ref()).await?.into();
                     let wait = ts.futex.wait(key);
                     wait.ok_or_timeout(Timer::after(timeout), || ETIMEDOUT)
                         .await?;
@@ -156,6 +141,7 @@ bitflags::bitflags! {
         const EXEC     = 0x4;
     }
 
+    #[derive(Default, Debug, Clone, Copy)]
     struct Flags: i32 {
         const SHARED	= 0x01;		/* Share changes */
         const PRIVATE	= 0x02;		/* Changes are private */
@@ -186,6 +172,9 @@ pub async fn mmap(
         };
 
         let addr = (flags.contains(Flags::FIXED) || addr != 0).then(|| LAddr::from(addr));
+
+        log::trace!("user mmap at {addr:?}, len = {len}, prot = {prot:?}, flags = {flags:?}");
+        log::trace!("user mmap: fd = {fd}, offset = {offset}");
 
         let offset = if offset & PAGE_MASK != 0 {
             return Err(EINVAL);

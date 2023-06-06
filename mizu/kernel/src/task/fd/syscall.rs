@@ -14,15 +14,18 @@ use ksc::{
     async_handler,
     Error::{self, *},
 };
-use ktime::{Instant, InstantExt};
+use ktime::Instant;
 use rand_riscv::RandomState;
 use umifs::types::{FileType, Metadata, OpenOptions, Permissions, SeekFrom};
 
 use super::Files;
 use crate::{
     mem::{In, InOut, Out, UserBuffer, UserPtr},
-    syscall::{ScRet, Ts},
-    task::TaskState,
+    syscall::{ffi::Ts, ScRet},
+    task::{
+        fd::{FdInfo, SavedNextDirent},
+        TaskState,
+    },
 };
 
 #[async_handler]
@@ -390,13 +393,7 @@ impl From<Metadata> for Kstat {
         }
 
         fn time(i: Option<Instant>) -> Ts {
-            i.map_or(Default::default(), |i| {
-                let (s, u) = i.to_su();
-                Ts {
-                    sec: s,
-                    nsec: u * 1000,
-                }
-            })
+            i.map_or(Default::default(), Into::into)
         }
 
         Kstat {
@@ -523,7 +520,7 @@ fssc!(
             F_DUPFD => files.dup(fd, None).await,
             F_DUPFD_CLOEXEC => files.dup(fd, Some(arg != 0)).await,
             F_GETFD => files.get_fi(fd).await.map(|fi| fi.close_on_exec as i32),
-            F_SETFD => files.set_fi(fd, arg != 0).await.map(|_| 0),
+            F_SETFD => files.set_fi(fd, arg != 0, None).await.map(|_| 0),
             _ => Err(EINVAL),
         }
     }
@@ -540,7 +537,7 @@ fssc!(
         let (path, root) = path.read_path(virt, &mut buf).await?;
 
         let options = OpenOptions::from_bits_truncate(options);
-        let perm = Permissions::from_bits(perm).ok_or(EPERM)?;
+        let perm = Permissions::from_bits_truncate(perm);
 
         log::trace!(
             "user openat fd = {fd}, path = {path:?}, options = {options:?}, perm = {perm:?}"
@@ -711,12 +708,12 @@ fssc!(
             let a = match a.nsec {
                 UTIME_NOW => Some(now),
                 UTIME_OMIT => None,
-                _ => Some(Instant::from_su(a.sec, a.nsec / 1000)),
+                _ => Some(a.into()),
             };
             let m = match m.nsec {
                 UTIME_NOW => Some(now),
                 UTIME_OMIT => None,
-                _ => Some(Instant::from_su(m.sec, m.nsec / 1000)),
+                _ => Some(m.into()),
             };
             (a, m)
         };
@@ -740,23 +737,34 @@ fssc!(
             reclen: u16,
             ty: FileType,
         }
-        let entry = files.get(fd).await?;
+        let FdInfo {
+            entry,
+            close_on_exec,
+            mut saved_next_dirent,
+        } = files.get_fi(fd).await?;
+        let saved_next_dirent = saved_next_dirent.get_mut();
+
         let dir = entry.to_dir().ok_or(ENOTDIR)?;
 
-        let mut d = dir.next_dirent(None).await?;
-        let mut count = 0;
+        let first = match saved_next_dirent {
+            SavedNextDirent::Start => None,
+            SavedNextDirent::Next(dirent) => Some(&*dirent),
+            SavedNextDirent::End => return Ok(0),
+        };
+        let mut d = dir.next_dirent(first).await?;
+        let mut read_len = 0;
         loop {
-            let Some(entry) = d else { break Ok(count) };
+            let Some(entry) = &d else { break };
 
             let layout = Layout::new::<D>()
                 .extend_packed(Layout::for_value(&*entry.name))?
                 .extend_packed(Layout::new::<u8>())?
                 .pad_to_align();
             if layout.size() > len {
-                break Ok(count);
+                break;
             }
             let Ok(reclen) = layout.size().try_into() else {
-                break Ok(count);
+                break;
             };
 
             let mut out = MaybeUninit::<D>::uninit();
@@ -773,10 +781,39 @@ fssc!(
 
             ptr.advance(layout.size() - mem::size_of::<D>());
             len -= layout.size();
+            read_len += layout.size();
 
-            d = dir.next_dirent(Some(&entry)).await?;
-            count += 1;
+            d = dir.next_dirent(Some(entry)).await?;
         }
+
+        let s = match d {
+            None => SavedNextDirent::End,
+            Some(dirent) => SavedNextDirent::Next(dirent),
+        };
+        files.set_fi(fd, close_on_exec, Some(s)).await?;
+
+        Ok(read_len)
+    }
+
+    pub async fn renameat(
+        virt: Pin<&Virt>,
+        files: &Files,
+        src: i32,
+        src_path: UserPtr<u8, In>,
+        dst: i32,
+        dst_path: UserPtr<u8, In>,
+    ) -> Result<(), Error> {
+        let [mut src_buf, mut dst_buf] = [[0; MAX_PATH_LEN]; 2];
+        let (src_path, _) = src_path.read_path(virt, &mut src_buf).await?;
+        let (dst_path, _) = dst_path.read_path(virt, &mut dst_buf).await?;
+
+        log::trace!("user renameat src = {src}/{src_path:?}, dst = {dst}/{dst_path:?}");
+
+        let src = files.get(src).await?.to_dir_mut().ok_or(ENOTDIR)?;
+        let dst = files.get(dst).await?.to_dir_mut().ok_or(ENOTDIR)?;
+
+        src.rename(src_path, dst, dst_path).await?;
+        Ok(())
     }
 
     pub async fn unlinkat(
@@ -789,7 +826,7 @@ fssc!(
         let mut buf = [0; MAX_PATH_LEN];
         let (path, root) = path.read_path(virt, &mut buf).await?;
 
-        log::trace!("user mkdir fd = {fd}, path = {path:?}, flags = {flags}");
+        log::trace!("user unlinkat fd = {fd}, path = {path:?}, flags = {flags}");
 
         if root {
             crate::fs::unlink(path).await
@@ -871,7 +908,7 @@ fssc!(
             let fatfs =
                 afat32::FatFileSystem::new(io, metadata.block_size.ilog2(), NullTimeProvider)
                     .await?;
-            crate::fs::mount(dst.to_path_buf(), fatfs);
+            crate::fs::mount(dst.to_path_buf(), "<UNKNOWN>".into(), fatfs);
         } else {
             return Err(ENODEV);
         }

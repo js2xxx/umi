@@ -1,4 +1,4 @@
-export TARGET := riscv64imac-unknown-none-elf
+export TARGET := riscv64gc-unknown-none-elf
 export MODE   ?= release
 export BOARD  ?= qemu-virt
 
@@ -6,7 +6,7 @@ export ROOT			:= $(shell pwd)
 export TARGET_DIR 	:= $(ROOT)/target/$(TARGET)/$(MODE)
 export DEBUG_DIR   	:= $(ROOT)/debug
 
-export ROOTFS  ?= $(ROOT)/third-party/img/sdcard-comp2.img
+export ROOTFS  ?= $(ROOT)/third-party/img/sdcard-comp3.img
 export SBI ?= $(ROOT)/third-party/bin/opensbi-$(BOARD)
 
 .PHONY: all build run debug test clean

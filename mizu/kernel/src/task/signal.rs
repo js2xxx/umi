@@ -41,8 +41,7 @@ impl TaskState {
                     self.task.sig.wait_one(Sig::SIGCONT).await;
                 }
                 ActionType::User { entry, .. } => {
-                    let exit = SIGRETURN_GUARD.into();
-                    if let Err(sig) = self.yield_to_signal(tf, si, entry, exit).await {
+                    if let Err(sig) = self.yield_to_signal(tf, si, entry).await {
                         let sigsegv = SigInfo {
                             sig: Sig::SIGSEGV,
                             code: SigCode::KERNEL as _,
@@ -84,7 +83,6 @@ impl TaskState {
         tf: &mut TrapFrame,
         si: SigInfo,
         entry: LAddr,
-        exit: LAddr,
     ) -> Result<(), Sig> {
         let sig_stack = self.sig_stack.take();
         let cur = match sig_stack {
@@ -125,7 +123,7 @@ impl TaskState {
         ]);
 
         tf.sepc = entry.val();
-        tf.gpr.tx.ra = exit.val();
+        tf.gpr.tx.ra = SIGRETURN_GUARD;
         tf.gpr.tx.sp = usi_ptr.addr().val();
 
         self.sig_mask |= si.sig;

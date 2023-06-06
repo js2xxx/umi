@@ -3,7 +3,7 @@ use core::{cmp, iter, num, pin::pin, slice, str};
 
 use async_trait::async_trait;
 use futures_util::{stream, Stream, StreamExt};
-use ksc_core::Error::{self, EEXIST, EINVAL, EISDIR, ENOENT, ENOSYS, ENOTDIR, ENOTEMPTY};
+use ksc_core::Error::{self, EEXIST, EINVAL, EIO, EISDIR, ENOENT, ENOSYS, ENOTDIR, ENOTEMPTY};
 use umifs::{
     path::Path,
     traits::{Directory, DirectoryMut, Entry, Io, IoExt},
@@ -57,7 +57,9 @@ impl<T: TimeProvider> FatDir<T> {
         let mut begin_offset = offset;
         loop {
             let mut buf = [0; DIR_ENTRY_SIZE as usize];
-            self.file.read_exact_at(offset, &mut buf).await?;
+            if let Err(err) = self.file.read_exact_at(offset, &mut buf).await {
+                return if err == EIO { Ok(None) } else { Err(err) };
+            }
             let (_, raw_entry) = DirEntryData::parse(&buf)?;
             if raw_entry.is_end() {
                 return Ok(None);
@@ -172,7 +174,7 @@ impl<T: TimeProvider> FatDir<T> {
                 let e = node.find_entry(comp.as_str(), Some(true), None).await?;
                 node = storage.insert(e.to_dir().await?);
             } else {
-                let e = node.find_entry(comp.as_str(), Some(false), None).await?;
+                let e = node.find_entry(comp.as_str(), None, None).await?;
                 return Ok(e);
             }
         }
