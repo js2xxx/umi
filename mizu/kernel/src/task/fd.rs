@@ -255,7 +255,7 @@ impl Files {
 
     pub async fn close_on_exec(&self) {
         let mut map = self.fds.map.write().await;
-        for (fd, fi) in map.drain_filter(|_, fi| fi.close_on_exec) {
+        for (fd, fi) in map.extract_if(|_, fi| fi.close_on_exec) {
             ksync::critical(|| self.fds.id_alloc.lock().dealloc(fd));
             if let Some(io) = fi.entry.to_io() {
                 let _ = io.flush().await;
