@@ -7,8 +7,9 @@ use ksc_core::Error::{self, EEXIST, EINVAL, EIO, EISDIR, ENOENT, ENOSYS, ENOTDIR
 use umifs::{
     path::Path,
     traits::{Directory, DirectoryMut, Entry, Io, IoExt},
-    types::{FileType, IoSlice, IoSliceMut, Metadata, OpenOptions, Permissions, SeekFrom},
+    types::{FileType, Metadata, OpenOptions, Permissions},
 };
+use umio::{IoSlice, IoSliceMut, SeekFrom};
 
 use crate::{
     dirent::{

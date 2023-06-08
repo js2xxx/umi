@@ -16,7 +16,8 @@ use ksc::{
 };
 use ktime::Instant;
 use rand_riscv::RandomState;
-use umifs::types::{FileType, Metadata, OpenOptions, Permissions, SeekFrom};
+use umifs::types::{FileType, Metadata, OpenOptions, Permissions};
+use umio::SeekFrom;
 
 use super::Files;
 use crate::{
@@ -499,8 +500,8 @@ fssc!(
     ) -> Result<i32, Error> {
         log::trace!("user dup old = {old}, new = {new}, flags = {flags}");
 
-        let entry = files.get(old).await?;
-        files.reopen(new, entry, flags != 0).await;
+        let fi = files.get_fi(old).await?;
+        files.reopen(new, fi.entry, fi.perm, flags != 0).await;
         Ok(new)
     }
 
@@ -511,16 +512,26 @@ fssc!(
         cmd: usize,
         arg: usize,
     ) -> Result<i32, Error> {
-        const F_DUPFD: usize = 0;
-        const F_GETFD: usize = 1;
-        const F_SETFD: usize = 2;
-        const F_DUPFD_CLOEXEC: usize = 1030;
+        const DUPFD: usize = 0;
+        const GETFD: usize = 1;
+        const SETFD: usize = 2;
+        const GETFL: usize = 3;
+        const SETFL: usize = 4;
+        const DUPFD_CLOEXEC: usize = 1030;
 
         match cmd {
-            F_DUPFD => files.dup(fd, None).await,
-            F_DUPFD_CLOEXEC => files.dup(fd, Some(arg != 0)).await,
-            F_GETFD => files.get_fi(fd).await.map(|fi| fi.close_on_exec as i32),
-            F_SETFD => files.set_fi(fd, arg != 0, None).await.map(|_| 0),
+            DUPFD => files.dup(fd, None).await,
+            DUPFD_CLOEXEC => files.dup(fd, Some(arg != 0)).await,
+            GETFD => files.get_fi(fd).await.map(|fi| fi.close_on_exec as i32),
+            SETFD => {
+                let c = arg != 0;
+                files.set_fi(fd, Some(c), None, None).await.map(|_| 0)
+            }
+            GETFL => files.get_fi(fd).await.map(|fi| fi.perm.bits() as _),
+            SETFL => {
+                let perm = Permissions::from_bits_truncate(arg as u32);
+                files.set_fi(fd, None, Some(perm), None).await.map(|_| 0)
+            }
             _ => Err(EINVAL),
         }
     }
@@ -554,7 +565,7 @@ fssc!(
             }
         };
         let close_on_exec = options.contains(OpenOptions::CLOEXEC);
-        files.open(entry, close_on_exec).await
+        files.open(entry, perm, close_on_exec).await
     }
 
     pub async fn faccessat(
@@ -610,7 +621,7 @@ fssc!(
         if !created {
             return Err(EEXIST);
         }
-        files.open(entry, false).await
+        files.open(entry, perm, false).await
     }
 
     pub async fn fstat(
@@ -739,19 +750,18 @@ fssc!(
         }
         let FdInfo {
             entry,
-            close_on_exec,
-            mut saved_next_dirent,
+            saved_next_dirent,
+            ..
         } = files.get_fi(fd).await?;
-        let saved_next_dirent = saved_next_dirent.get_mut();
 
         let dir = entry.to_dir().ok_or(ENOTDIR)?;
 
         let first = match saved_next_dirent {
             SavedNextDirent::Start => None,
-            SavedNextDirent::Next(dirent) => Some(&*dirent),
+            SavedNextDirent::Next(dirent) => Some(dirent),
             SavedNextDirent::End => return Ok(0),
         };
-        let mut d = dir.next_dirent(first).await?;
+        let mut d = dir.next_dirent(first.as_ref()).await?;
         let mut read_len = 0;
         loop {
             let Some(entry) = &d else { break };
@@ -790,7 +800,7 @@ fssc!(
             None => SavedNextDirent::End,
             Some(dirent) => SavedNextDirent::Next(dirent),
         };
-        files.set_fi(fd, close_on_exec, Some(s)).await?;
+        files.set_fi(fd, None, None, Some(s)).await?;
 
         Ok(read_len)
     }
@@ -849,8 +859,8 @@ fssc!(
 
     pub async fn pipe(virt: Pin<&Virt>, files: &Files, fd: UserPtr<i32, Out>) -> Result<(), Error> {
         let (tx, rx) = crate::fs::pipe();
-        let tx = files.open(tx, false).await?;
-        let rx = files.open(rx, false).await?;
+        let tx = files.open(tx, Permissions::SELF_W, false).await?;
+        let rx = files.open(rx, Permissions::SELF_R, false).await?;
         fd.write_slice(virt, &[rx, tx], false).await
     }
 

@@ -11,6 +11,7 @@ use ksc::{
 use rand_riscv::RandomState;
 use spin::RwLock;
 use umifs::{path::*, traits::*, types::*};
+use umio::SeekFrom;
 
 pub struct CachedFs {
     inner: Arsc<dyn FileSystem>,

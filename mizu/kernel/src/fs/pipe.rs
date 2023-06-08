@@ -12,10 +12,9 @@ use ksync::event::Event;
 use umifs::{
     path::Path,
     traits::{Entry, Io},
-    types::{
-        ioslice_len, FileType, IoSlice, IoSliceMut, Metadata, OpenOptions, Permissions, SeekFrom,
-    },
+    types::{FileType, Metadata, OpenOptions, Permissions},
 };
+use umio::{ioslice_len, IoSlice, IoSliceMut, SeekFrom};
 
 struct PipeBackend(AtomicUsize);
 

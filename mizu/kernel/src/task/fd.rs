@@ -24,20 +24,12 @@ pub use self::syscall::*;
 pub const MAX_FDS: usize = 65536;
 const CWD: i32 = -100;
 
+#[derive(Clone)]
 pub struct FdInfo {
     pub entry: Arc<dyn Entry>,
     pub close_on_exec: bool,
-    pub saved_next_dirent: spin::Mutex<SavedNextDirent>,
-}
-
-impl Clone for FdInfo {
-    fn clone(&self) -> Self {
-        FdInfo {
-            entry: self.entry.clone(),
-            close_on_exec: self.close_on_exec,
-            saved_next_dirent: ksync::critical(|| self.saved_next_dirent.lock().clone()).into(),
-        }
-    }
+    pub perm: Permissions,
+    pub saved_next_dirent: SavedNextDirent,
 }
 
 #[derive(Debug, Clone)]
@@ -104,6 +96,11 @@ impl Files {
                             let fd_info = FdInfo {
                                 entry,
                                 close_on_exec: false,
+                                perm: if i < 2 {
+                                    Permissions::SELF_W
+                                } else {
+                                    Permissions::SELF_R
+                                },
                                 saved_next_dirent: Default::default(),
                             };
                             (i as i32, fd_info)
@@ -128,10 +125,17 @@ impl Files {
         self.fds.limit.load(SeqCst)
     }
 
-    pub async fn reopen(&self, fd: i32, entry: Arc<dyn Entry>, close_on_exec: bool) {
+    pub async fn reopen(
+        &self,
+        fd: i32,
+        entry: Arc<dyn Entry>,
+        perm: Permissions,
+        close_on_exec: bool,
+    ) {
         let fi = FdInfo {
             entry,
             close_on_exec,
+            perm,
             saved_next_dirent: Default::default(),
         };
         if let Some(old) = self.fds.map.write().await.insert(fd, fi) {
@@ -149,10 +153,16 @@ impl Files {
         ksync::critical(|| self.cwd.read().clone())
     }
 
-    pub async fn open(&self, entry: Arc<dyn Entry>, close_on_exec: bool) -> Result<i32, Error> {
+    pub async fn open(
+        &self,
+        entry: Arc<dyn Entry>,
+        perm: Permissions,
+        close_on_exec: bool,
+    ) -> Result<i32, Error> {
         let fi = FdInfo {
             entry,
             close_on_exec,
+            perm,
             saved_next_dirent: Default::default(),
         };
         let mut map = self.fds.map.write().await;
@@ -176,6 +186,7 @@ impl Files {
                 Ok(FdInfo {
                     entry,
                     close_on_exec: false,
+                    perm: Permissions::SELF_R,
                     saved_next_dirent: Default::default(),
                 })
             }
@@ -186,24 +197,30 @@ impl Files {
     pub async fn set_fi(
         &self,
         fd: i32,
-        close_on_exec: bool,
+        close_on_exec: Option<bool>,
+        perm: Option<Permissions>,
         saved_next_dirent: Option<SavedNextDirent>,
     ) -> Result<(), Error> {
         if fd == CWD {
             return Ok(());
         }
         let mut map = self.fds.map.write().await;
-        let fd_info = &mut map.get_mut(&fd).ok_or(EBADF)?;
-        fd_info.close_on_exec = close_on_exec;
+        let fi = map.get_mut(&fd).ok_or(EBADF)?;
+        if let Some(close_on_exec) = close_on_exec {
+            fi.close_on_exec = close_on_exec;
+        }
+        if let Some(perm) = perm {
+            fi.perm = perm;
+        }
         if let Some(saved) = saved_next_dirent {
-            ksync::critical(|| *fd_info.saved_next_dirent.lock() = saved);
+            fi.saved_next_dirent = saved;
         }
         Ok(())
     }
 
     pub async fn dup(&self, fd: i32, close_on_exec: Option<bool>) -> Result<i32, Error> {
         let fi = self.get_fi(fd).await?;
-        self.open(fi.entry, close_on_exec.unwrap_or(fi.close_on_exec))
+        self.open(fi.entry, fi.perm, close_on_exec.unwrap_or(fi.close_on_exec))
             .await
     }
 

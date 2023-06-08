@@ -6,8 +6,9 @@ use ksc::Error::{self, EBADF, ENOSYS, ENOTDIR};
 use umifs::{
     path::Path,
     traits::{Entry, Io},
-    types::{FileType, IoSlice, IoSliceMut, Metadata, OpenOptions, Permissions, SeekFrom},
+    types::{FileType, Metadata, OpenOptions, Permissions},
 };
+use umio::{IoSlice, IoSliceMut, SeekFrom};
 
 pub struct Serial {
     read: bool,

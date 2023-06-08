@@ -11,10 +11,9 @@ use ksync::{Mutex, RwLock, RwLockUpgradableReadGuard, RwLockWriteGuard};
 use umifs::{
     path::Path,
     traits::{Entry, Io},
-    types::{
-        advance_slices, FileType, IoSlice, IoSliceMut, Metadata, OpenOptions, Permissions, SeekFrom,
-    },
+    types::{FileType, Metadata, OpenOptions, Permissions},
 };
+use umio::{advance_slices, IoSlice, IoSliceMut, SeekFrom};
 
 use crate::{dirent::DirEntryEditor, fs::FatFileSystem, TimeProvider};
 

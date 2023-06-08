@@ -2,12 +2,12 @@ use alloc::{boxed::Box, sync::Arc};
 
 use async_trait::async_trait;
 use ksc_core::Error::{self, EEXIST, ENOTDIR, EPERM};
-use umio::{ioslice_len, Io};
+use umio::{ioslice_len, Io, IoSlice, IoSliceMut, SeekFrom};
 
 use crate::{
     path::Path,
     traits::Entry,
-    types::{FileType, IoSlice, IoSliceMut, Metadata, OpenOptions, Permissions, SeekFrom},
+    types::{FileType, Metadata, OpenOptions, Permissions},
 };
 
 pub struct Null;
