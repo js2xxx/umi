@@ -46,7 +46,7 @@ impl<T: TimeProvider> FatFile<T> {
             .and_then(|e| e.inner().size().map(|s| s as usize))
             .unwrap_or(clusters.len() << cluster_shift);
 
-        // log::trace!("FatFile::new: cluster count = {}", len);
+        // log::trace!("FatFile::new: length = {}", len);
 
         Ok(FatFile {
             fs,
@@ -199,10 +199,8 @@ impl<T: TimeProvider> Io for FatFile<T> {
     }
 
     async fn read_at(&self, offset: usize, mut buffer: &mut [IoSliceMut]) -> Result<usize, Error> {
-        // log::trace!(
-        //     "FatFile::read_at {offset:#x}, buffer len = {}",
-        //     umifs::types::ioslice_len(&buffer)
-        // );
+        // let ioslice_len = umio::ioslice_len(&buffer);
+        // log::trace!("FatFile::read_at {offset:#x}, buffer len = {ioslice_len}");
 
         let cluster_shift = self.cluster_shift;
         let (cluster_index, offset_in_cluster) = self.decomp(offset);
@@ -260,10 +258,8 @@ impl<T: TimeProvider> Io for FatFile<T> {
         mut offset: usize,
         mut buffer: &mut [IoSlice],
     ) -> Result<usize, Error> {
-        // log::trace!(
-        //     "FatFile::write_at {offset:#x}, buffer len = {}",
-        //     umifs::types::ioslice_len(&buffer)
-        // );
+        // let ioslice_len = umio::ioslice_len(&buffer);
+        // log::trace!("FatFile::write_at {offset:#x}, buffer len = {ioslice_len}");
 
         let cluster_shift = self.cluster_shift;
         let (cluster_index, offset_in_cluster) = self.decomp(offset);
