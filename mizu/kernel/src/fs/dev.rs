@@ -11,6 +11,7 @@ use umifs::{
     traits::{Entry, FileSystem, Io, ToIo},
     types::*,
 };
+use umio::IoPoll;
 
 use super::serial::Serial;
 
@@ -84,6 +85,8 @@ impl Entry for DevRoot {
     }
 }
 
+impl IoPoll for DevRoot {}
+
 pub struct DevBlocks;
 
 impl ToIo for DevBlocks {}
@@ -117,6 +120,7 @@ impl Entry for DevBlocks {
         todo!()
     }
 }
+impl IoPoll for DevBlocks {}
 
 pub struct BlockEntry {
     io: Arc<Phys>,
@@ -158,6 +162,8 @@ impl Entry for BlockEntry {
         }
     }
 }
+
+impl IoPoll for BlockEntry {}
 
 impl ToIo for BlockEntry {
     fn to_io(self: Arc<Self>) -> Option<Arc<dyn Io>> {

@@ -11,7 +11,7 @@ use ksc::{
 use rand_riscv::RandomState;
 use spin::RwLock;
 use umifs::{path::*, traits::*, types::*};
-use umio::SeekFrom;
+use umio::{Event, IoPoll, SeekFrom};
 
 pub struct CachedFs {
     inner: Arsc<dyn FileSystem>,
@@ -137,6 +137,11 @@ impl Entry for CachedDir {
         Some(self)
     }
 }
+impl IoPoll for CachedDir {
+    fn event<'s: 'r, 'r>(&'s self, expected: Event) -> Boxed<'r, Event> {
+        self.entry.event(expected)
+    }
+}
 
 #[async_trait]
 impl Directory for CachedDir {
@@ -198,5 +203,11 @@ impl Entry for CachedFile {
 
     fn metadata<'a: 'b, 'b>(&'a self) -> Boxed<'b, Metadata> {
         self.entry.metadata()
+    }
+}
+
+impl IoPoll for CachedFile {
+    fn event<'s: 'r, 'r>(&'s self, expected: Event) -> Boxed<'r, Event> {
+        self.entry.event(expected)
     }
 }

@@ -13,7 +13,7 @@ use umifs::{
     traits::{Entry, Io},
     types::{FileType, Metadata, OpenOptions, Permissions},
 };
-use umio::{advance_slices, IoSlice, IoSliceMut, SeekFrom};
+use umio::{advance_slices, IoPoll, IoSlice, IoSliceMut, SeekFrom};
 
 use crate::{dirent::DirEntryEditor, fs::FatFileSystem, TimeProvider};
 
@@ -364,3 +364,4 @@ impl<T: TimeProvider> Entry for FatFile<T> {
         }
     }
 }
+impl<T: TimeProvider> IoPoll for FatFile<T> {}

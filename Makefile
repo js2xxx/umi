@@ -6,7 +6,7 @@ export ROOT			:= $(shell pwd)
 export TARGET_DIR 	:= $(ROOT)/target/$(TARGET)/$(MODE)
 export DEBUG_DIR   	:= $(ROOT)/debug
 
-export ROOTFS  ?= $(ROOT)/third-party/img/sdcard-comp3.img
+export ROOTFS  ?= $(ROOT)/third-party/img/sdcard-comp3-debug.img
 export SBI ?= $(ROOT)/third-party/bin/opensbi-$(BOARD)
 
 .PHONY: all build run debug test clean

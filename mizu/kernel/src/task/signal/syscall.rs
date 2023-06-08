@@ -1,5 +1,5 @@
 use alloc::boxed::Box;
-use core::{mem, num::NonZeroI32, pin::pin, sync::atomic::Ordering::SeqCst};
+use core::{mem, num::NonZeroI32, pin::pin, sync::atomic::Ordering::SeqCst, time::Duration};
 
 use co_trap::UserCx;
 use futures_util::future::{select, Either};
@@ -7,7 +7,7 @@ use ksc::{
     async_handler,
     Error::{self, EINVAL, EPERM, ESRCH, ETIMEDOUT},
 };
-use ktime::{TimeOutExt, Timer};
+use ktime::TimeOutExt;
 use rv39_paging::{LAddr, PAGE_SIZE};
 use sygnal::{Action, ActionType, Sig, SigCode, SigFields, SigInfo, SigSet};
 
@@ -224,14 +224,14 @@ pub async fn sigtimedwait(
             return Err(EINVAL);
         }
         let set = set.read(ts.virt.as_ref()).await?;
-        let dur = tv.read(ts.virt.as_ref()).await?.into();
+        let dur: Duration = tv.read(ts.virt.as_ref()).await?.into();
 
         let shared_sig = ts.task.shared_sig.load(SeqCst);
 
         let local = pin!(ts.task.sig.wait(set));
         let shared = pin!(shared_sig.wait(set));
         let res = select(local, shared)
-            .ok_or_timeout(Timer::after(dur), || ETIMEDOUT)
+            .ok_or_timeout(dur, || ETIMEDOUT)
             .await?;
         let si = match res {
             Either::Left((si, _)) => si,

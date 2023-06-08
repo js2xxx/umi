@@ -9,7 +9,7 @@ use umifs::{
     traits::{Directory, DirectoryMut, Entry, Io, IoExt},
     types::{FileType, Metadata, OpenOptions, Permissions},
 };
-use umio::{IoSlice, IoSliceMut, SeekFrom};
+use umio::{IoPoll, IoSlice, IoSliceMut, SeekFrom};
 
 use crate::{
     dirent::{
@@ -480,6 +480,7 @@ impl<T: TimeProvider> Entry for FatDir<T> {
         Some(self as _)
     }
 }
+impl<T: TimeProvider> IoPoll for FatDir<T> {}
 
 #[async_trait]
 impl<T: TimeProvider> Directory for FatDir<T> {

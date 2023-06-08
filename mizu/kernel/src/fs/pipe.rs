@@ -14,44 +14,7 @@ use umifs::{
     traits::{Entry, Io},
     types::{FileType, Metadata, OpenOptions, Permissions},
 };
-use umio::{ioslice_len, IoSlice, IoSliceMut, SeekFrom};
-
-struct PipeBackend(AtomicUsize);
-
-#[async_trait]
-impl Io for PipeBackend {
-    async fn seek(&self, whence: SeekFrom) -> Result<usize, Error> {
-        Ok(match whence {
-            SeekFrom::Current(0) => self.0.load(SeqCst),
-            SeekFrom::Current(_) => 0,
-            _ => return Err(ESPIPE),
-        })
-    }
-
-    async fn stream_len(&self) -> Result<usize, Error> {
-        Ok(self.0.load(SeqCst))
-    }
-
-    async fn read_at(&self, offset: usize, buffer: &mut [IoSliceMut]) -> Result<usize, Error> {
-        let rest = self.0.load(SeqCst).saturating_sub(offset);
-        let fold = buffer.iter_mut().fold((0, rest), |(len, rest), buf| {
-            let delta = rest.min(buf.len());
-            buf[..delta].fill(0);
-            (len + delta, rest - delta)
-        });
-        Ok(fold.0)
-    }
-
-    async fn write_at(&self, offset: usize, buffer: &mut [IoSlice]) -> Result<usize, Error> {
-        let written_len = ioslice_len(&buffer);
-        self.0.fetch_max(offset + written_len, SeqCst);
-        Ok(written_len)
-    }
-
-    async fn flush(&self) -> Result<(), Error> {
-        Ok(())
-    }
-}
+use umio::{IoPoll, IoSlice, IoSliceMut, SeekFrom};
 
 struct Pipe {
     phys: Phys,
@@ -150,6 +113,30 @@ impl Entry for Receiver {
     }
 }
 
+#[async_trait]
+impl IoPoll for Receiver {
+    async fn event(&self, expected: umio::Event) -> umio::Event {
+        if !expected.contains(umio::Event::READABLE) {
+            return umio::Event::INVALID;
+        }
+        let mut listener = None;
+        loop {
+            let pos = self.pos.load(SeqCst);
+            let end = self.pipe.end_pos.load(SeqCst);
+            if pos < end {
+                break umio::Event::READABLE;
+            }
+            if Arsc::count(&self.pipe) == 1 {
+                break umio::Event::HANG_UP;
+            }
+            match listener.take() {
+                Some(listener) => listener.await,
+                None => listener = Some(self.pipe.readable.listen()),
+            }
+        }
+    }
+}
+
 struct Sender {
     pipe: Arsc<Pipe>,
 }
@@ -227,6 +214,19 @@ impl Entry for Sender {
 impl Drop for Sender {
     fn drop(&mut self) {
         self.pipe.readable.notify(usize::MAX);
+    }
+}
+
+#[async_trait]
+impl IoPoll for Sender {
+    async fn event(&self, expected: umio::Event) -> umio::Event {
+        if expected != umio::Event::WRITABLE {
+            return umio::Event::INVALID;
+        }
+        if Arsc::count(&self.pipe) == 1 {
+            return umio::Event::ERROR;
+        }
+        umio::Event::WRITABLE
     }
 }
 

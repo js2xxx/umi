@@ -1,5 +1,5 @@
 use alloc::{boxed::Box, sync::Arc};
-use core::mem;
+use core::{mem, time::Duration};
 
 use co_trap::UserCx;
 use kmem::Phys;
@@ -7,7 +7,7 @@ use ksc::{
     async_handler,
     Error::{self, EAGAIN, EINVAL, EISDIR, ENOSYS, EPERM, ETIMEDOUT},
 };
-use ktime::{TimeOutExt, Timer};
+use ktime::TimeOutExt;
 use rv39_paging::{Attr, LAddr, PAGE_MASK, PAGE_SHIFT};
 
 use crate::{
@@ -75,10 +75,9 @@ pub async fn futex(
                 if t.is_null() {
                     ts.futex.wait(key).await
                 } else {
-                    let timeout = t.read(ts.virt.as_ref()).await?.into();
+                    let timeout: Duration = t.read(ts.virt.as_ref()).await?.into();
                     let wait = ts.futex.wait(key);
-                    wait.ok_or_timeout(Timer::after(timeout), || ETIMEDOUT)
-                        .await?;
+                    wait.ok_or_timeout(timeout, || ETIMEDOUT).await?;
                 }
                 0
             }

@@ -75,6 +75,7 @@ impl Entry for ProcRoot {
         todo!()
     }
 }
+impl IoPoll for ProcRoot {}
 
 #[derive(Default)]
 pub struct MemInfo(Mutex<String>, AtomicUsize);
@@ -150,6 +151,7 @@ impl Entry for MemInfo {
         }
     }
 }
+impl IoPoll for MemInfo {}
 
 #[derive(Default)]
 pub struct Mounts(Mutex<String>, AtomicUsize);
@@ -231,6 +233,7 @@ impl Entry for Mounts {
         }
     }
 }
+impl IoPoll for Mounts {}
 
 pub fn copy_to_ioslice(mut buf: &[u8], mut out: &mut [IoSliceMut]) -> usize {
     let mut read_len = 0;

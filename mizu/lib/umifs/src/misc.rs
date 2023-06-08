@@ -2,7 +2,7 @@ use alloc::{boxed::Box, sync::Arc};
 
 use async_trait::async_trait;
 use ksc_core::Error::{self, EEXIST, ENOTDIR, EPERM};
-use umio::{ioslice_len, Io, IoSlice, IoSliceMut, SeekFrom};
+use umio::{ioslice_len, Io, IoPoll, IoSlice, IoSliceMut, SeekFrom};
 
 use crate::{
     path::Path,
@@ -68,6 +68,8 @@ impl Entry for Null {
     }
 }
 
+impl IoPoll for Null {}
+
 pub struct Zero;
 
 #[async_trait]
@@ -128,6 +130,8 @@ impl Entry for Zero {
         }
     }
 }
+
+impl IoPoll for Zero {}
 
 pub async fn open_file<E: Entry>(
     this: Arc<E>,

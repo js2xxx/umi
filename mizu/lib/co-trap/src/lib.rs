@@ -4,7 +4,10 @@
 
 mod tf;
 
-use core::sync::atomic::{compiler_fence, Ordering::SeqCst};
+use core::{
+    marker::PhantomData,
+    sync::atomic::{compiler_fence, Ordering::SeqCst},
+};
 
 use enum_primitive_derive::Primitive;
 use num_traits::FromPrimitive;
@@ -26,7 +29,10 @@ pub fn user_entry() -> usize {
 }
 
 /// A temporary write to `stvec` register.
-pub struct StvecTemp(Stvec);
+pub struct StvecTemp {
+    data: Stvec,
+    _non_send: PhantomData<*mut ()>,
+}
 
 impl StvecTemp {
     /// Creates a new [`StvecGuard`].
@@ -40,14 +46,22 @@ impl StvecTemp {
         let old = stvec::read();
         compiler_fence(SeqCst);
         unsafe { stvec::write(entry, mode) };
-        StvecTemp(old)
+        StvecTemp {
+            data: old,
+            _non_send: PhantomData,
+        }
     }
 }
 
 impl Drop for StvecTemp {
     fn drop(&mut self) {
         // SAFETY: The caller is aware of that safety notice of `Self::new`.
-        unsafe { stvec::write(self.0.address(), self.0.trap_mode().unwrap()) };
+        unsafe {
+            stvec::write(
+                self.data.address(),
+                self.data.trap_mode().unwrap_or(TrapMode::Direct),
+            )
+        };
     }
 }
 

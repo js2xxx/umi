@@ -1,4 +1,4 @@
-use alloc::{boxed::Box, vec, vec::Vec};
+use alloc::{boxed::Box, sync::Arc, vec, vec::Vec};
 use core::{
     alloc::Layout,
     mem::{self, MaybeUninit},
@@ -8,15 +8,22 @@ use core::{
 use afat32::NullTimeProvider;
 use arsc_rs::Arsc;
 use co_trap::UserCx;
-use futures_util::{stream, StreamExt, TryStreamExt};
+use futures_util::{
+    stream::{self, FuturesUnordered},
+    FutureExt, StreamExt, TryStreamExt,
+};
 use kmem::Virt;
 use ksc::{
     async_handler,
     Error::{self, *},
 };
-use ktime::Instant;
+use ktime::{Instant, TimeOutExt};
 use rand_riscv::RandomState;
-use umifs::types::{FileType, Metadata, OpenOptions, Permissions};
+use sygnal::SigSet;
+use umifs::{
+    traits::Entry,
+    types::{FileType, Metadata, OpenOptions, Permissions},
+};
 use umio::SeekFrom;
 
 use super::Files;
@@ -986,3 +993,87 @@ fssc!(
         Ok(())
     }
 );
+
+#[derive(Debug, Clone, Copy, Default)]
+#[repr(C)]
+pub struct PollFd {
+    fd: i32,
+    events: umio::Event,
+    revents: umio::Event,
+}
+
+async fn poll_fds(
+    pfd: &mut [PollFd],
+    files: &[Arc<dyn Entry>],
+    deadline: Option<Instant>,
+) -> usize {
+    pfd.iter_mut()
+        .for_each(|pfd| pfd.revents = umio::Event::empty());
+
+    let iter = files.iter().zip(&*pfd).enumerate();
+    let events = iter.map(|(index, (e, p))| e.event(p.events).map(move |e| (index, e)));
+    let mut events = events.collect::<FuturesUnordered<_>>();
+
+    let mut count = 0;
+    match deadline {
+        Some(ddl) => loop {
+            let next = events.next().on_timeout(ddl, || None).await;
+            let Some((index, event)) = next else { break };
+            log::trace!("PFD fd = {}, event = {event:?}", pfd[index].fd);
+            pfd[index].revents |= event;
+            count += 1;
+        },
+        None => loop {
+            let Some((index, event)) = events.next().await else { break };
+            log::trace!("PFD fd = {}, event = {event:?}", pfd[index].fd);
+            pfd[index].revents |= event;
+            count += 1;
+        },
+    }
+    count
+}
+
+#[async_handler]
+pub async fn ppoll(
+    ts: &mut TaskState,
+    cx: UserCx<
+        '_,
+        fn(
+            UserPtr<PollFd, InOut>,
+            usize,
+            UserPtr<Ts, In>,
+            UserPtr<SigSet, In>,
+            usize,
+        ) -> Result<usize, Error>,
+    >,
+) -> ScRet {
+    let (mut poll_fd, len, timeout, _sigmask, sigmask_size) = cx.args();
+    let fut = async {
+        if sigmask_size != mem::size_of::<SigSet>() {
+            return Err(EINVAL);
+        }
+        if len > ts.files.get_limit() {
+            return Err(EINVAL);
+        }
+        let deadline = if timeout.is_null() {
+            None
+        } else {
+            Some(Instant::now() + timeout.read(ts.virt.as_ref()).await?.into())
+        };
+
+        let mut pfd = vec![PollFd::default(); len];
+        poll_fd.read_slice(ts.virt.as_ref(), &mut pfd).await?;
+
+        let files = stream::iter(&pfd)
+            .then(|pfd| ts.files.get(pfd.fd))
+            .try_collect::<Vec<_>>()
+            .await?;
+
+        let count = poll_fds(&mut pfd, &files, deadline).await;
+
+        poll_fd.write_slice(ts.virt.as_ref(), &pfd, false).await?;
+        Ok(count)
+    };
+    cx.ret(fut.await);
+    ScRet::Continue(None)
+}

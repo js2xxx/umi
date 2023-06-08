@@ -62,7 +62,7 @@ impl<F: Future> Future for TaskFut<F> {
 const TASK_GRAN: u64 = 20000;
 
 pub async fn user_loop(mut ts: TaskState, mut tf: TrapFrame) {
-    log::debug!("task {} startup, tf.a0 = {}", ts.task.tid, tf.gpr.tx.a[0]);
+    log::debug!("task {} startup", ts.task.tid);
 
     let mut stat_time = time::read64();
     let mut sched_time = stat_time;

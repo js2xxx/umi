@@ -14,6 +14,7 @@ use umifs::{
     traits::{Directory, DirectoryMut, Entry, FileSystem, Io, ToIo},
     types::{DirEntry, FileType, FsStat, Metadata, OpenOptions, Permissions},
 };
+use umio::IoPoll;
 
 pub struct TmpFs(Arc<TmpRoot>);
 
@@ -104,6 +105,7 @@ impl Entry for TmpRoot {
         Some(self)
     }
 }
+impl IoPoll for TmpRoot {}
 
 #[async_trait]
 impl Directory for TmpRoot {
@@ -206,3 +208,5 @@ impl Entry for TmpFile {
         })
     }
 }
+
+impl IoPoll for TmpFile {}
