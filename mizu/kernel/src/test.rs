@@ -28,6 +28,9 @@ pub async fn libc() {
 
     log::warn!("Start testing");
     while let Some(cmd) = cmd.next().await {
+        if cmd.is_empty() {
+            continue;
+        }
         log::info!("Executing cmd {cmd:?}");
 
         let task = Command::new("/runtest")

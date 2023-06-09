@@ -77,7 +77,7 @@ struct Fds {
     limit: AtomicUsize,
 }
 
-const LIMIT_DEFAULT: usize = 64;
+const LIMIT_DEFAULT: usize = 256;
 
 pub struct Files {
     fds: Arsc<Fds>,
@@ -86,27 +86,23 @@ pub struct Files {
 
 impl Files {
     pub fn new(stdio: [Arc<dyn Entry>; 3], cwd: PathBuf) -> Self {
+        let fd_info = |(i, entry)| {
+            let fd_info = FdInfo {
+                entry,
+                close_on_exec: false,
+                perm: if i < 2 {
+                    Permissions::SELF_W
+                } else {
+                    Permissions::SELF_R
+                },
+                saved_next_dirent: Default::default(),
+            };
+            (i as i32, fd_info)
+        };
+        let map = stdio.into_iter().enumerate().map(fd_info).collect();
         Files {
             fds: Arsc::new(Fds {
-                map: RwLock::new(
-                    stdio
-                        .into_iter()
-                        .enumerate()
-                        .map(|(i, entry)| {
-                            let fd_info = FdInfo {
-                                entry,
-                                close_on_exec: false,
-                                perm: if i < 2 {
-                                    Permissions::SELF_W
-                                } else {
-                                    Permissions::SELF_R
-                                },
-                                saved_next_dirent: Default::default(),
-                            };
-                            (i as i32, fd_info)
-                        })
-                        .collect(),
-                ),
+                map: RwLock::new(map),
                 id_alloc: Mutex::new(IdAlloc {
                     reuse: Vec::new(),
                     next: 3,

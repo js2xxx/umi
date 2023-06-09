@@ -6,7 +6,6 @@ use alloc::{boxed::Box, vec::Vec};
 use core::{
     cell::RefCell,
     future::Future,
-    hint,
     sync::atomic::{
         AtomicBool,
         Ordering::{Acquire, Release},
@@ -163,7 +162,14 @@ impl Context {
                 continue;
             }
 
-            hint::spin_loop();
+            core::hint::spin_loop();
+
+            // #[cfg(not(any(target_arch = "riscv32", target_arch = "riscv64")))]
+            // core::hint::spin_loop();
+            // #[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))]
+            // unsafe {
+            //     core::arch::asm!("wfi")
+            // }
         }
     }
 
