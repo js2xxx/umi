@@ -138,7 +138,7 @@ impl Entry for CachedDir {
     }
 }
 impl IoPoll for CachedDir {
-    fn event<'s: 'r, 'r>(&'s self, expected: Event) -> Boxed<'r, Event> {
+    fn event<'s: 'r, 'r>(&'s self, expected: Event) -> Boxed<'r, Option<Event>> {
         self.entry.event(expected)
     }
 }
@@ -207,7 +207,7 @@ impl Entry for CachedFile {
 }
 
 impl IoPoll for CachedFile {
-    fn event<'s: 'r, 'r>(&'s self, expected: Event) -> Boxed<'r, Event> {
+    fn event<'s: 'r, 'r>(&'s self, expected: Event) -> Boxed<'r, Option<Event>> {
         self.entry.event(expected)
     }
 }

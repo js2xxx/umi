@@ -94,7 +94,17 @@ impl Entry for TmpRoot {
     }
 
     async fn metadata(&self) -> Metadata {
-        todo!()
+        Metadata {
+            ty: FileType::DIR,
+            len: 0,
+            offset: rand_riscv::seed64(),
+            perm: Permissions::all_same(true, true, true),
+            block_size: PAGE_SIZE,
+            block_count: 0,
+            last_access: None,
+            last_modified: None,
+            last_created: None,
+        }
     }
 
     fn to_dir(self: Arc<Self>) -> Option<Arc<dyn Directory>> {

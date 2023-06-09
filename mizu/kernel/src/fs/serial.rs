@@ -2,7 +2,7 @@ use alloc::{boxed::Box, sync::Arc};
 use core::future::ready;
 
 use async_trait::async_trait;
-use futures_util::{stream, StreamExt};
+use futures_util::{stream, StreamExt, FutureExt};
 use ksc::{
     Boxed,
     Error::{self, EBADF, ENOSYS, ENOTDIR},
@@ -117,10 +117,10 @@ impl Entry for Serial {
 }
 
 impl IoPoll for Serial {
-    fn event<'s: 'r, 'r>(&'s self, expected: Event) -> Boxed<'r, Event> {
+    fn event<'s: 'r, 'r>(&'s self, expected: Event) -> Boxed<'r, Option<Event>> {
         if expected != Event::READABLE {
-            return Box::pin(ready(Event::INVALID));
+            return Box::pin(ready(None));
         }
-        Box::pin(crate::dev::Stdin::event())
+        Box::pin(crate::dev::Stdin::event().map(Some))
     }
 }

@@ -124,7 +124,8 @@ async fn handle_scause(scause: Scause, ts: &mut TaskState, tf: &mut TrapFrame) -
             Exception::UserEnvCall => {
                 let res = async {
                     let scn = tf.scn().map_err(Err)?;
-                    if scn != Scn::WRITE {
+                    if scn != Scn::WRITE || tf.syscall_arg::<0>() >= 3 {
+                        // Get rid of tracing writes to STDIO.
                         log::info!(
                             "task {} syscall {scn:?}, sepc = {:#x}",
                             ts.task.tid,

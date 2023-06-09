@@ -115,12 +115,12 @@ impl Entry for Receiver {
 
 #[async_trait]
 impl IoPoll for Receiver {
-    async fn event(&self, expected: umio::Event) -> umio::Event {
+    async fn event(&self, expected: umio::Event) -> Option<umio::Event> {
         if !expected.contains(umio::Event::READABLE) {
-            return umio::Event::INVALID;
+            return None;
         }
         let mut listener = None;
-        loop {
+        Some(loop {
             let pos = self.pos.load(SeqCst);
             let end = self.pipe.end_pos.load(SeqCst);
             if pos < end {
@@ -133,7 +133,7 @@ impl IoPoll for Receiver {
                 Some(listener) => listener.await,
                 None => listener = Some(self.pipe.readable.listen()),
             }
-        }
+        })
     }
 }
 
@@ -219,14 +219,14 @@ impl Drop for Sender {
 
 #[async_trait]
 impl IoPoll for Sender {
-    async fn event(&self, expected: umio::Event) -> umio::Event {
-        if expected != umio::Event::WRITABLE {
-            return umio::Event::INVALID;
+    async fn event(&self, expected: umio::Event) -> Option<umio::Event> {
+        if !expected.contains(umio::Event::WRITABLE) {
+            return None;
         }
         if Arsc::count(&self.pipe) == 1 {
-            return umio::Event::ERROR;
+            return Some(umio::Event::ERROR);
         }
-        umio::Event::WRITABLE
+        Some(umio::Event::WRITABLE)
     }
 }
 

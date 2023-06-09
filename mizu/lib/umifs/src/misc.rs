@@ -26,8 +26,8 @@ impl Io for Null {
         Ok(0)
     }
 
-    async fn write_at(&self, _: usize, _: &mut [IoSlice]) -> Result<usize, Error> {
-        Ok(0)
+    async fn write_at(&self, _: usize, buffer: &mut [IoSlice]) -> Result<usize, Error> {
+        Ok(ioslice_len(&buffer))
     }
 
     async fn flush(&self) -> Result<(), Error> {

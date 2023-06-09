@@ -44,6 +44,17 @@ pub async fn libc() {
     log::warn!("Goodbye!");
 }
 
+const ENVS: [&str; 8] = [
+    "PATH=/",
+    "USER=root",
+    "_=busybox",
+    "SHELL=/busybox",
+    "ENOUGH=1000000",
+    "LD_LIBRARY_PATH=/",
+    "LOGNAME=root",
+    "HOME=/",
+];
+
 async fn run_busybox(script: Option<&str>) -> (i32, Option<Sig>) {
     let mut cmd = Command::new("/busybox");
     cmd.open("busybox").await.unwrap();
@@ -51,16 +62,7 @@ async fn run_busybox(script: Option<&str>) -> (i32, Option<Sig>) {
         Some(script) => cmd.args(["busybox", "sh", script]),
         None => cmd.args(["busybox", "sh"]),
     };
-    let envs = [
-        "PATH=/",
-        "USER=root",
-        "_=busybox",
-        "SHELL=/busybox",
-        "LD_LIBRARY_PATH=/",
-        "LOGNAME=root",
-        "HOME=/",
-    ];
-    let task = cmd.envs(envs).spawn().await.unwrap();
+    let task = cmd.envs(ENVS).spawn().await.unwrap();
 
     task.wait().await
 }
@@ -76,7 +78,7 @@ async fn print_file(path: impl AsRef<Path>) {
 }
 
 #[allow(dead_code)]
-pub async fn busybox() {
+pub async fn busybox_cmd() {
     let oo = OpenOptions::RDONLY;
     let perm = Default::default();
 
@@ -102,6 +104,7 @@ pub async fn busybox() {
         let task = Command::new("/busybox")
             .image(runner.clone())
             .args(["busybox", "sh", "-c", &cmd])
+            .envs(ENVS)
             .spawn()
             .await
             .unwrap();
@@ -114,7 +117,7 @@ pub async fn busybox() {
 }
 
 #[allow(dead_code)]
-pub async fn busybox_debug(print_result: bool) {
+pub async fn busybox(print_result: bool) {
     let script = if print_result {
         "busybox_testcode_debug.sh"
     } else {
@@ -135,6 +138,48 @@ pub async fn busybox_debug(print_result: bool) {
 pub async fn lua() {
     let exit = run_busybox(Some("lua_testcode.sh")).await;
     log::info!("Lua test returned with {exit:?}");
+}
+
+#[allow(dead_code)]
+pub async fn lmbench_cmd() {
+    let oo = OpenOptions::RDONLY;
+    let perm = Default::default();
+
+    let (txt, _) = crate::fs::open("lmbench_cmd.txt".as_ref(), oo, perm)
+        .await
+        .unwrap();
+    let txt = txt.to_io().unwrap();
+    let stream = umio::lines(txt).map(|s| s.unwrap());
+    let mut cmd = pin!(stream);
+
+    log::warn!("Start testing");
+    while let Some(cmd) = cmd.next().await {
+        let cmd = cmd.trim();
+        if cmd.is_empty() {
+            continue;
+        }
+        let cmd = if cmd.starts_with("echo") {
+            "/busybox ".to_string() + cmd
+        } else {
+            "/".to_string() + cmd
+        };
+        println!(">>> Executing CMD {cmd:?}");
+
+        let task = Command::new(cmd.split_once(' ').unwrap().0)
+            .open_executable()
+            .await
+            .unwrap()
+            .args(cmd.split(' '))
+            .envs(ENVS)
+            .spawn()
+            .await
+            .unwrap();
+
+        let code = task.wait().await;
+        println!(">>> CMD {cmd:?} returned with {code:?}\n");
+    }
+
+    log::warn!("Goodbye!");
 }
 
 #[allow(dead_code)]
