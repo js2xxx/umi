@@ -412,7 +412,7 @@ impl Virt {
         let old = mem::replace(&mut *map, RangeMap::new(range.clone()));
 
         let count = (range.end.val() - range.start.val()) >> PAGE_SHIFT;
-        let _ = table.user_unmap_npages(range.start, count, frames(), ID_OFFSET);
+        table.unmap(range.clone(), frames(), ID_OFFSET);
         tlb::flush(self.cpu_mask.load(SeqCst), range.start, count);
 
         for (addr, mapping) in old {
@@ -459,10 +459,9 @@ impl Drop for Virt {
     fn drop(&mut self) {
         let range = self.map.get_mut().root_range();
         let count = (range.end.val() - range.start.val()) >> PAGE_SHIFT;
-        let _ = self
-            .root
+        self.root
             .get_mut()
-            .user_unmap_npages(*range.start, count, frames(), ID_OFFSET);
+            .unmap(*range.start..*range.end, frames(), ID_OFFSET);
         tlb::flush(self.cpu_mask.load(SeqCst), *range.start, count);
     }
 }
