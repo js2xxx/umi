@@ -16,7 +16,7 @@ use ksc::{
 };
 use ksync::{channel::Broadcast, AtomicArsc};
 use riscv::register::time;
-use sygnal::{Sig, SigCode, SigFields, SigInfo, SigSet, Signals};
+use sygnal::{Sig, SigCode, SigFields, SigInfo, SigSet};
 
 use crate::{
     executor,
@@ -310,7 +310,7 @@ async fn clone_task(
         } else {
             Default::default()
         },
-        sig: Signals::new(),
+        sig: Default::default(),
         shared_sig: AtomicArsc::new(if flags.contains(Flags::THREAD) {
             ts.task.shared_sig.load(SeqCst)
         } else {
