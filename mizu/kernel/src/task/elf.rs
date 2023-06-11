@@ -1,4 +1,4 @@
-use alloc::{sync::Arc, vec, vec::Vec};
+use alloc::{vec, vec::Vec};
 use core::{
     mem,
     ops::Range,
@@ -189,7 +189,7 @@ async fn map_segment(
 
         virt.map(
             Some(base + aligned_address),
-            Arc::new(segment),
+            segment,
             0,
             map_size >> PAGE_SHIFT,
             attr,

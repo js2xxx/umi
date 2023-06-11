@@ -231,7 +231,7 @@ impl IoPoll for Sender {
 }
 
 pub fn pipe() -> (Arc<dyn Entry>, Arc<dyn Entry>) {
-    let phys = Phys::new_anon(true);
+    let phys = Phys::new(true);
     let pipe = Arsc::new(Pipe {
         phys,
         readable: Event::new(),

@@ -1,6 +1,6 @@
 mod tlb;
 
-use alloc::{sync::Arc, vec::Vec};
+use alloc::vec::Vec;
 use core::{
     marker::PhantomPinned,
     mem,
@@ -24,7 +24,7 @@ use crate::{frame::frames, Phys};
 const ASLR_BIT: u32 = 30;
 
 struct Mapping {
-    phys: Arc<Phys>,
+    phys: Arsc<Phys>,
     start_index: usize,
     attr: Attr,
 }
@@ -127,7 +127,7 @@ impl Mapping {
 
     fn deep_fork(&mut self) -> Mapping {
         Mapping {
-            phys: Arc::new(self.phys.clone_as(self.phys.is_cow(), 0, None)),
+            phys: Arsc::new(self.phys.clone_as(self.phys.is_cow(), 0, None)),
             start_index: self.start_index,
             attr: self.attr,
         }
@@ -156,7 +156,7 @@ impl Virt {
     pub async fn map(
         &self,
         addr: Option<LAddr>,
-        phys: Arc<Phys>,
+        phys: Phys,
         start_index: usize,
         count: usize,
         attr: Attr,
@@ -177,7 +177,7 @@ impl Virt {
                     .ok_or(EINVAL)?;
                 let end = LAddr::from(start.val().checked_add(len).ok_or(EINVAL)?);
                 let mapping = Mapping {
-                    phys,
+                    phys: Arsc::new(phys),
                     start_index,
                     attr: attr | Attr::VALID,
                 };
@@ -193,7 +193,7 @@ impl Virt {
                 let addr = *ent.key().start;
                 log::trace!("Virt::map result = {:?}", ent.key());
                 ent.insert(Mapping {
-                    phys,
+                    phys: Arsc::new(phys),
                     start_index,
                     attr: attr | Attr::VALID,
                 });
@@ -418,7 +418,7 @@ impl Virt {
         for (addr, mapping) in old {
             let count: usize = (addr.end.val() - addr.start.val()) >> PAGE_SHIFT;
             for index in 0..count {
-                let dirty = mapping.attr.contains(Attr::WRITABLE);
+                let dirty = mapping.attr.contains(Attr::DIRTY);
                 let _ = mapping.phys.flush(index, Some(dirty), true).await;
             }
         }

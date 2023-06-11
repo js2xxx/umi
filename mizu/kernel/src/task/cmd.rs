@@ -245,7 +245,7 @@ impl InitTask {
         let addr = virt
             .map(
                 None,
-                Arc::new(Phys::new_anon(true)),
+                Phys::new(true),
                 0,
                 (stack_size >> PAGE_SHIFT) + 1,
                 stack_attr,

@@ -67,9 +67,8 @@ pub async fn user_loop(mut ts: TaskState, mut tf: TrapFrame) {
     let mut stat_time = time::read64();
     let mut sched_time = stat_time;
     let (code, sig) = 'life: loop {
-        match ts.handle_signals(&mut tf).await {
-            Ok(()) => {}
-            Err((code, sig)) => break 'life (code, Some(sig)),
+        if let Err((code, sig)) = ts.handle_signals(&mut tf).await {
+            break 'life (code, Some(sig))
         }
 
         let sys = time::read64();

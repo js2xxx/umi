@@ -28,7 +28,7 @@ pub fn new_phys(from: Arc<dyn Io>, cow: bool) -> Phys {
     if let Some(phys) = from.clone().downcast::<Phys>() {
         return phys.clone_as(cow, 0, None);
     }
-    let (phys, flusher) = Phys::new(from, 0, cow);
+    let (phys, flusher) = Phys::with_backend(from, 0, cow);
     crate::executor().spawn(flusher).detach();
     phys
 }
@@ -39,7 +39,7 @@ pub async fn deep_fork(virt: &Pin<Arsc<Virt>>) -> Result<Pin<Arsc<Virt>>, Error>
 
 #[allow(dead_code)]
 pub async fn test_phys() {
-    let p = Phys::new_anon(false);
+    let p = Phys::new(false);
 
     p.write_all_at(0, &[1, 2, 3, 4, 5]).await.unwrap();
 

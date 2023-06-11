@@ -1,4 +1,4 @@
-use alloc::{boxed::Box, sync::Arc};
+use alloc::boxed::Box;
 use core::{mem, time::Duration};
 
 use co_trap::UserCx;
@@ -34,7 +34,7 @@ pub async fn brk(ts: &mut TaskState, cx: UserCx<'_, fn(usize) -> Result<usize, E
             let new_page = (addr + PAGE_MASK) & !PAGE_MASK;
             let count = (new_page - old_page) >> PAGE_SHIFT;
             if count > 0 {
-                let phys = Arc::new(Phys::new_anon(true));
+                let phys = Phys::new(true);
                 ts.virt
                     .map(Some(old_page.into()), phys, 0, count, Attr::USER_RW)
                     .await?;
@@ -164,7 +164,7 @@ pub async fn mmap(
 
         let cow = flags.contains(Flags::PRIVATE);
         let phys = if flags.contains(Flags::ANONYMOUS) {
-            Phys::new_anon(cow)
+            Phys::new(cow)
         } else {
             let entry = ts.files.get(fd).await?;
             crate::mem::new_phys(entry.to_io().ok_or(EISDIR)?, cow)
@@ -195,10 +195,7 @@ pub async fn mmap(
         }
 
         let count = (len + PAGE_MASK) >> PAGE_SHIFT;
-        let addr = ts
-            .virt
-            .map(addr, Arc::new(phys), offset, count, attr)
-            .await?;
+        let addr = ts.virt.map(addr, phys, offset, count, attr).await?;
 
         if flags.contains(Flags::POPULATE) {
             ts.virt

@@ -2,7 +2,7 @@ use alloc::{boxed::Box, sync::Arc};
 use core::future::ready;
 
 use async_trait::async_trait;
-use futures_util::{stream, StreamExt, FutureExt};
+use futures_util::{stream, FutureExt, StreamExt};
 use ksc::{
     Boxed,
     Error::{self, EBADF, ENOSYS, ENOTDIR},

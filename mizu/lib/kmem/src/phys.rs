@@ -309,7 +309,7 @@ pub struct Phys {
 }
 
 impl Phys {
-    pub fn new(
+    pub fn with_backend(
         backend: Arc<dyn Io>,
         initial_pos: usize,
         cow: bool,
@@ -333,7 +333,7 @@ impl Phys {
         (phys, flusher(receiver, flushed, backend))
     }
 
-    pub fn new_anon(cow: bool) -> Phys {
+    pub fn new(cow: bool) -> Phys {
         Phys {
             branch: false,
             list: Mutex::new(FrameList {
@@ -425,7 +425,19 @@ impl Phys {
                     if let Some(parent) = list.parent.take() {
                         match parent {
                             Parent::Phys { phys, start, end } => match Arsc::try_unwrap(phys) {
-                                Ok(phys) => return Some((phys, start, end)),
+                                Ok(mut phys) => {
+                                    for fi in phys.list.get_mut().frames.values() {
+                                        if fi.pin > 0 {
+                                            list.parent = Some(Parent::Phys {
+                                                phys: Arsc::new(phys),
+                                                start,
+                                                end,
+                                            });
+                                            return None;
+                                        }
+                                    }
+                                    return Some((phys, start, end));
+                                }
                                 Err(phys) => list.parent = Some(Parent::Phys { phys, start, end }),
                             },
                             parent => list.parent = Some(parent),
@@ -442,9 +454,9 @@ impl Phys {
                             let mut list = self.list.lock();
 
                             let frames = mem::take(&mut parent.list.get_mut().frames);
-                            let iter = frames.into_iter().filter_map(|(index, fi)| {
-                                let index = index.checked_sub(start)?;
-                                end.map_or(true, |end| index < end).then_some((index, fi))
+                            let iter = frames.into_iter().filter_map(|(pi, fi)| {
+                                let index = pi.checked_sub(start)?;
+                                end.map_or(true, |end| pi < end).then_some((index, fi))
                             });
                             for (index, fi) in iter {
                                 let _ = list.frames.try_insert(index, fi);

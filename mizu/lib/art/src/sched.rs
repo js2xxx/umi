@@ -164,8 +164,8 @@ impl Context {
 
             core::hint::spin_loop();
 
-            // #[cfg(not(any(target_arch = "riscv32", target_arch = "riscv64")))]
-            // core::hint::spin_loop();
+            // #[cfg(not(any(target_arch = "riscv32", target_arch =
+            // "riscv64")))] core::hint::spin_loop();
             // #[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))]
             // unsafe {
             //     core::arch::asm!("wfi")

@@ -23,7 +23,9 @@ pub async fn libc() {
         });
     let mut cmd = pin!(stream);
 
-    let (runner, _) = crate::fs::open("runtest".as_ref(), oo, perm).await.unwrap();
+    let (runner, _) = crate::fs::open("runtest.exe".as_ref(), oo, perm)
+        .await
+        .unwrap();
     let runner = Arc::new(crate::mem::new_phys(runner.to_io().unwrap(), true));
 
     log::warn!("Start testing");

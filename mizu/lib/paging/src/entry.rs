@@ -470,7 +470,7 @@ impl Table {
                 let t = et.table_mut(level, id_offset);
                 let tb = match t {
                     Some(tb) => tb,
-                    None => return Err(Error::EntryExistent(false)),
+                    None => continue,
                 };
                 if begin_index != end_index {
                     let a;
@@ -611,7 +611,7 @@ mod tests {
     struct Alloc();
     unsafe impl PageAlloc for Alloc {
         fn alloc(&self) -> Option<NonNull<Table>> {
-            Global.allocate(PAGE_LAYOUT).ok().map(NonNull::cast)
+            Global.allocate_zeroed(PAGE_LAYOUT).ok().map(NonNull::cast)
         }
 
         unsafe fn dealloc(&self, ptr: NonNull<Table>) {
