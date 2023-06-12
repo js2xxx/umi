@@ -6,7 +6,7 @@ export ROOT			:= $(shell pwd)
 export TARGET_DIR 	:= $(ROOT)/target/$(TARGET)/$(MODE)
 export DEBUG_DIR   	:= $(ROOT)/debug
 
-export ROOTFS  ?= $(ROOT)/third-party/img/sdcard-comp2.img
+export ROOTFS  ?= $(ROOT)/third-party/img/sdcard-comp2-debug.img
 export SBI ?= $(ROOT)/third-party/bin/opensbi-$(BOARD)
 
 .PHONY: all build run debug test clean
@@ -24,7 +24,7 @@ QEMU_ARGS := -monitor stdio \
 	-kernel kernel-qemu \
 	-nographic \
 	-serial file:debug/qemu.log \
-	-smp 4 -m 4G \
+	-smp 4 -m 128M \
 	-drive file=$(ROOTFS),if=none,format=raw,id=x0 \
 	-device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0
 

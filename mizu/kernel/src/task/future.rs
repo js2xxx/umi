@@ -49,10 +49,7 @@ impl<F: Future> Future for TaskFut<F> {
     type Output = F::Output;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let clear = unsafe { self.virt.clone().load() };
-        if let Some(clear) = clear {
-            crate::executor().spawn(clear).detach();
-        }
+        unsafe { self.virt.clone().load() };
         let this = self.project();
         let ret = FP.set(this.fp, || this.fut.poll(cx));
         if ret.is_pending() {

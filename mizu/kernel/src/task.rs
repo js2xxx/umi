@@ -16,16 +16,13 @@ use core::pin::Pin;
 use arsc_rs::Arsc;
 use crossbeam_queue::SegQueue;
 use futures_util::future::{select, select_all, Either};
-use hashbrown::HashMap;
 use kmem::Virt;
 use ksc::Error::{self, ECHILD, EPERM};
 use ksync::{
     channel::{mpmc::Receiver, unbounded, Broadcast},
     AtomicArsc,
 };
-use rand_riscv::RandomState;
 use rv39_paging::{Attr, PAGE_SIZE};
-use spin::{Lazy, Mutex};
 use sygnal::{ActionSet, Sig, SigInfo, SigSet, Signals};
 
 pub use self::{cmd::Command, future::yield_now, syscall::*};
@@ -197,16 +194,16 @@ impl TaskState {
                     },
                 })
             }
+
+            self.virt.clear().await;
+            // let default_pt = LAddr::from(&crate::rxx::BOOT_PAGES as *const
+            // _).to_paddr(ID_OFFSET);
+            // unsafe { kmem::unset_virt(default_pt) };
         }
 
         let _ = self.files.flush_all().await;
 
         self.task.event.send(&TaskEvent::Exited(code, sig)).await;
         log::trace!("Sent exited event {code} {sig:?}");
-
-        ksync::critical(|| TASKS.lock().remove(&self.task.tid));
     }
 }
-
-static TASKS: Lazy<Mutex<HashMap<usize, Arc<Task>, RandomState>>> =
-    Lazy::new(|| Mutex::new(HashMap::with_hasher(RandomState::new())));

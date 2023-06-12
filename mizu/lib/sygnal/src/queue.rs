@@ -105,6 +105,7 @@ impl Signals {
     }
 
     pub async fn wait(&self, sigset: SigSet) -> SigInfo {
+        assert!(!sigset.is_empty());
         let wait_one = move |sig| self.wait_one(sig);
         let wait_any = future::select_all(sigset.map(wait_one));
         wait_any.await.0
@@ -118,6 +119,9 @@ impl Signals {
     }
 
     pub async fn wait_event(&self, sigset: SigSet) {
+        if sigset.is_empty() {
+            return;
+        }
         let wait_one = move |sig| self.wait_one_event(sig);
         let wait_any = future::select_all(sigset.map(wait_one));
         wait_any.await;

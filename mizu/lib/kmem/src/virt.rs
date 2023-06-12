@@ -11,7 +11,6 @@ use core::{
 };
 
 use arsc_rs::Arsc;
-use futures_util::Future;
 use ksc_core::Error::{self, EFAULT, EINVAL, ENOSPC, EPERM};
 use ksync::Mutex;
 use range_map::{AslrKey, RangeMap};
@@ -19,6 +18,7 @@ use rv39_paging::{
     Attr, LAddr, PAddr, Table, ID_OFFSET, PAGE_LAYOUT, PAGE_MASK, PAGE_SHIFT, PAGE_SIZE,
 };
 
+pub use self::tlb::unset_virt;
 use crate::{frame::frames, Phys};
 
 const ASLR_BIT: u32 = 30;
@@ -149,7 +149,7 @@ impl Virt {
     /// The caller must ensure that the current executing address is mapped
     /// correctly.
     #[inline]
-    pub unsafe fn load(self: Pin<Arsc<Self>>) -> Option<impl Future<Output = ()> + Send + 'static> {
+    pub unsafe fn load(self: Pin<Arsc<Self>>) {
         tlb::set_virt(self)
     }
 

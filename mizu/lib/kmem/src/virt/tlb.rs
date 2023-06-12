@@ -6,19 +6,18 @@ use core::{
 };
 
 use arsc_rs::Arsc;
-use futures_util::Future;
 use riscv::{
     asm::{sfence_vma, sfence_vma_all},
     register::{satp, satp::Mode::Sv39},
 };
-use rv39_paging::{LAddr, ID_OFFSET, PAGE_SHIFT};
+use rv39_paging::{LAddr, PAddr, ID_OFFSET, PAGE_SHIFT};
 
 use crate::Virt;
 
 #[thread_local]
 static mut CUR_VIRT: *const Virt = ptr::null();
 
-pub fn set_virt(virt: Pin<Arsc<Virt>>) -> Option<impl Future<Output = ()> + Send + 'static> {
+pub fn set_virt(virt: Pin<Arsc<Virt>>) {
     let addr = unsafe { ptr::addr_of_mut!(*virt.root.as_ptr()) };
 
     virt.cpu_mask.fetch_or(1 << hart_id::hart_id(), SeqCst);
@@ -33,14 +32,32 @@ pub fn set_virt(virt: Pin<Arsc<Virt>>) -> Option<impl Future<Output = ()> + Send
             satp::set(Sv39, 0, paddr >> PAGE_SHIFT);
             sfence_vma_all()
         }
-        if let Some(ref old) = ret {
+        if let Some(old) = ret {
             log::debug!("tlb::set_virt: {:p} => {:p}", old.root.as_ptr(), addr);
             old.cpu_mask.fetch_and(!(1 << hart_id::hart_id()), SeqCst);
         } else {
             log::debug!("tlb::set_virt: K => {:p}", addr);
         }
     }
-    ret.and_then(|ret| (Arsc::count(&ret) == 1).then_some(async move { ret.clear().await }))
+}
+
+/// # Safety
+///
+/// The caller must ensure the validity of the page tables contained in
+/// `default_pt`.
+pub unsafe fn unset_virt(default_pt: PAddr) {
+    let old = unsafe { mem::replace(&mut CUR_VIRT, ptr::null()) };
+
+    let ret = NonNull::new(old.cast_mut()).map(|old| unsafe { Arsc::from_raw(old.as_ptr()) });
+
+    unsafe {
+        satp::set(Sv39, 0, *default_pt >> PAGE_SHIFT);
+        sfence_vma_all()
+    }
+    if let Some(ref old) = ret {
+        log::debug!("tlb::set_virt: {:p} => K", old.root.as_ptr());
+        old.cpu_mask.fetch_and(!(1 << hart_id::hart_id()), SeqCst);
+    }
 }
 
 pub fn flush(cpu_mask: usize, addr: LAddr, count: usize) {

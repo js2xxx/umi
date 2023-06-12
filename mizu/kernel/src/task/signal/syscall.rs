@@ -1,5 +1,5 @@
 use alloc::boxed::Box;
-use core::{mem, num::NonZeroI32, pin::pin, sync::atomic::Ordering::SeqCst, time::Duration};
+use core::{mem, num::NonZeroI32, pin::pin, sync::atomic::Ordering::SeqCst};
 
 use co_trap::UserCx;
 use futures_util::future::{select, Either};
@@ -224,7 +224,11 @@ pub async fn sigtimedwait(
             return Err(EINVAL);
         }
         let set = set.read(ts.virt.as_ref()).await?;
-        let dur: Duration = tv.read(ts.virt.as_ref()).await?.into();
+        let dur = tv.read(ts.virt.as_ref()).await?.into();
+        if set.is_empty() {
+            ktime::sleep(dur).await;
+            return Ok(0)
+        }
 
         let shared_sig = ts.task.shared_sig.load(SeqCst);
 

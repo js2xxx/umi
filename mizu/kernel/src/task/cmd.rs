@@ -32,7 +32,7 @@ use crate::{
         elf, fd,
         fd::Files,
         future::{user_loop, TaskFut},
-        Task, TaskState, DEFAULT_STACK_ATTR, DEFAULT_STACK_SIZE, TASKS,
+        Task, TaskState, DEFAULT_STACK_ATTR, DEFAULT_STACK_SIZE, 
     },
 };
 
@@ -383,7 +383,6 @@ impl InitTask {
             exit_signal: Some(Sig::SIGCHLD),
         };
 
-        ksync::critical(|| TASKS.lock().insert(tid, task.clone()));
         let fut = TaskFut::new(ts.virt.clone(), user_loop(ts, self.tf));
         executor().spawn(fut).detach();
 
