@@ -14,6 +14,7 @@ ktime = {path = "../ktime"}
 rand-riscv = {path = "../rand-riscv"}
 # External crates
 arsc-rs = {git = "https://github.com/js2xxx/arsc"}
+atomic_refcell = "0"
 crossbeam-epoch = {version = "0", default-features = false, features = ["alloc", "nightly"]}
 crossbeam-queue = {version = "0", default-features = false, features = ["alloc", "nightly"]}
 event-listener = {git = "https://github.com/js2xxx/event-listener", default-features = false}

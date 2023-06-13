@@ -12,4 +12,5 @@ test = []
 ksync-core = {path = "../ksync-core"}
 # External crates
 buddy_system_allocator = {version = "0", default-features = false}
+log = "0"
 spin = "0"

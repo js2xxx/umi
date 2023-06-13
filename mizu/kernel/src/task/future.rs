@@ -62,7 +62,7 @@ impl<F: Future> Future for TaskFut<F> {
 const TASK_GRAN: u64 = 20000;
 
 pub async fn user_loop(mut ts: TaskState, mut tf: TrapFrame) {
-    log::debug!("task {} startup", ts.task.tid);
+    log::debug!("task {} startup, a0 = {}", ts.task.tid, tf.gpr.tx.a[0]);
 
     let mut stat_time = time::read64();
     let mut sched_time = stat_time;
@@ -80,6 +80,11 @@ pub async fn user_loop(mut ts: TaskState, mut tf: TrapFrame) {
             ts.task.tid,
             tf.sepc
         );
+        if !crate::mem::USER_RANGE.contains(&tf.sepc) {
+            log::warn!("ILLEGAL USER DEST: {:#x}", tf.sepc);
+            break 'life (i32::MIN, Some(Sig::SIGSEGV));
+        }
+
         let (scause, fr) = crate::trap::yield_to_user(&mut tf);
 
         let usr = time::read64();

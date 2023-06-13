@@ -1,5 +1,6 @@
 #![cfg_attr(not(feature = "test"), no_std)]
 #![feature(once_cell)]
+#![feature(result_option_inspect)]
 
 mod imp;
 

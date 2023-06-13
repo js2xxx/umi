@@ -40,11 +40,15 @@ impl Allocator {
 unsafe impl GlobalAlloc for Allocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let res = ksync_core::critical(|| self.0.lock().alloc(layout));
+        // if let Ok(ptr) = res {
+        //     log::trace!("+++ {ptr:?} {layout:?}");
+        // }
         res.map_or(ptr::null_mut(), NonNull::as_ptr)
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         if let Some(ptr) = NonNull::new(ptr) {
+            // log::trace!("--- {ptr:?} {layout:?}");
             ksync_core::critical(|| self.0.lock().dealloc(ptr, layout))
         }
     }

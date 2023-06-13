@@ -85,6 +85,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "atomic_refcell"
+version = "0.1.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "79d6dc922a2792b006573f60b2648076355daeae5ce9cb59507e5908c9625d31"
+
+[[package]]
 name = "autocfg"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -363,6 +369,7 @@ version = "0.1.0"
 dependencies = [
  "buddy_system_allocator",
  "ksync-core",
+ "log",
  "spin",
 ]
 
@@ -432,6 +439,7 @@ name = "ksync"
 version = "0.1.0"
 dependencies = [
  "arsc-rs",
+ "atomic_refcell",
  "crossbeam-epoch",
  "crossbeam-queue",
  "event-listener",
