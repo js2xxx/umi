@@ -1,11 +1,35 @@
 use alloc::{string::ToString, sync::Arc};
-use core::pin::pin;
+use core::{iter, pin::pin};
 
 use futures_util::{stream, StreamExt};
 use sygnal::Sig;
 use umifs::{path::Path, types::OpenOptions};
 
 use crate::{println, task::Command};
+
+fn split_cmd(cmd: &str) -> impl Iterator<Item = &str> + '_ {
+    fn find_next(cmd: &str) -> Option<usize> {
+        let space = cmd.find(' ')?;
+        match cmd.find('"') {
+            Some(next) if next < space => {
+                let (prefix, suffix) = cmd.split_at(next + 1);
+                Some(suffix.find('"')? + 1 + prefix.len())
+            }
+            _ => Some(space),
+        }
+    }
+    let gen = iter::successors((!cmd.is_empty()).then_some(("", cmd)), |(_, cmd)| {
+        let cmd = cmd.trim_start();
+        if cmd.is_empty() {
+            return None;
+        }
+        Some(match find_next(cmd) {
+            Some(pos) => cmd.split_at(pos),
+            None => (cmd, ""),
+        })
+    });
+    gen.skip(1).map(|(ret, _)| ret)
+}
 
 #[allow(dead_code)]
 pub async fn libc() {
@@ -37,7 +61,7 @@ pub async fn libc() {
 
         let task = Command::new("/runtest")
             .image(runner.clone())
-            .args(cmd.split(' '))
+            .args(split_cmd(&cmd))
             .spawn()
             .await
             .unwrap();
@@ -150,7 +174,7 @@ pub async fn lmbench_cmd() {
     let oo = OpenOptions::RDONLY;
     let perm = Default::default();
 
-    let (txt, _) = crate::fs::open("lmbench_cmd.txt".as_ref(), oo, perm)
+    let (txt, _) = crate::fs::open("lmbench_testcode.sh".as_ref(), oo, perm)
         .await
         .unwrap();
     let txt = txt.to_io().unwrap();
@@ -160,7 +184,7 @@ pub async fn lmbench_cmd() {
     log::warn!("Start testing");
     while let Some(cmd) = cmd.next().await {
         let cmd = cmd.trim();
-        if cmd.is_empty() {
+        if cmd.is_empty() || cmd.contains('#') {
             continue;
         }
         let cmd = if cmd.starts_with("echo") {
@@ -174,7 +198,7 @@ pub async fn lmbench_cmd() {
             .open_executable()
             .await
             .unwrap()
-            .args(cmd.split(' '))
+            .args(split_cmd(&cmd))
             .envs(ENVS)
             .spawn()
             .await

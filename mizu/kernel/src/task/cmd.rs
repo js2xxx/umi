@@ -32,7 +32,7 @@ use crate::{
         elf, fd,
         fd::Files,
         future::{user_loop, TaskFut},
-        Task, TaskState, DEFAULT_STACK_ATTR, DEFAULT_STACK_SIZE, 
+        Task, TaskState, DEFAULT_STACK_ATTR, DEFAULT_STACK_SIZE,
     },
 };
 

@@ -329,6 +329,17 @@ pub async fn sendfile(
 }
 
 #[async_handler]
+pub async fn fsync(ts: &mut TaskState, cx: UserCx<'_, fn(i32) -> Result<(), Error>>) -> ScRet {
+    let fd = cx.args();
+    let fut = async {
+        let file = ts.files.get(fd).await?;
+        file.to_io().ok_or(EISDIR)?.flush().await
+    };
+    cx.ret(fut.await);
+    ScRet::Continue(None)
+}
+
+#[async_handler]
 pub async fn readlinkat(
     ts: &mut TaskState,
     cx: UserCx<'_, fn(i32, UserPtr<u8, In>, UserPtr<u8, Out>, usize) -> Result<usize, Error>>,

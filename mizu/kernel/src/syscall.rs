@@ -71,6 +71,7 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         .map(PPOLL, fd::ppoll)
         .map(PSELECT6, fd::pselect)
         .map(SENDFILE, fd::sendfile)
+        .map(FSYNC, fd::fsync)
         .map(CHDIR, fd::chdir)
         .map(GETCWD, fd::getcwd)
         .map(DUP, fd::dup)

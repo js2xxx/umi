@@ -227,7 +227,7 @@ pub async fn sigtimedwait(
         let dur = tv.read(ts.virt.as_ref()).await?.into();
         if set.is_empty() {
             ktime::sleep(dur).await;
-            return Ok(0)
+            return Ok(0);
         }
 
         let shared_sig = ts.task.shared_sig.load(SeqCst);
