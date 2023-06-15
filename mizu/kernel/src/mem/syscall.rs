@@ -210,6 +210,41 @@ pub async fn mmap(
 }
 
 #[async_handler]
+pub async fn msync(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(usize, usize, u32) -> Result<(), Error>>,
+) -> ScRet {
+    const MS_ASYNC: u32 = 1; // sync memory asynchronously
+    const MS_INVALIDATE: u32 = 2; // invalidate the caches
+    const MS_SYNC: u32 = 4; // synchronous memory sync
+
+    let (addr, len, flags) = cx.args();
+    let fut = async {
+        // let range = if flags & MS_INVALIDATE != 0 {
+        //     crate::mem::USER_RANGE
+        // } else {
+        //     addr..addr.checked_add(len).ok_or(EINVAL)?
+        // };
+        let range = addr..addr.checked_add(len).ok_or(EINVAL)?;
+        let range = range.start.into()..range.end.into();
+
+        match flags & !MS_INVALIDATE {
+            MS_ASYNC => {
+                let virt = ts.virt.clone();
+                let task = async move { virt.decommit_range(range).await };
+                crate::executor().spawn(task).detach();
+            }
+            MS_SYNC | 0 => ts.virt.decommit_range(range).await?,
+            _ => return Err(EINVAL),
+        }
+
+        Ok(())
+    };
+    cx.ret(fut.await);
+    ScRet::Continue(None)
+}
+
+#[async_handler]
 pub async fn mprotect(
     ts: &mut TaskState,
     cx: UserCx<'_, fn(usize, usize, i32) -> Result<(), Error>>,

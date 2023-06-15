@@ -194,4 +194,24 @@ pub async fn test_file() {
         file.read_exact_at(0, &mut buf).await.unwrap();
         assert_eq!(buf, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
     }
+
+    {
+        let (tx, rx) = pipe();
+        let tx = tx.to_io().unwrap();
+        let rx = rx.to_io().unwrap();
+
+        let tx_task = executor().spawn(async move {
+            for index in 0..100 {
+                tx.write_all(&[index; 100]).await.unwrap();
+            }
+        });
+
+        let mut buf = [0; 100];
+        for index in 0..100 {
+            rx.read_exact(&mut buf).await.unwrap();
+            assert_eq!(buf, [index; 100]);
+        }
+
+        tx_task.await;
+    }
 }
