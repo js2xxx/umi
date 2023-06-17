@@ -31,7 +31,7 @@ type FsCollection = BTreeMap<PathBuf, FsHandle>;
 struct FsHandle {
     dev: Cow<'static, str>,
     fs: Arsc<dyn FileSystem>,
-    unmount: Sender<ArrayQueue<()>>,
+    flush: Sender<ArrayQueue<()>>,
 }
 
 impl fmt::Debug for FsHandle {
@@ -48,7 +48,7 @@ pub fn mount(path: PathBuf, dev: Cow<'static, str>, fs: Arsc<dyn FileSystem>) {
     let task = async move {
         loop {
             sleep(Duration::from_secs(1)).await;
-            if matches!(rx.try_recv(), Ok(()) | Err(TryRecvError::Closed(Some(())))) {
+            if let Err(TryRecvError::Closed(_)) = rx.try_recv() {
                 let _ = fs2.flush().await;
                 break;
             }
@@ -56,22 +56,23 @@ pub fn mount(path: PathBuf, dev: Cow<'static, str>, fs: Arsc<dyn FileSystem>) {
         }
     };
     executor().spawn(task).detach();
-    let handle = FsHandle {
-        dev,
-        fs,
-        unmount: tx,
-    };
+    let handle = FsHandle { dev, fs, flush: tx };
 
     let old = ksync::critical(|| FS.write().insert(path, handle));
     if let Some(old) = old {
-        let _ = old.unmount.try_send(());
+        let _ = old.flush.try_send(());
     }
+}
+
+pub fn sync() {
+    let fs = ksync::critical(|| FS.read().clone());
+    fs.values().for_each(|fs| drop(fs.flush.try_send(())))
 }
 
 pub fn unmount(path: &Path) {
     let handle = ksync::critical(|| FS.write().remove(path));
     if let Some(fs_handle) = handle {
-        let _ = fs_handle.unmount.try_send(());
+        let _ = fs_handle.flush.try_send(());
     }
 }
 

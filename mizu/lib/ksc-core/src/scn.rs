@@ -45,6 +45,7 @@ pub enum Scn {
     READLINKAT = 78,
     NEWFSTATAT = 79,
     FSTAT = 80,
+    SYNC = 81,
     FSYNC = 82,
     UTIMENSAT = 88,
     EXIT = 93,

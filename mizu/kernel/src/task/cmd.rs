@@ -392,6 +392,7 @@ impl InitTask {
     pub async fn reset(self, ts: &mut TaskState, tf: &mut TrapFrame) {
         ksync::critical(|| *ts.task.executable.lock() = self.executable);
         crate::trap::FP.with(|fp| fp.mark_reset());
+        crate::task::yield_now().await;
         ts.task.shared_sig.swap(Default::default(), SeqCst);
         ts.brk = 0;
         ts.virt = self.virt;

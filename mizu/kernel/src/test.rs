@@ -84,7 +84,7 @@ const ENVS: [&str; 8] = [
     "HOME=/",
 ];
 
-async fn run_busybox(script: Option<&str>) -> (i32, Option<Sig>) {
+pub async fn run_busybox(script: Option<&str>) -> (i32, Option<Sig>) {
     let mut cmd = Command::new("/busybox");
     cmd.open("busybox").await.unwrap();
     match script {

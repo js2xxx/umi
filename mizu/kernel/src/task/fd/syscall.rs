@@ -340,6 +340,13 @@ pub async fn fsync(ts: &mut TaskState, cx: UserCx<'_, fn(i32) -> Result<(), Erro
 }
 
 #[async_handler]
+pub async fn sync(_: &mut TaskState, cx: UserCx<'_, fn()>) -> ScRet {
+    crate::fs::sync();
+    cx.ret(());
+    ScRet::Continue(None)
+}
+
+#[async_handler]
 pub async fn readlinkat(
     ts: &mut TaskState,
     cx: UserCx<'_, fn(i32, UserPtr<u8, In>, UserPtr<u8, Out>, usize) -> Result<usize, Error>>,
