@@ -399,6 +399,7 @@ async fn clone_task(
         }
     }
 
+    yield_now().await;
     let fut = TaskFut::new(new_ts.virt.clone(), user_loop(new_ts, new_tf));
     executor().spawn(fut).detach();
 

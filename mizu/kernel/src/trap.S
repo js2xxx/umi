@@ -58,6 +58,10 @@ ktrap_entry:
 .global _save_fp
 .type _save_fp, @function
 _save_fp:
+    li t1, 0x6000 // Dirty
+    csrs sstatus, t1
+
+    frcsr t0
     fsd f0, 0*8(a0)
     fsd f1, 1*8(a0)
     fsd f2, 2*8(a0)
@@ -90,11 +94,18 @@ _save_fp:
     fsd f29, 29*8(a0)
     fsd f30, 30*8(a0)
     fsd f31, 31*8(a0)
+    sw t0, 32*8(a0)
+
+    csrc sstatus, t1
     ret
 
 .global _load_fp
 .type _load_fp, @function
 _load_fp:
+    li t1, 0x6000 // Dirty
+    csrs sstatus, t1
+
+    lw t0, 32*8(a0)
     fld f0, 0*8(a0)
     fld f1, 1*8(a0)
     fld f2, 2*8(a0)
@@ -127,6 +138,9 @@ _load_fp:
     fld f29, 29*8(a0)
     fld f30, 30*8(a0)
     fld f31, 31*8(a0)
+    fscsr t0
+
+    csrc sstatus, t1
     ret
 
 .global _checked_copy
