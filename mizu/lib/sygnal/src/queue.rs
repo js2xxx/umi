@@ -1,6 +1,6 @@
 use core::{
     array,
-    future::Future,
+    future::{pending, Future},
     pin::Pin,
     sync::atomic::{AtomicU64, Ordering::SeqCst},
     task::{ready, Context, Poll},
@@ -105,9 +105,26 @@ impl Signals {
     }
 
     pub async fn wait(&self, sigset: SigSet) -> SigInfo {
+        assert!(!sigset.is_empty());
         let wait_one = move |sig| self.wait_one(sig);
         let wait_any = future::select_all(sigset.map(wait_one));
         wait_any.await.0
+    }
+
+    pub fn wait_one_event(&self, sig: Sig) -> WaitOneEvent {
+        WaitOneEvent {
+            pending: &self.pending[sig.index()],
+            listener: None,
+        }
+    }
+
+    pub async fn wait_event(&self, sigset: SigSet) {
+        if sigset.is_empty() {
+            return pending().await;
+        }
+        let wait_one = move |sig| self.wait_one_event(sig);
+        let wait_any = future::select_all(sigset.map(wait_one));
+        wait_any.await;
     }
 }
 
@@ -137,6 +154,31 @@ impl Future for WaitOne<'_> {
                     }
                     None => self.listener = Some(self.pending.event.listen()),
                 },
+            }
+        }
+    }
+}
+
+#[must_use = "futures do nothing unless you `.await` or poll them"]
+pub struct WaitOneEvent<'a> {
+    pending: &'a SigPending,
+    listener: Option<EventListener>,
+}
+
+impl Future for WaitOneEvent<'_> {
+    type Output = ();
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        loop {
+            if !self.pending.queue.is_empty() {
+                break Poll::Ready(());
+            }
+            match self.listener.as_mut() {
+                Some(listener) => {
+                    ready!(listener.poll_unpin(cx));
+                    self.listener = None;
+                }
+                None => self.listener = Some(self.pending.event.listen()),
             }
         }
     }

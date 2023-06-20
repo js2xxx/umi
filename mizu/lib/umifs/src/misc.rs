@@ -2,12 +2,12 @@ use alloc::{boxed::Box, sync::Arc};
 
 use async_trait::async_trait;
 use ksc_core::Error::{self, EEXIST, ENOTDIR, EPERM};
-use umio::{ioslice_len, Io};
+use umio::{ioslice_len, Io, IoPoll, IoSlice, IoSliceMut, SeekFrom};
 
 use crate::{
     path::Path,
     traits::Entry,
-    types::{FileType, IoSlice, IoSliceMut, Metadata, OpenOptions, Permissions, SeekFrom},
+    types::{FileType, Metadata, OpenOptions, Permissions},
 };
 
 pub struct Null;
@@ -26,8 +26,8 @@ impl Io for Null {
         Ok(0)
     }
 
-    async fn write_at(&self, _: usize, _: &mut [IoSlice]) -> Result<usize, Error> {
-        Ok(0)
+    async fn write_at(&self, _: usize, buffer: &mut [IoSlice]) -> Result<usize, Error> {
+        Ok(ioslice_len(&buffer))
     }
 
     async fn flush(&self) -> Result<(), Error> {
@@ -67,6 +67,8 @@ impl Entry for Null {
         }
     }
 }
+
+impl IoPoll for Null {}
 
 pub struct Zero;
 
@@ -128,6 +130,8 @@ impl Entry for Zero {
         }
     }
 }
+
+impl IoPoll for Zero {}
 
 pub async fn open_file<E: Entry>(
     this: Arc<E>,

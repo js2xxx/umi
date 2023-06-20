@@ -7,7 +7,7 @@ use ksc::{
     async_handler,
     Error::{self, EINVAL, EPERM, ESRCH, ETIMEDOUT},
 };
-use ktime::{TimeOutExt, Timer};
+use ktime::TimeOutExt;
 use rv39_paging::{LAddr, PAGE_SIZE};
 use sygnal::{Action, ActionType, Sig, SigCode, SigFields, SigInfo, SigSet};
 
@@ -225,13 +225,17 @@ pub async fn sigtimedwait(
         }
         let set = set.read(ts.virt.as_ref()).await?;
         let dur = tv.read(ts.virt.as_ref()).await?.into();
+        if set.is_empty() {
+            ktime::sleep(dur).await;
+            return Ok(0);
+        }
 
         let shared_sig = ts.task.shared_sig.load(SeqCst);
 
         let local = pin!(ts.task.sig.wait(set));
         let shared = pin!(shared_sig.wait(set));
         let res = select(local, shared)
-            .ok_or_timeout(Timer::after(dur), || ETIMEDOUT)
+            .ok_or_timeout(dur, || ETIMEDOUT)
             .await?;
         let si = match res {
             Either::Left((si, _)) => si,

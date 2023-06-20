@@ -19,7 +19,7 @@ use ksync::channel::Broadcast;
 use rand_riscv::rand_core::RngCore;
 use riscv::register::sstatus;
 use rv39_paging::{Attr, LAddr, ID_OFFSET, PAGE_MASK, PAGE_SHIFT, PAGE_SIZE};
-use sygnal::{ActionSet, Sig, SigSet, Signals};
+use sygnal::{ActionSet, Sig, SigSet};
 use umifs::{
     path::Path,
     types::{OpenOptions, Permissions},
@@ -32,7 +32,7 @@ use crate::{
         elf, fd,
         fd::Files,
         future::{user_loop, TaskFut},
-        Task, TaskState, DEFAULT_STACK_ATTR, DEFAULT_STACK_SIZE, TASKS,
+        Task, TaskState, DEFAULT_STACK_ATTR, DEFAULT_STACK_SIZE,
     },
 };
 
@@ -245,7 +245,7 @@ impl InitTask {
         let addr = virt
             .map(
                 None,
-                Arc::new(Phys::new_anon(true)),
+                Phys::new(true),
                 0,
                 (stack_size >> PAGE_SHIFT) + 1,
                 stack_attr,
@@ -363,7 +363,7 @@ impl InitTask {
 
             times: Default::default(),
 
-            sig: Signals::new(),
+            sig: Default::default(),
             shared_sig: Default::default(),
             event: Broadcast::new(),
         });
@@ -383,7 +383,6 @@ impl InitTask {
             exit_signal: Some(Sig::SIGCHLD),
         };
 
-        ksync::critical(|| TASKS.lock().insert(tid, task.clone()));
         let fut = TaskFut::new(ts.virt.clone(), user_loop(ts, self.tf));
         executor().spawn(fut).detach();
 
@@ -393,6 +392,7 @@ impl InitTask {
     pub async fn reset(self, ts: &mut TaskState, tf: &mut TrapFrame) {
         ksync::critical(|| *ts.task.executable.lock() = self.executable);
         crate::trap::FP.with(|fp| fp.mark_reset());
+        crate::task::yield_now().await;
         ts.task.shared_sig.swap(Default::default(), SeqCst);
         ts.brk = 0;
         ts.virt = self.virt;

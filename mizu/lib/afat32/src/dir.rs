@@ -7,8 +7,9 @@ use ksc_core::Error::{self, EEXIST, EINVAL, EIO, EISDIR, ENOENT, ENOSYS, ENOTDIR
 use umifs::{
     path::Path,
     traits::{Directory, DirectoryMut, Entry, Io, IoExt},
-    types::{FileType, IoSlice, IoSliceMut, Metadata, OpenOptions, Permissions, SeekFrom},
+    types::{FileType, Metadata, OpenOptions, Permissions},
 };
+use umio::{IoPoll, IoSlice, IoSliceMut, SeekFrom};
 
 use crate::{
     dirent::{
@@ -479,6 +480,7 @@ impl<T: TimeProvider> Entry for FatDir<T> {
         Some(self as _)
     }
 }
+impl<T: TimeProvider> IoPoll for FatDir<T> {}
 
 #[async_trait]
 impl<T: TimeProvider> Directory for FatDir<T> {
@@ -546,9 +548,17 @@ impl<T: TimeProvider> FatDir<T> {
         let mut i: u32 = 0;
         loop {
             let mut buf = [0; DIR_ENTRY_SIZE as usize];
-            self.file
-                .read_exact_at((i * DIR_ENTRY_SIZE) as usize, &mut buf)
+            let len = self
+                .file
+                .read_at((i * DIR_ENTRY_SIZE) as usize, &mut [&mut buf])
                 .await?;
+            if len < DIR_ENTRY_SIZE as usize {
+                // first unused entry at the end - all remaining space can be used
+                if num_free == 0 {
+                    first_free = i;
+                }
+                return Ok(u64::from(first_free * DIR_ENTRY_SIZE));
+            }
 
             let (_, raw_entry) = DirEntryData::parse(&buf)?;
             if raw_entry.is_end() {

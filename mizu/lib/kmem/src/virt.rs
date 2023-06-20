@@ -1,6 +1,6 @@
 mod tlb;
 
-use alloc::{sync::Arc, vec::Vec};
+use alloc::vec::Vec;
 use core::{
     marker::PhantomPinned,
     mem,
@@ -11,7 +11,6 @@ use core::{
 };
 
 use arsc_rs::Arsc;
-use futures_util::Future;
 use ksc_core::Error::{self, EFAULT, EINVAL, ENOSPC, EPERM};
 use ksync::Mutex;
 use range_map::{AslrKey, RangeMap};
@@ -19,12 +18,13 @@ use rv39_paging::{
     Attr, LAddr, PAddr, Table, ID_OFFSET, PAGE_LAYOUT, PAGE_MASK, PAGE_SHIFT, PAGE_SIZE,
 };
 
+pub use self::tlb::unset_virt;
 use crate::{frame::frames, Phys};
 
 const ASLR_BIT: u32 = 30;
 
 struct Mapping {
-    phys: Arc<Phys>,
+    phys: Arsc<Phys>,
     start_index: usize,
     attr: Attr,
 }
@@ -87,7 +87,7 @@ impl Mapping {
             let entry = table.la2pte_alloc(addr, frames(), ID_OFFSET)?;
             let base = if !entry.is_set() {
                 let writable = writable.then_some(PAGE_SIZE);
-                let (frame, _) = self.phys.commit(index, writable, true).await?;
+                let (frame, _) = self.phys.commit(index, writable).await?;
                 let base = frame.base();
                 *entry = rv39_paging::Entry::new(base, self.attr, rv39_paging::Level::pt());
                 flush.count += 1;
@@ -115,7 +115,7 @@ impl Mapping {
         {
             if let Ok(entry) = table.la2pte(addr, ID_OFFSET) {
                 let dirty = entry.get(rv39_paging::Level::pt()).1.contains(Attr::DIRTY);
-                self.phys.flush(index, Some(dirty), true).await?;
+                self.phys.flush(index, Some(dirty)).await?;
                 entry.reset();
                 flush.count += 1;
             } else {
@@ -127,7 +127,7 @@ impl Mapping {
 
     fn deep_fork(&mut self) -> Mapping {
         Mapping {
-            phys: Arc::new(self.phys.clone_as(self.phys.is_cow(), 0, None)),
+            phys: Arsc::new(self.phys.clone_as(self.phys.is_cow(), 0, None)),
             start_index: self.start_index,
             attr: self.attr,
         }
@@ -149,14 +149,14 @@ impl Virt {
     /// The caller must ensure that the current executing address is mapped
     /// correctly.
     #[inline]
-    pub unsafe fn load(self: Pin<Arsc<Self>>) -> Option<impl Future<Output = ()> + Send + 'static> {
+    pub unsafe fn load(self: Pin<Arsc<Self>>) {
         tlb::set_virt(self)
     }
 
     pub async fn map(
         &self,
         addr: Option<LAddr>,
-        phys: Arc<Phys>,
+        phys: Phys,
         start_index: usize,
         count: usize,
         attr: Attr,
@@ -177,7 +177,7 @@ impl Virt {
                     .ok_or(EINVAL)?;
                 let end = LAddr::from(start.val().checked_add(len).ok_or(EINVAL)?);
                 let mapping = Mapping {
-                    phys,
+                    phys: Arsc::new(phys),
                     start_index,
                     attr: attr | Attr::VALID,
                 };
@@ -193,7 +193,7 @@ impl Virt {
                 let addr = *ent.key().start;
                 log::trace!("Virt::map result = {:?}", ent.key());
                 ent.insert(Mapping {
-                    phys,
+                    phys: Arsc::new(phys),
                     start_index,
                     attr: attr | Attr::VALID,
                 });
@@ -412,14 +412,14 @@ impl Virt {
         let old = mem::replace(&mut *map, RangeMap::new(range.clone()));
 
         let count = (range.end.val() - range.start.val()) >> PAGE_SHIFT;
-        let _ = table.user_unmap_npages(range.start, count, frames(), ID_OFFSET);
+        table.unmap(range.clone(), frames(), ID_OFFSET);
         tlb::flush(self.cpu_mask.load(SeqCst), range.start, count);
 
         for (addr, mapping) in old {
             let count: usize = (addr.end.val() - addr.start.val()) >> PAGE_SHIFT;
             for index in 0..count {
-                let dirty = mapping.attr.contains(Attr::WRITABLE);
-                let _ = mapping.phys.flush(index, Some(dirty), true).await;
+                let dirty = mapping.attr.contains(Attr::DIRTY);
+                let _ = mapping.phys.flush(index, Some(dirty)).await;
             }
         }
     }
@@ -459,10 +459,9 @@ impl Drop for Virt {
     fn drop(&mut self) {
         let range = self.map.get_mut().root_range();
         let count = (range.end.val() - range.start.val()) >> PAGE_SHIFT;
-        let _ = self
-            .root
+        self.root
             .get_mut()
-            .user_unmap_npages(*range.start, count, frames(), ID_OFFSET);
+            .unmap(*range.start..*range.end, frames(), ID_OFFSET);
         tlb::flush(self.cpu_mask.load(SeqCst), *range.start, count);
     }
 }

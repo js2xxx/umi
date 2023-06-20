@@ -9,6 +9,7 @@ version = "0.1.0"
 ksc-core = {path = "../ksc-core"}
 ksync = {path = "../ksync"}
 umifs = {path = "../umifs"}
+umio = {path = "../umio"}
 # External crates
 arsc-rs = {git = "https://github.com/js2xxx/arsc"}
 async-trait = "0"

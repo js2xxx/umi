@@ -1,13 +1,18 @@
 use alloc::{boxed::Box, sync::Arc};
+use core::future::ready;
 
 use async_trait::async_trait;
-use futures_util::{stream, StreamExt};
-use ksc::Error::{self, EBADF, ENOSYS, ENOTDIR};
+use futures_util::{stream, FutureExt, StreamExt};
+use ksc::{
+    Boxed,
+    Error::{self, EBADF, ENOSYS, ENOTDIR},
+};
 use umifs::{
     path::Path,
     traits::{Entry, Io},
-    types::{FileType, IoSlice, IoSliceMut, Metadata, OpenOptions, Permissions, SeekFrom},
+    types::{FileType, Metadata, OpenOptions, Permissions},
 };
+use umio::{Event, IoPoll, IoSlice, IoSliceMut, SeekFrom};
 
 pub struct Serial {
     read: bool,
@@ -108,5 +113,14 @@ impl Entry for Serial {
             last_modified: None,
             last_created: None,
         }
+    }
+}
+
+impl IoPoll for Serial {
+    fn event<'s: 'r, 'r>(&'s self, expected: Event) -> Boxed<'r, Option<Event>> {
+        if expected != Event::READABLE {
+            return Box::pin(ready(None));
+        }
+        Box::pin(crate::dev::Stdin::event().map(Some))
     }
 }

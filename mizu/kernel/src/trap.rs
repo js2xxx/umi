@@ -81,7 +81,8 @@ const RESET: u8 = 3;
 
 #[repr(C)]
 pub struct Fp {
-    regs: [u64; 32],
+    /// 0 ~ 31 => f0 ~ f31, 32 => fcsr
+    regs: [u64; 33],
 
     state: AtomicU8,
 }
@@ -89,7 +90,7 @@ pub struct Fp {
 impl Default for Fp {
     fn default() -> Self {
         Fp {
-            regs: [0; 32],
+            regs: [0; 33],
             state: AtomicU8::new(YIELD),
         }
     }
@@ -105,22 +106,15 @@ impl Fp {
 
     fn enter_user(&self) {
         extern "C" {
-            fn _load_fp(regs: *const [u64; 32]);
+            fn _load_fp(regs: *const [u64; 33]);
         }
         if self.state.swap(CLEAN, Relaxed) == YIELD {
-            unsafe {
-                sstatus::set_fs(sstatus::FS::Clean);
-                _load_fp(&self.regs);
-                sstatus::set_fs(sstatus::FS::Off);
-            }
+            unsafe { _load_fp(&self.regs) }
         }
     }
 
     fn leave_user(&self, sstatus: &mut usize) {
         let fs = (*sstatus & 0x6000) >> 13;
-        *sstatus &= !0x6000;
-        *sstatus |= 0x4000; // Set clean
-        unsafe { sstatus::set_fs(sstatus::FS::Off) }
         if fs == sstatus::FS::Dirty as _ {
             self.state.store(DIRTY, Relaxed);
         }
@@ -132,14 +126,10 @@ impl Fp {
 
     pub fn yield_now(&mut self) {
         extern "C" {
-            fn _save_fp(regs: *mut [u64; 32]);
+            fn _save_fp(regs: *mut [u64; 33]);
         }
         match self.state.swap(YIELD, Relaxed) {
-            DIRTY => unsafe {
-                sstatus::set_fs(sstatus::FS::Clean);
-                _save_fp(&mut self.regs);
-                sstatus::set_fs(sstatus::FS::Off);
-            },
+            DIRTY => unsafe { _save_fp(&mut self.regs) },
             RESET => self.regs.fill(0),
             _ => {}
         }

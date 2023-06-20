@@ -2,9 +2,6 @@ use alloc::string::String;
 
 use bitflags::bitflags;
 use ktime_core::Instant;
-pub use umio::{
-    advance_slices, ioslice_is_empty, ioslice_len, IoSlice, IoSliceExt, IoSliceMut, SeekFrom,
-};
 
 bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]

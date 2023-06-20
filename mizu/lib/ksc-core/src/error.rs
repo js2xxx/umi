@@ -327,7 +327,7 @@ impl From<rv39_paging::Error> for Error {
 }
 
 impl Error {
-    fn try_from_raw(raw: usize) -> Option<Self> {
+    pub fn try_from_raw(raw: usize) -> Option<Self> {
         FromPrimitive::from_isize(-(raw as isize))
     }
 

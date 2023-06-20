@@ -1,5 +1,5 @@
-use alloc::{boxed::Box, sync::Arc};
-use core::mem;
+use alloc::boxed::Box;
+use core::{mem, time::Duration};
 
 use co_trap::UserCx;
 use kmem::Phys;
@@ -7,7 +7,7 @@ use ksc::{
     async_handler,
     Error::{self, EAGAIN, EINVAL, EISDIR, ENOSYS, EPERM, ETIMEDOUT},
 };
-use ktime::{TimeOutExt, Timer};
+use ktime::TimeOutExt;
 use rv39_paging::{Attr, LAddr, PAGE_MASK, PAGE_SHIFT};
 
 use crate::{
@@ -34,7 +34,7 @@ pub async fn brk(ts: &mut TaskState, cx: UserCx<'_, fn(usize) -> Result<usize, E
             let new_page = (addr + PAGE_MASK) & !PAGE_MASK;
             let count = (new_page - old_page) >> PAGE_SHIFT;
             if count > 0 {
-                let phys = Arc::new(Phys::new_anon(true));
+                let phys = Phys::new(true);
                 ts.virt
                     .map(Some(old_page.into()), phys, 0, count, Attr::USER_RW)
                     .await?;
@@ -75,10 +75,9 @@ pub async fn futex(
                 if t.is_null() {
                     ts.futex.wait(key).await
                 } else {
-                    let timeout = t.read(ts.virt.as_ref()).await?.into();
+                    let timeout: Duration = t.read(ts.virt.as_ref()).await?.into();
                     let wait = ts.futex.wait(key);
-                    wait.ok_or_timeout(Timer::after(timeout), || ETIMEDOUT)
-                        .await?;
+                    wait.ok_or_timeout(timeout, || ETIMEDOUT).await?;
                 }
                 0
             }
@@ -165,7 +164,7 @@ pub async fn mmap(
 
         let cow = flags.contains(Flags::PRIVATE);
         let phys = if flags.contains(Flags::ANONYMOUS) {
-            Phys::new_anon(cow)
+            Phys::new(cow)
         } else {
             let entry = ts.files.get(fd).await?;
             crate::mem::new_phys(entry.to_io().ok_or(EISDIR)?, cow)
@@ -196,10 +195,7 @@ pub async fn mmap(
         }
 
         let count = (len + PAGE_MASK) >> PAGE_SHIFT;
-        let addr = ts
-            .virt
-            .map(addr, Arc::new(phys), offset, count, attr)
-            .await?;
+        let addr = ts.virt.map(addr, phys, offset, count, attr).await?;
 
         if flags.contains(Flags::POPULATE) {
             ts.virt
@@ -208,6 +204,41 @@ pub async fn mmap(
         }
 
         Ok(addr.val())
+    };
+    cx.ret(fut.await);
+    ScRet::Continue(None)
+}
+
+#[async_handler]
+pub async fn msync(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(usize, usize, u32) -> Result<(), Error>>,
+) -> ScRet {
+    const MS_ASYNC: u32 = 1; // sync memory asynchronously
+    const MS_INVALIDATE: u32 = 2; // invalidate the caches
+    const MS_SYNC: u32 = 4; // synchronous memory sync
+
+    let (addr, len, flags) = cx.args();
+    let fut = async {
+        // let range = if flags & MS_INVALIDATE != 0 {
+        //     crate::mem::USER_RANGE
+        // } else {
+        //     addr..addr.checked_add(len).ok_or(EINVAL)?
+        // };
+        let range = addr..addr.checked_add(len).ok_or(EINVAL)?;
+        let range = range.start.into()..range.end.into();
+
+        match flags & !MS_INVALIDATE {
+            MS_ASYNC => {
+                let virt = ts.virt.clone();
+                let task = async move { virt.decommit_range(range).await };
+                crate::executor().spawn(task).detach();
+            }
+            MS_SYNC | 0 => ts.virt.decommit_range(range).await?,
+            _ => return Err(EINVAL),
+        }
+
+        Ok(())
     };
     cx.ret(fut.await);
     ScRet::Continue(None)

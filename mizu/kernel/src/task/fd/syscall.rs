@@ -3,20 +3,26 @@ use core::{
     alloc::Layout,
     mem::{self, MaybeUninit},
     pin::Pin,
+    time::Duration,
 };
 
 use afat32::NullTimeProvider;
 use arsc_rs::Arsc;
 use co_trap::UserCx;
-use futures_util::{stream, StreamExt, TryStreamExt};
+use futures_util::{
+    stream::{self, FuturesUnordered},
+    FutureExt, StreamExt, TryStreamExt,
+};
 use kmem::Virt;
 use ksc::{
     async_handler,
     Error::{self, *},
 };
-use ktime::Instant;
+use ktime::{Instant, TimeOutExt};
 use rand_riscv::RandomState;
-use umifs::types::{FileType, Metadata, OpenOptions, Permissions, SeekFrom};
+use sygnal::SigSet;
+use umifs::types::{FileType, Metadata, OpenOptions, Permissions};
+use umio::SeekFrom;
 
 use super::Files;
 use crate::{
@@ -24,7 +30,7 @@ use crate::{
     syscall::{ffi::Ts, ScRet},
     task::{
         fd::{FdInfo, SavedNextDirent},
-        TaskState,
+        yield_now, TaskState,
     },
 };
 
@@ -323,6 +329,24 @@ pub async fn sendfile(
 }
 
 #[async_handler]
+pub async fn fsync(ts: &mut TaskState, cx: UserCx<'_, fn(i32) -> Result<(), Error>>) -> ScRet {
+    let fd = cx.args();
+    let fut = async {
+        let file = ts.files.get(fd).await?;
+        file.to_io().ok_or(EISDIR)?.flush().await
+    };
+    cx.ret(fut.await);
+    ScRet::Continue(None)
+}
+
+#[async_handler]
+pub async fn sync(_: &mut TaskState, cx: UserCx<'_, fn()>) -> ScRet {
+    crate::fs::sync();
+    cx.ret(());
+    ScRet::Continue(None)
+}
+
+#[async_handler]
 pub async fn readlinkat(
     ts: &mut TaskState,
     cx: UserCx<'_, fn(i32, UserPtr<u8, In>, UserPtr<u8, Out>, usize) -> Result<usize, Error>>,
@@ -499,8 +523,8 @@ fssc!(
     ) -> Result<i32, Error> {
         log::trace!("user dup old = {old}, new = {new}, flags = {flags}");
 
-        let entry = files.get(old).await?;
-        files.reopen(new, entry, flags != 0).await;
+        let fi = files.get_fi(old).await?;
+        files.reopen(new, fi.entry, fi.perm, flags != 0).await;
         Ok(new)
     }
 
@@ -511,16 +535,26 @@ fssc!(
         cmd: usize,
         arg: usize,
     ) -> Result<i32, Error> {
-        const F_DUPFD: usize = 0;
-        const F_GETFD: usize = 1;
-        const F_SETFD: usize = 2;
-        const F_DUPFD_CLOEXEC: usize = 1030;
+        const DUPFD: usize = 0;
+        const GETFD: usize = 1;
+        const SETFD: usize = 2;
+        const GETFL: usize = 3;
+        const SETFL: usize = 4;
+        const DUPFD_CLOEXEC: usize = 1030;
 
         match cmd {
-            F_DUPFD => files.dup(fd, None).await,
-            F_DUPFD_CLOEXEC => files.dup(fd, Some(arg != 0)).await,
-            F_GETFD => files.get_fi(fd).await.map(|fi| fi.close_on_exec as i32),
-            F_SETFD => files.set_fi(fd, arg != 0, None).await.map(|_| 0),
+            DUPFD => files.dup(fd, None).await,
+            DUPFD_CLOEXEC => files.dup(fd, Some(arg != 0)).await,
+            GETFD => files.get_fi(fd).await.map(|fi| fi.close_on_exec as i32),
+            SETFD => {
+                let c = arg != 0;
+                files.set_fi(fd, Some(c), None, None).await.map(|_| 0)
+            }
+            GETFL => files.get_fi(fd).await.map(|fi| fi.perm.bits() as _),
+            SETFL => {
+                let perm = Permissions::from_bits_truncate(arg as u32);
+                files.set_fi(fd, None, Some(perm), None).await.map(|_| 0)
+            }
             _ => Err(EINVAL),
         }
     }
@@ -554,7 +588,7 @@ fssc!(
             }
         };
         let close_on_exec = options.contains(OpenOptions::CLOEXEC);
-        files.open(entry, close_on_exec).await
+        files.open(entry, perm, close_on_exec).await
     }
 
     pub async fn faccessat(
@@ -593,14 +627,14 @@ fssc!(
         fd: i32,
         path: UserPtr<u8, In>,
         perm: u32,
-    ) -> Result<i32, Error> {
+    ) -> Result<(), Error> {
         let mut buf = [0; MAX_PATH_LEN];
         let (path, root) = path.read_path(virt, &mut buf).await?;
         let perm = Permissions::from_bits(perm).ok_or(EPERM)?;
 
         log::trace!("user mkdir fd = {fd}, path = {path:?}, perm = {perm:?}");
 
-        let (entry, created) = if root {
+        let (_, created) = if root {
             crate::fs::open(path, OpenOptions::DIRECTORY | OpenOptions::CREAT, perm).await?
         } else {
             let base = files.get(fd).await?;
@@ -610,7 +644,7 @@ fssc!(
         if !created {
             return Err(EEXIST);
         }
-        files.open(entry, false).await
+        Ok(())
     }
 
     pub async fn fstat(
@@ -739,19 +773,18 @@ fssc!(
         }
         let FdInfo {
             entry,
-            close_on_exec,
-            mut saved_next_dirent,
+            saved_next_dirent,
+            ..
         } = files.get_fi(fd).await?;
-        let saved_next_dirent = saved_next_dirent.get_mut();
 
         let dir = entry.to_dir().ok_or(ENOTDIR)?;
 
         let first = match saved_next_dirent {
             SavedNextDirent::Start => None,
-            SavedNextDirent::Next(dirent) => Some(&*dirent),
+            SavedNextDirent::Next(dirent) => Some(dirent),
             SavedNextDirent::End => return Ok(0),
         };
-        let mut d = dir.next_dirent(first).await?;
+        let mut d = dir.next_dirent(first.as_ref()).await?;
         let mut read_len = 0;
         loop {
             let Some(entry) = &d else { break };
@@ -790,7 +823,7 @@ fssc!(
             None => SavedNextDirent::End,
             Some(dirent) => SavedNextDirent::Next(dirent),
         };
-        files.set_fi(fd, close_on_exec, Some(s)).await?;
+        files.set_fi(fd, None, None, Some(s)).await?;
 
         Ok(read_len)
     }
@@ -849,8 +882,8 @@ fssc!(
 
     pub async fn pipe(virt: Pin<&Virt>, files: &Files, fd: UserPtr<i32, Out>) -> Result<(), Error> {
         let (tx, rx) = crate::fs::pipe();
-        let tx = files.open(tx, false).await?;
-        let rx = files.open(rx, false).await?;
+        let tx = files.open(tx, Permissions::SELF_W, false).await?;
+        let rx = files.open(rx, Permissions::SELF_R, false).await?;
         fd.write_slice(virt, &[rx, tx], false).await
     }
 
@@ -976,3 +1009,205 @@ fssc!(
         Ok(())
     }
 );
+
+#[derive(Debug, Clone, Copy, Default)]
+#[repr(C)]
+pub struct PollFd {
+    fd: i32,
+    events: umio::Event,
+    revents: umio::Event,
+}
+
+async fn poll_fds(
+    pfd: &mut [PollFd],
+    files: &Files,
+    timeout: Option<Duration>,
+) -> Result<usize, Error> {
+    let files = stream::iter(&*pfd)
+        .then(|pfd| files.get(pfd.fd))
+        .try_collect::<Vec<_>>()
+        .await?;
+
+    pfd.iter_mut()
+        .for_each(|pfd| pfd.revents = umio::Event::empty());
+
+    let iter = files.iter().zip(&*pfd).enumerate();
+    let events = iter.map(|(index, (e, p))| e.event(p.events).map(move |e| (index, e)));
+    let mut events = events.collect::<FuturesUnordered<_>>();
+
+    let mut count = 0;
+    match timeout {
+        Some(Duration::ZERO) => loop {
+            let next = ksync::poll_once(events.next()).flatten();
+            let Some((index, event)) = next else { break };
+            if let Some(event) = event {
+                log::trace!("PFD fd = {}, event = {event:?}", pfd[index].fd);
+                pfd[index].revents |= event;
+                count += 1;
+            }
+        },
+        Some(timeout) => {
+            let ddl = Instant::now() + timeout;
+            loop {
+                let next = events.next().on_timeout(ddl, || None).await;
+                let Some((index, event)) = next else { break };
+                if let Some(event) = event {
+                    log::trace!("PFD fd = {}, event = {event:?}", pfd[index].fd);
+                    pfd[index].revents |= event;
+                    count += 1;
+                }
+            }
+        }
+        None => loop {
+            let Some((index, event)) = events.next().await else { break };
+            if let Some(event) = event {
+                log::trace!("PFD fd = {}, event = {event:?}", pfd[index].fd);
+                pfd[index].revents |= event;
+                count += 1;
+            }
+        },
+    }
+    Ok(count)
+}
+
+#[async_handler]
+pub async fn ppoll(
+    ts: &mut TaskState,
+    cx: UserCx<
+        '_,
+        fn(
+            UserPtr<PollFd, InOut>,
+            usize,
+            UserPtr<Ts, In>,
+            UserPtr<SigSet, In>,
+            usize,
+        ) -> Result<usize, Error>,
+    >,
+) -> ScRet {
+    let (mut poll_fd, len, timeout, _sigmask, sigmask_size) = cx.args();
+    let fut = async {
+        if sigmask_size != mem::size_of::<SigSet>() {
+            return Err(EINVAL);
+        }
+        if len > ts.files.get_limit() {
+            return Err(EINVAL);
+        }
+        let timeout = if timeout.is_null() {
+            None
+        } else {
+            Some(timeout.read(ts.virt.as_ref()).await?.into())
+        };
+
+        let mut pfd = vec![PollFd::default(); len];
+        poll_fd.read_slice(ts.virt.as_ref(), &mut pfd).await?;
+
+        let count = poll_fds(&mut pfd, &ts.files, timeout).await?;
+
+        poll_fd.write_slice(ts.virt.as_ref(), &pfd, false).await?;
+        Ok(count)
+    };
+    cx.ret(fut.await);
+    ScRet::Continue(None)
+}
+
+const FD_SET_BITS: usize = usize::BITS as usize;
+
+fn push_pfd(pfd: &mut Vec<PollFd>, fd_set: &[usize], events: umio::Event) {
+    for (index, mut fds) in fd_set.iter().copied().enumerate() {
+        let base = (index * FD_SET_BITS) as i32;
+        while fds > 0 {
+            let mask = fds & (!fds + 1);
+            let fd = mask.trailing_zeros() as i32 + base;
+            pfd.push(PollFd {
+                fd,
+                events,
+                revents: Default::default(),
+            });
+            fds -= mask;
+        }
+    }
+}
+
+fn write_fd_set(pfd: &[PollFd], fd_set: &mut [usize], events: umio::Event) {
+    fd_set.fill(0);
+    for pfd in pfd {
+        if pfd.revents.contains(events) {
+            let index = pfd.fd as usize / FD_SET_BITS;
+            let mask = 1 << (pfd.fd as usize % FD_SET_BITS);
+            fd_set[index] |= mask;
+        }
+    }
+}
+
+#[async_handler]
+pub async fn pselect(
+    ts: &mut TaskState,
+    cx: UserCx<
+        '_,
+        fn(
+            usize,
+            UserPtr<usize, InOut>,
+            UserPtr<usize, InOut>,
+            UserPtr<usize, InOut>,
+            UserPtr<Ts, In>,
+            UserPtr<SigSet, In>,
+        ) -> Result<usize, Error>,
+    >,
+) -> ScRet {
+    let (count, mut rd, mut wr, mut ex, timeout, _sigmask) = cx.args();
+    let fut = async {
+        if count > ts.files.get_limit() {
+            return Err(EINVAL);
+        }
+
+        let timeout = if timeout.is_null() {
+            None
+        } else {
+            Some(timeout.read(ts.virt.as_ref()).await?.into())
+        };
+        if count == 0 {
+            match timeout {
+                Some(Duration::ZERO) => yield_now().await,
+                Some(timeout) => ktime::sleep(timeout).await,
+                _ => {}
+            }
+            return Ok(0);
+        }
+
+        let len = (count + mem::size_of::<usize>() - 1) / mem::size_of::<usize>();
+        let mut buf = vec![0; len];
+
+        let mut pfd = Vec::new();
+        if !rd.is_null() {
+            rd.read_slice(ts.virt.as_ref(), &mut buf).await?;
+            push_pfd(&mut pfd, &buf, umio::Event::READABLE);
+        }
+        if !wr.is_null() {
+            wr.read_slice(ts.virt.as_ref(), &mut buf).await?;
+            push_pfd(&mut pfd, &buf, umio::Event::WRITABLE);
+        }
+        if !ex.is_null() {
+            ex.read_slice(ts.virt.as_ref(), &mut buf).await?;
+            push_pfd(&mut pfd, &buf, umio::Event::EXCEPTION);
+        }
+
+        let count = poll_fds(&mut pfd, &ts.files, timeout).await?;
+
+        if !rd.is_null() {
+            write_fd_set(&pfd, &mut buf, umio::Event::READABLE);
+            rd.write_slice(ts.virt.as_ref(), &buf, false).await?;
+        }
+        if !wr.is_null() {
+            write_fd_set(&pfd, &mut buf, umio::Event::WRITABLE);
+            wr.write_slice(ts.virt.as_ref(), &buf, false).await?;
+        }
+        if !ex.is_null() {
+            write_fd_set(&pfd, &mut buf, umio::Event::EXCEPTION);
+            ex.write_slice(ts.virt.as_ref(), &buf, false).await?;
+        }
+
+        Ok(count)
+    };
+    cx.ret(fut.await);
+    ScRet::Continue(None)
+}

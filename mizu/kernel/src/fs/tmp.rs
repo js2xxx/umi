@@ -14,6 +14,7 @@ use umifs::{
     traits::{Directory, DirectoryMut, Entry, FileSystem, Io, ToIo},
     types::{DirEntry, FileType, FsStat, Metadata, OpenOptions, Permissions},
 };
+use umio::IoPoll;
 
 pub struct TmpFs(Arc<TmpRoot>);
 
@@ -68,7 +69,7 @@ impl Entry for TmpRoot {
         }
         if options.contains(OpenOptions::CREAT) {
             let file = Arc::new(TmpFile {
-                phys: Arc::new(Phys::new_anon(false)),
+                phys: Arc::new(Phys::new(false)),
                 perm,
                 times: Mutex::new({
                     let now = Instant::now();
@@ -93,7 +94,17 @@ impl Entry for TmpRoot {
     }
 
     async fn metadata(&self) -> Metadata {
-        todo!()
+        Metadata {
+            ty: FileType::DIR,
+            len: 0,
+            offset: rand_riscv::seed64(),
+            perm: Permissions::all_same(true, true, true),
+            block_size: PAGE_SIZE,
+            block_count: 0,
+            last_access: None,
+            last_modified: None,
+            last_created: None,
+        }
     }
 
     fn to_dir(self: Arc<Self>) -> Option<Arc<dyn Directory>> {
@@ -104,6 +115,7 @@ impl Entry for TmpRoot {
         Some(self)
     }
 }
+impl IoPoll for TmpRoot {}
 
 #[async_trait]
 impl Directory for TmpRoot {
@@ -206,3 +218,5 @@ impl Entry for TmpFile {
         })
     }
 }
+
+impl IoPoll for TmpFile {}

@@ -16,7 +16,8 @@ use ksc::{
 };
 use ksync::{channel::Broadcast, AtomicArsc};
 use riscv::register::time;
-use sygnal::{Sig, SigCode, SigFields, SigInfo, SigSet, Signals};
+use rv39_paging::Attr;
+use sygnal::{Sig, SigCode, SigFields, SigInfo, SigSet};
 
 use crate::{
     executor,
@@ -30,7 +31,7 @@ use crate::{
         fd::MAX_PATH_LEN,
         future::{user_loop, TaskFut},
         time::Times,
-        yield_now, Child, Task, TaskEvent, TaskState, TASKS,
+        yield_now, Child, Task, TaskEvent, TaskState,
     },
 };
 
@@ -310,7 +311,7 @@ async fn clone_task(
         } else {
             Default::default()
         },
-        sig: Signals::new(),
+        sig: Default::default(),
         shared_sig: AtomicArsc::new(if flags.contains(Flags::THREAD) {
             ts.task.shared_sig.load(SeqCst)
         } else {
@@ -330,7 +331,9 @@ async fn clone_task(
     let virt = if flags.contains(Flags::VM) {
         ts.virt.clone()
     } else {
-        deep_fork(&ts.virt).await?
+        let virt = deep_fork(&ts.virt).await?;
+        virt.commit(tf.sepc.into(), Attr::USER_RX).await?;
+        virt
     };
 
     let mut new_tf = *tf;
@@ -396,7 +399,7 @@ async fn clone_task(
         }
     }
 
-    ksync::critical(|| TASKS.lock().insert(new_tid, task.clone()));
+    yield_now().await;
     let fut = TaskFut::new(new_ts.virt.clone(), user_loop(new_ts, new_tf));
     executor().spawn(fut).detach();
 

@@ -31,6 +31,7 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         .map(GET_ROBUST_LIST, crate::mem::get_robust_list)
         .map(SET_ROBUST_LIST, crate::mem::set_robust_list)
         .map(MMAP, crate::mem::mmap)
+        .map(MSYNC, crate::mem::msync)
         .map(MPROTECT, crate::mem::mprotect)
         .map(MUNMAP, crate::mem::munmap)
         .map(MEMBARRIER, crate::mem::membarrier)
@@ -68,8 +69,11 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         .map(PREADV64, fd::preadv)
         .map(PWRITEV64, fd::pwritev)
         .map(LSEEK, fd::lseek)
-        .map(PPOLL, dummy_ppoll)
+        .map(PPOLL, fd::ppoll)
+        .map(PSELECT6, fd::pselect)
         .map(SENDFILE, fd::sendfile)
+        .map(SYNC, fd::sync)
+        .map(FSYNC, fd::fsync)
         .map(CHDIR, fd::chdir)
         .map(GETCWD, fd::getcwd)
         .map(DUP, fd::dup)
@@ -103,6 +107,7 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         .map(GETUID, dummy_zero)
         .map(GETGID, dummy_zero)
         .map(SYSLOG, dummy_zero)
+        .map(UMASK, dummy_umask)
 });
 
 #[async_handler]
@@ -112,8 +117,8 @@ async fn dummy_zero(_: &mut TaskState, cx: UserCx<'_, fn() -> usize>) -> ScRet {
 }
 
 #[async_handler]
-async fn dummy_ppoll(_: &mut TaskState, cx: UserCx<'_, fn() -> usize>) -> ScRet {
-    cx.ret(1);
+async fn dummy_umask(_: &mut TaskState, cx: UserCx<'_, fn() -> usize>) -> ScRet {
+    cx.ret(0o777);
     ScRet::Continue(None)
 }
 

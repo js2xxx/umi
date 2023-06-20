@@ -156,7 +156,7 @@ macro_rules! impl_arg {
     };
 }
 
-all_tuples!(impl_arg, 0, 7, P);
+all_tuples!(impl_arg, 0, 6, P);
 
 impl<A: 'static> Param for UserCx<'_, A> {
     type Item<'a> = UserCx<'a, A>;

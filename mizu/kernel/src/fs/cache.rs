@@ -1,27 +1,30 @@
 use alloc::{boxed::Box, sync::Arc};
+use core::num::NonZeroUsize;
 
 use arsc_rs::Arsc;
 use async_trait::async_trait;
-use hashbrown::HashMap;
-use kmem::Phys;
+use kmem::{LruCache, Phys};
 use ksc::{
     Boxed,
     Error::{self, *},
 };
 use rand_riscv::RandomState;
-use spin::RwLock;
+use spin::Mutex;
 use umifs::{path::*, traits::*, types::*};
+use umio::{Event, IoPoll, SeekFrom};
 
 pub struct CachedFs {
     inner: Arsc<dyn FileSystem>,
     root_dir: Arc<CachedDir>,
 }
 
+const CACHE_SIZE: NonZeroUsize = unsafe { NonZeroUsize::new_unchecked(32) };
+
 impl CachedFs {
     pub async fn new(fs: Arsc<dyn FileSystem>) -> Result<Arsc<Self>, Error> {
         let root_dir = Arc::new(CachedDir {
             entry: fs.clone().root_dir().await?,
-            cache: RwLock::new(Default::default()),
+            cache: Mutex::new(LruCache::with_hasher(CACHE_SIZE, RandomState::new())),
         });
         Ok(Arsc::new(CachedFs {
             inner: fs,
@@ -53,7 +56,7 @@ enum EntryCache {
 
 pub struct CachedDir {
     entry: Arc<dyn Entry>,
-    cache: RwLock<HashMap<PathBuf, EntryCache, RandomState>>,
+    cache: Mutex<LruCache<PathBuf, EntryCache, RandomState>>,
 }
 
 pub struct CachedFile {
@@ -83,7 +86,7 @@ impl Entry for CachedDir {
         let expect_dir = options.contains(OpenOptions::DIRECTORY);
         let create = options.contains(OpenOptions::CREAT);
 
-        if let Some(ec) = ksync::critical(|| self.cache.read().get(path).cloned()) {
+        if let Some(ec) = ksync::critical(|| self.cache.lock().get(path).cloned()) {
             let entry: Arc<dyn Entry> = match ec {
                 EntryCache::Dir(_) if !expect_dir && create => return Err(EISDIR),
                 EntryCache::File(_) if expect_dir => return Err(ENOTDIR),
@@ -103,7 +106,7 @@ impl Entry for CachedDir {
             Some(_) => {
                 let dir = Arc::new(CachedDir {
                     entry,
-                    cache: RwLock::new(Default::default()),
+                    cache: Mutex::new(LruCache::with_hasher(CACHE_SIZE, RandomState::new())),
                 });
                 (EntryCache::Dir(dir.clone()), dir)
             }
@@ -120,7 +123,7 @@ impl Entry for CachedDir {
                 (ec, Arc::new(file))
             }
         };
-        ksync::critical(|| self.cache.write().insert(path.to_path_buf(), ec));
+        ksync::critical(|| self.cache.lock().put(path.to_path_buf(), ec));
         Ok((entry, created))
     }
 
@@ -134,6 +137,11 @@ impl Entry for CachedDir {
 
     fn to_dir_mut(self: Arc<Self>) -> Option<Arc<dyn DirectoryMut>> {
         Some(self)
+    }
+}
+impl IoPoll for CachedDir {
+    fn event<'s: 'r, 'r>(&'s self, expected: Event) -> Boxed<'r, Option<Event>> {
+        self.entry.event(expected)
     }
 }
 
@@ -197,5 +205,11 @@ impl Entry for CachedFile {
 
     fn metadata<'a: 'b, 'b>(&'a self) -> Boxed<'b, Metadata> {
         self.entry.metadata()
+    }
+}
+
+impl IoPoll for CachedFile {
+    fn event<'s: 'r, 'r>(&'s self, expected: Event) -> Boxed<'r, Option<Event>> {
+        self.entry.event(expected)
     }
 }

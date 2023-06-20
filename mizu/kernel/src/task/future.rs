@@ -1,21 +1,24 @@
 use core::{
     future::Future,
+    mem,
     ops::ControlFlow::{Break, Continue},
-    pin::Pin,
+    pin::{pin, Pin},
+    sync::atomic::Ordering::SeqCst,
     task::{Context, Poll},
 };
 
 use arsc_rs::Arsc;
 use co_trap::{FastResult, TrapFrame};
+use futures_util::future::{select, Either};
 use kmem::Virt;
-use ksc::{Scn, ENOSYS};
+use ksc::{Error::EINTR, Scn, ENOSYS};
 use pin_project::pin_project;
 use riscv::register::{
     scause::{Exception, Scause, Trap},
     time,
 };
 use rv39_paging::Attr;
-use sygnal::{Sig, SigCode, SigInfo};
+use sygnal::{Sig, SigCode, SigInfo, SigSet};
 
 use super::TaskState;
 use crate::{
@@ -46,10 +49,7 @@ impl<F: Future> Future for TaskFut<F> {
     type Output = F::Output;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let clear = unsafe { self.virt.clone().load() };
-        if let Some(clear) = clear {
-            crate::executor().spawn(clear).detach();
-        }
+        unsafe { self.virt.clone().load() };
         let this = self.project();
         let ret = FP.set(this.fp, || this.fut.poll(cx));
         if ret.is_pending() {
@@ -62,14 +62,13 @@ impl<F: Future> Future for TaskFut<F> {
 const TASK_GRAN: u64 = 20000;
 
 pub async fn user_loop(mut ts: TaskState, mut tf: TrapFrame) {
-    log::debug!("task {} startup, tf.a0 = {}", ts.task.tid, tf.gpr.tx.a[0]);
+    log::debug!("task {} startup, a0 = {}", ts.task.tid, tf.gpr.tx.a[0]);
 
     let mut stat_time = time::read64();
     let mut sched_time = stat_time;
     let (code, sig) = 'life: loop {
-        match ts.handle_signals(&mut tf).await {
-            Ok(()) => {}
-            Err((code, sig)) => break 'life (code, Some(sig)),
+        if let Err((code, sig)) = ts.handle_signals(&mut tf).await {
+            break 'life (code, Some(sig));
         }
 
         let sys = time::read64();
@@ -81,6 +80,11 @@ pub async fn user_loop(mut ts: TaskState, mut tf: TrapFrame) {
             ts.task.tid,
             tf.sepc
         );
+        if !crate::mem::USER_RANGE.contains(&tf.sepc) {
+            log::warn!("ILLEGAL USER DEST: {:#x}", tf.sepc);
+            break 'life (i32::MIN, Some(Sig::SIGSEGV));
+        }
+
         let (scause, fr) = crate::trap::yield_to_user(&mut tf);
 
         let usr = time::read64();
@@ -121,30 +125,7 @@ async fn handle_scause(scause: Scause, ts: &mut TaskState, tf: &mut TrapFrame) -
     match scause.cause() {
         Trap::Interrupt(intr) => crate::trap::handle_intr(intr, "user task"),
         Trap::Exception(excep) => match excep {
-            Exception::UserEnvCall => {
-                let res = async {
-                    let scn = tf.scn().map_err(Err)?;
-                    if scn != Scn::WRITE {
-                        log::info!(
-                            "task {} syscall {scn:?}, sepc = {:#x}",
-                            ts.task.tid,
-                            tf.sepc
-                        );
-                    }
-                    crate::syscall::SYSCALL
-                        .handle(scn, (ts, tf))
-                        .await
-                        .ok_or(Ok(scn))
-                }
-                .await;
-                match res {
-                    Ok(res) => return res,
-                    Err(scn) => {
-                        log::warn!("SYSCALL not implemented: {scn:?}");
-                        tf.set_syscall_ret(ENOSYS.into_raw())
-                    }
-                }
-            }
+            Exception::UserEnvCall => return ts.handle_syscall(tf).await,
             Exception::InstructionPageFault
             | Exception::LoadPageFault
             | Exception::StorePageFault => {
@@ -188,6 +169,65 @@ async fn handle_scause(scause: Scause, ts: &mut TaskState, tf: &mut TrapFrame) -
         },
     }
     Continue(None)
+}
+
+impl TaskState {
+    async fn handle_syscall(&mut self, tf: &mut TrapFrame) -> ScRet {
+        let scn = match tf.scn() {
+            Ok(scn) => scn,
+            Err(num) => {
+                log::warn!("SYSCALL not implemented: {num}");
+                tf.set_syscall_ret(ENOSYS.into_raw());
+                return Continue(None);
+            }
+        };
+
+        if scn != Scn::WRITE || tf.syscall_arg::<0>() >= 3 {
+            // Get rid of tracing writes to STDIO.
+            log::info!(
+                "task {} syscall {scn:?}, sepc = {:#x}",
+                self.task.tid,
+                tf.sepc
+            );
+        }
+
+        let sig_mask = matches!(
+            scn,
+            Scn::KILL | Scn::TKILL | Scn::TGKILL | Scn::RT_SIGQUEUEINFO
+        )
+        .then(|| mem::replace(&mut self.sig_mask, !SigSet::EMPTY));
+
+        let syscall = async {
+            let task = self.task.clone();
+
+            let local = pin!(task.sig.wait_event(!self.sig_mask));
+            let shared = task.shared_sig.load(SeqCst);
+            let shared = pin!(shared.wait_event(!self.sig_mask));
+
+            let handle = pin!(crate::syscall::SYSCALL.handle(scn, (self, &mut *tf)));
+
+            match select(handle, select(local, shared)).await {
+                Either::Left((res, _)) => Some(res),
+                Either::Right(_) => None,
+            }
+        }
+        .await;
+
+        if let Some(sig_mask) = sig_mask {
+            self.sig_mask = sig_mask;
+        }
+
+        tf.set_syscall_ret(match syscall {
+            Some(Some(res)) => return res,
+            Some(None) => {
+                log::warn!("SYSCALL not implemented: {scn:?}");
+                ENOSYS.into_raw()
+            }
+            None => EINTR.into_raw(),
+        });
+
+        Continue(None)
+    }
 }
 
 pub fn yield_now() -> YieldNow {

@@ -4,6 +4,7 @@ use arsc_rs::Arsc;
 use async_trait::async_trait;
 use ksc_core::Error;
 use ktime_core::Instant;
+use umio::IoPoll;
 pub use umio::{IntoAny, IntoAnyExt, Io, IoExt, ToIo};
 
 use crate::{
@@ -21,7 +22,7 @@ pub trait FileSystem: IntoAny + Send + Sync + 'static {
 }
 
 #[async_trait]
-pub trait Entry: IntoAny + Send + ToIo + Sync + 'static {
+pub trait Entry: IntoAny + Send + ToIo + IoPoll + Sync + 'static {
     async fn open(
         self: Arc<Self>,
         path: &Path,

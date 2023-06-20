@@ -57,6 +57,21 @@ impl Stdin {
     pub fn new() -> Self {
         Stdin(None)
     }
+
+    pub async fn event() -> umio::Event {
+        let Some(serial) = SERIAL.get() else { return umio::Event::HANG_UP };
+
+        let mut listener = None;
+        loop {
+            if !serial.input.is_empty() {
+                break umio::Event::READABLE;
+            }
+            match listener.take() {
+                Some(listener) => listener.await,
+                None => listener = Some(serial.input_ready.listen()),
+            }
+        }
+    }
 }
 
 impl Stream for Stdin {

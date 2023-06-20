@@ -31,7 +31,7 @@ type FsCollection = BTreeMap<PathBuf, FsHandle>;
 struct FsHandle {
     dev: Cow<'static, str>,
     fs: Arsc<dyn FileSystem>,
-    unmount: Sender<ArrayQueue<()>>,
+    flush: Sender<ArrayQueue<()>>,
 }
 
 impl fmt::Debug for FsHandle {
@@ -48,7 +48,7 @@ pub fn mount(path: PathBuf, dev: Cow<'static, str>, fs: Arsc<dyn FileSystem>) {
     let task = async move {
         loop {
             sleep(Duration::from_secs(1)).await;
-            if matches!(rx.try_recv(), Ok(()) | Err(TryRecvError::Closed(Some(())))) {
+            if let Err(TryRecvError::Closed(_)) = rx.try_recv() {
                 let _ = fs2.flush().await;
                 break;
             }
@@ -56,22 +56,23 @@ pub fn mount(path: PathBuf, dev: Cow<'static, str>, fs: Arsc<dyn FileSystem>) {
         }
     };
     executor().spawn(task).detach();
-    let handle = FsHandle {
-        dev,
-        fs,
-        unmount: tx,
-    };
+    let handle = FsHandle { dev, fs, flush: tx };
 
     let old = ksync::critical(|| FS.write().insert(path, handle));
     if let Some(old) = old {
-        let _ = old.unmount.try_send(());
+        let _ = old.flush.try_send(());
     }
+}
+
+pub fn sync() {
+    let fs = ksync::critical(|| FS.read().clone());
+    fs.values().for_each(|fs| drop(fs.flush.try_send(())))
 }
 
 pub fn unmount(path: &Path) {
     let handle = ksync::critical(|| FS.write().remove(path));
     if let Some(fs_handle) = handle {
-        let _ = fs_handle.unmount.try_send(());
+        let _ = fs_handle.flush.try_send(());
     }
 }
 
@@ -193,5 +194,25 @@ pub async fn test_file() {
         log::trace!("READ 10 ELEMENTS");
         file.read_exact_at(0, &mut buf).await.unwrap();
         assert_eq!(buf, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    }
+
+    {
+        let (tx, rx) = pipe();
+        let tx = tx.to_io().unwrap();
+        let rx = rx.to_io().unwrap();
+
+        let tx_task = executor().spawn(async move {
+            for index in 0..100 {
+                tx.write_all(&[index; 100]).await.unwrap();
+            }
+        });
+
+        let mut buf = [0; 100];
+        for index in 0..100 {
+            rx.read_exact(&mut buf).await.unwrap();
+            assert_eq!(buf, [index; 100]);
+        }
+
+        tx_task.await;
     }
 }

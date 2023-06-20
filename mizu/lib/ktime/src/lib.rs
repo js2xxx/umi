@@ -25,6 +25,10 @@ pub async fn sleep(duration: Duration) {
     Timer::after(duration).await;
 }
 
+pub async fn sleep_until(deadline: Instant) {
+    Timer::deadline(deadline).await;
+}
+
 #[must_use = "futures do nothing unless polled"]
 #[pin_project]
 pub struct OnTimeout<F, G> {

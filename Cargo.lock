@@ -17,6 +17,7 @@ dependencies = [
  "nom",
  "spin",
  "umifs",
+ "umio",
 ]
 
 [[package]]
@@ -82,6 +83,12 @@ checksum = "e3ff7eb3f316534d83a8a2c3d1674ace8a5a71198eba31e2e2b597833f699b28"
 dependencies = [
  "critical-section",
 ]
+
+[[package]]
+name = "atomic_refcell"
+version = "0.1.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "79d6dc922a2792b006573f60b2648076355daeae5ce9cb59507e5908c9625d31"
 
 [[package]]
 name = "autocfg"
@@ -362,6 +369,7 @@ version = "0.1.0"
 dependencies = [
  "buddy_system_allocator",
  "ksync-core",
+ "log",
  "spin",
 ]
 
@@ -431,6 +439,7 @@ name = "ksync"
 version = "0.1.0"
 dependencies = [
  "arsc-rs",
+ "atomic_refcell",
  "crossbeam-epoch",
  "crossbeam-queue",
  "event-listener",
@@ -914,6 +923,7 @@ version = "0.1.0"
 dependencies = [
  "arsc-rs",
  "async-trait",
+ "bitflags 2.3.1",
  "futures-util",
  "ksc-core",
  "log",

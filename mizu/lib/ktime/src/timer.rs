@@ -147,6 +147,14 @@ impl Stream for Timer {
     }
 }
 
+impl Drop for Timer {
+    fn drop(&mut self) {
+        if let Some((id, _)) = self.handle.take() {
+            TIMER_QUEUE.remove(self.deadline, id);
+        }
+    }
+}
+
 enum TimerBatch {
     Insert {
         deadline: Instant,
