@@ -627,14 +627,14 @@ fssc!(
         fd: i32,
         path: UserPtr<u8, In>,
         perm: u32,
-    ) -> Result<i32, Error> {
+    ) -> Result<(), Error> {
         let mut buf = [0; MAX_PATH_LEN];
         let (path, root) = path.read_path(virt, &mut buf).await?;
         let perm = Permissions::from_bits(perm).ok_or(EPERM)?;
 
         log::trace!("user mkdir fd = {fd}, path = {path:?}, perm = {perm:?}");
 
-        let (entry, created) = if root {
+        let (_, created) = if root {
             crate::fs::open(path, OpenOptions::DIRECTORY | OpenOptions::CREAT, perm).await?
         } else {
             let base = files.get(fd).await?;
@@ -644,7 +644,7 @@ fssc!(
         if !created {
             return Err(EEXIST);
         }
-        files.open(entry, perm, false).await
+        Ok(())
     }
 
     pub async fn fstat(

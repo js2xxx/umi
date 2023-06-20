@@ -1,6 +1,6 @@
 use core::{
     array,
-    future::Future,
+    future::{pending, Future},
     pin::Pin,
     sync::atomic::{AtomicU64, Ordering::SeqCst},
     task::{ready, Context, Poll},
@@ -120,7 +120,7 @@ impl Signals {
 
     pub async fn wait_event(&self, sigset: SigSet) {
         if sigset.is_empty() {
-            return;
+            return pending().await;
         }
         let wait_one = move |sig| self.wait_one_event(sig);
         let wait_any = future::select_all(sigset.map(wait_one));

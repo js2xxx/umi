@@ -77,6 +77,10 @@ impl Executor {
         })
     }
 
+    pub fn count(&self) -> usize {
+        self.injector.len() + self.stealers.iter().fold(0, |acc, s| acc + s.len())
+    }
+
     pub fn spawn<F, T>(&self, fut: F) -> Task<T>
     where
         F: Future<Output = T> + Send + 'static,

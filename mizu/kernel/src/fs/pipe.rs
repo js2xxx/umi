@@ -151,7 +151,7 @@ impl Receiver {
             }
 
             if Arsc::count(&self.0) == 1 {
-                break Err(EPIPE);
+                break Ok(0);
             }
 
             match listener.take() {

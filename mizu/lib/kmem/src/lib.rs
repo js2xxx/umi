@@ -14,4 +14,5 @@ pub use self::{
     frame::{frames, init_frames, Arena},
     phys::{Frame, Phys, ZERO},
     virt::{unset_virt, Virt},
+    lru::LruCache,
 };

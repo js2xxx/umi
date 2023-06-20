@@ -33,7 +33,7 @@ use self::{
 };
 use crate::mem::{Futexes, Out, UserPtr};
 
-const DEFAULT_STACK_SIZE: usize = PAGE_SIZE * 8;
+const DEFAULT_STACK_SIZE: usize = PAGE_SIZE * 64;
 const DEFAULT_STACK_ATTR: Attr = Attr::USER_ACCESS
     .union(Attr::READABLE)
     .union(Attr::WRITABLE);

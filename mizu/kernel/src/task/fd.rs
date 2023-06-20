@@ -226,12 +226,13 @@ impl Files {
 
     pub async fn close(&self, fd: i32) -> Result<(), Error> {
         match self.fds.map.write().await.remove(&fd) {
-            Some(fi) => {
+            Some(_fi) => {
                 ksync::critical(|| self.fds.id_alloc.lock().dealloc(fd));
-                match fi.entry.to_io() {
-                    Some(io) => io.flush().await,
-                    None => Ok(()),
-                }
+                // match fi.entry.to_io() {
+                //     Some(io) => io.flush().await,
+                //     None => Ok(()),
+                // }
+                Ok(())
             }
             None => Err(EBADF),
         }
