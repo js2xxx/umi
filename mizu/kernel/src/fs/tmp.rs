@@ -12,7 +12,7 @@ use spin::Mutex;
 use umifs::{
     path::{Path, PathBuf},
     traits::{Directory, DirectoryMut, Entry, FileSystem, Io, ToIo},
-    types::{DirEntry, FileType, FsStat, Metadata, OpenOptions, Permissions},
+    types::{DirEntry, FileType, FsStat, Metadata, OpenOptions, Permissions, Times},
 };
 use umio::IoPoll;
 
@@ -74,9 +74,9 @@ impl Entry for TmpRoot {
                 times: Mutex::new({
                     let now = Instant::now();
                     Times {
-                        created: now,
-                        modified: now,
-                        accessed: now,
+                        last_created:  Some(now),
+                        last_modified: Some(now),
+                        last_access:   Some(now),
                     }
                 }),
             });
@@ -101,9 +101,7 @@ impl Entry for TmpRoot {
             perm: Permissions::all_same(true, true, true),
             block_size: PAGE_SIZE,
             block_count: 0,
-            last_access: None,
-            last_modified: None,
-            last_created: None,
+            times: Default::default(),
         }
     }
 
@@ -149,13 +147,6 @@ impl DirectoryMut for TmpRoot {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-struct Times {
-    created: Instant,
-    modified: Instant,
-    accessed: Instant,
-}
-
 struct TmpFile {
     phys: Arc<Phys>,
     perm: Permissions,
@@ -197,23 +188,21 @@ impl Entry for TmpFile {
             perm: self.perm,
             block_size: PAGE_SIZE,
             block_count: 0,
-            last_access: Some(times.accessed),
-            last_modified: Some(times.modified),
-            last_created: Some(times.created),
+            times,
         }
     }
 
     async fn set_times(&self, c: Option<Instant>, m: Option<Instant>, a: Option<Instant>) {
         ksync::critical(|| {
             let mut times = self.times.lock();
-            if let Some(c) = c {
-                times.created = c;
+            if c.is_some() {
+                times.last_created = c;
             }
-            if let Some(m) = m {
-                times.modified = m;
+            if m.is_some() {
+                times.last_modified = m;
             }
-            if let Some(a) = a {
-                times.accessed = a;
+            if a.is_some() {
+                times.last_access = a;
             }
         })
     }

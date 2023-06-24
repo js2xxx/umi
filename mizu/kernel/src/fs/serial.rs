@@ -109,9 +109,7 @@ impl Entry for Serial {
             block_size: 1,
             block_count: isize::MAX as usize,
             perm: Permissions::all_same(self.read, self.write, false),
-            last_access: None,
-            last_modified: None,
-            last_created: None,
+            times: Default::default(),
         }
     }
 }

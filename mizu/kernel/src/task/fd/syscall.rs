@@ -428,9 +428,9 @@ impl From<Metadata> for Kstat {
             size: metadata.len,
             blksize: metadata.block_size as u32,
             blocks: metadata.block_count as u64,
-            atime: time(metadata.last_access),
-            mtime: time(metadata.last_modified),
-            ctime: time(metadata.last_created),
+            atime: time(metadata.times.last_access),
+            mtime: time(metadata.times.last_modified),
+            ctime: time(metadata.times.last_created),
             ..Default::default()
         }
     }

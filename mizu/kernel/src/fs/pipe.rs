@@ -236,9 +236,7 @@ impl Entry for Receiver {
             perm: Permissions::all_same(true, false, false),
             block_size: 0,
             block_count: 0,
-            last_access: None,
-            last_modified: None,
-            last_created: None,
+            times: Default::default(),
         }
     }
 }
@@ -372,9 +370,7 @@ impl Entry for Sender {
             perm: Permissions::all_same(false, true, false),
             block_size: 0,
             block_count: 0,
-            last_access: None,
-            last_modified: None,
-            last_created: None,
+            times: Default::default(),
         }
     }
 }

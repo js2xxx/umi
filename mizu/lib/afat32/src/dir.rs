@@ -505,9 +505,7 @@ impl<T: TimeProvider> Directory for FatDir<T> {
                 perm: Permissions::all(),
                 block_size: fm.block_size,
                 block_count: fm.block_count,
-                last_access: None,
-                last_modified: None,
-                last_created: None,
+                times: Default::default(),
             },
         }))
     }

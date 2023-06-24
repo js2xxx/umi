@@ -358,9 +358,7 @@ impl<T: TimeProvider> Entry for FatFile<T> {
             perm: Permissions::all(),
             block_size: 1 << self.cluster_shift,
             block_count: self.clusters.read().await.len(),
-            last_access: None,
-            last_modified: None,
-            last_created: None,
+            times: Default::default(),
         }
     }
 }
