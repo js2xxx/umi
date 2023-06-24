@@ -13,7 +13,7 @@ use async_trait::async_trait;
 use crossbeam_queue::SegQueue;
 use futures_util::Future;
 use hashbrown::{
-    hash_map::{Entry, OccupiedEntry},
+    hash_map::{Entry, OccupiedEntry, VacantEntry},
     HashMap,
 };
 use ksc_core::{
@@ -142,6 +142,46 @@ enum Commit {
     Unique(FrameInfo),
 }
 
+enum FrameEntry<'a> {
+    NewFi(VacantEntry<'a, usize, FrameInfo, RandomState>, FrameInfo),
+    Entry(OccupiedEntry<'a, usize, FrameInfo, RandomState>),
+}
+
+impl<'a> FrameEntry<'a> {
+    fn get(list: &'a mut FrameList, index: usize) -> Option<Self> {
+        match list.frames.entry(index) {
+            Entry::Occupied(ent) => Some(FrameEntry::Entry(ent)),
+            Entry::Vacant(_) => None,
+        }
+    }
+
+    fn try_insert(list: &'a mut FrameList, index: usize, fi: FrameInfo) -> Self {
+        match list.frames.entry(index) {
+            Entry::Occupied(ent) => FrameEntry::Entry(ent),
+            Entry::Vacant(ent) => FrameEntry::NewFi(ent, fi),
+        }
+    }
+
+    fn get_mut(&mut self) -> &mut FrameInfo {
+        match self {
+            FrameEntry::NewFi(_, fi) => fi,
+            FrameEntry::Entry(ent) => ent.get_mut(),
+        }
+    }
+
+    fn remove(self) {
+        if let FrameEntry::Entry(ent) = self {
+            ent.remove();
+        }
+    }
+
+    fn insert(self) {
+        if let FrameEntry::NewFi(list, fi) = self {
+            list.insert(fi);
+        }
+    }
+}
+
 #[derive(Debug)]
 struct FrameInfo {
     state: Option<FrameState>,
@@ -218,7 +258,7 @@ impl FrameInfo {
     }
 
     fn get(
-        mut this: OccupiedEntry<usize, FrameInfo, RandomState>,
+        mut this: FrameEntry,
         branch: bool,
         write: Option<usize>,
         cow: bool,
@@ -227,10 +267,13 @@ impl FrameInfo {
             let (ret, remove) = this.get_mut().branch(write, cow)?;
             if remove {
                 this.remove();
+            } else {
+                this.insert();
             }
             Ok(ret)
         } else {
             let (frame, len) = this.get_mut().leaf(write)?;
+            this.insert();
             Ok(Commit::Shared(frame, len))
         }
     }
@@ -460,7 +503,7 @@ impl Phys {
             let self_get = ksync::critical(|| {
                 // log::trace!("Phys::commit_impl: return from self, index = {index}");
                 let mut list = self.list.lock();
-                if let Entry::Occupied(ent) = list.frames.entry(index) {
+                if let Some(ent) = FrameEntry::get(&mut list, index) {
                     return FrameInfo::get(ent, self.branch, write, cow).map(Some);
                 }
                 Ok::<_, Error>(None)
@@ -470,7 +513,7 @@ impl Phys {
             }
 
             let self_get = self.merge_sole_parent(|list| {
-                if let Entry::Occupied(ent) = list.frames.entry(index) {
+                if let Some(ent) = FrameEntry::get(list, index) {
                     return Some(FrameInfo::get(ent, self.branch, write, cow));
                 }
                 None
@@ -496,7 +539,8 @@ impl Phys {
                                 Ok(s @ Commit::Shared(..)) => Ok(s),
                                 Ok(Commit::Unique(fi)) => ksync::critical(|| {
                                     let mut list = self.list.lock();
-                                    let ent = list.frames.entry(index).insert(fi);
+
+                                    let ent = FrameEntry::try_insert(&mut list, index, fi);
                                     FrameInfo::get(ent, self.branch, write, cow)
                                 }),
                                 Err(err) => Err(err),
@@ -530,7 +574,7 @@ impl Phys {
                         let fi = FrameInfo::new(Arsc::new(frame), len);
                         return ksync::critical(|| {
                             let mut list = self.list.lock();
-                            let ent = list.frames.entry(index).insert(fi);
+                            let ent = FrameEntry::try_insert(&mut list, index, fi);
                             FrameInfo::get(ent, self.branch, write, cow)
                         });
                     }
@@ -546,7 +590,7 @@ impl Phys {
             let fi = FrameInfo::new(Arsc::new(Frame::new()?), new_len);
             ksync::critical(|| {
                 let mut list = self.list.lock();
-                let ent = list.frames.entry(index).insert(fi);
+                let ent = FrameEntry::try_insert(&mut list, index, fi);
                 FrameInfo::get(ent, self.branch, write, cow)
             })
         })
