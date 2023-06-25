@@ -86,7 +86,7 @@ const ENVS: [&str; 8] = [
 
 pub async fn run_busybox(script: Option<&str>) -> (i32, Option<Sig>) {
     let mut cmd = Command::new("/busybox");
-    cmd.open("busybox").await.unwrap();
+    cmd.open_executable().await.unwrap();
     match script {
         Some(script) => cmd.args(["busybox", "sh", script]),
         None => cmd.args(["busybox", "sh"]),
@@ -94,6 +94,15 @@ pub async fn run_busybox(script: Option<&str>) -> (i32, Option<Sig>) {
     let task = cmd.envs(ENVS).spawn().await.unwrap();
 
     task.wait().await
+}
+
+#[allow(dead_code)]
+pub async fn run(command: &str) -> (i32, Option<Sig>) {
+    let mut cmd = Command::new("/busybox");
+    cmd.open_executable().await.unwrap();
+    cmd.args(["busybox", "sh", "-c", command]);
+    let task = cmd.envs(ENVS).spawn().await;
+    task.unwrap().wait().await
 }
 
 async fn print_file(path: impl AsRef<Path>) {

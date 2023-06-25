@@ -679,11 +679,16 @@ impl Phys {
 
         let mut storage = None;
         let mut this = self;
+        let mut start_index = 0;
+        let mut end_index = None;
 
         loop {
             let data = ksync::critical(|| {
                 let mut list = this.list.lock();
                 let iter = list.frames.iter_mut().filter_map(|(&index, fi)| {
+                    if !(start_index <= index && end_index.map_or(true, |e| index < e)) {
+                        return None;
+                    }
                     let dirty = mem::replace(&mut fi.dirty, false);
                     dirty
                         .then(|| fi.state.as_mut().map(|s| s.frame(None)))
@@ -701,8 +706,14 @@ impl Phys {
             }
 
             let parent = ksync::critical(|| this.list.lock().parent.clone());
-            let Some(Parent::Phys { phys, start, .. }) = parent else {
+            let Some(Parent::Phys { phys, start, end }) = parent else {
                 break Ok(())
+            };
+            start_index += start;
+            end_index = match (end_index, end) {
+                (None, end) => end,
+                (Some(end), None) => Some(end + start),
+                (Some(end), Some(e)) => Some((end + start).min(e)),
             };
 
             flusher.offset -= start;
@@ -719,6 +730,8 @@ impl Drop for Phys {
 
         let mut storage = None;
         let mut this = self;
+        let mut start_index = 0;
+        let mut end_index = None;
 
         loop {
             if flusher.sender.is_closed() {
@@ -726,6 +739,9 @@ impl Drop for Phys {
             }
             let list = this.list.get_mut();
             let data = list.frames.iter_mut().filter_map(|(&index, fi)| {
+                if !(start_index <= index && end_index.map_or(true, |e| index < e)) {
+                    return None;
+                }
                 let dirty = mem::replace(&mut fi.dirty, false);
                 dirty
                     .then(|| fi.state.as_mut().map(|s| s.frame(None)))
@@ -737,8 +753,14 @@ impl Drop for Phys {
                 let _ = flusher.sender.try_send(FlushData::Multiple(data));
             }
 
-            let Some(Parent::Phys { phys, start, .. }) = list.parent.take() else {
+            let Some(Parent::Phys { phys, start, end }) = list.parent.take() else {
                 break
+            };
+            start_index += start;
+            end_index = match (end_index, end) {
+                (None, end) => end,
+                (Some(end), None) => Some(end + start),
+                (Some(end), Some(e)) => Some((end + start).min(e)),
             };
 
             flusher.offset -= start;

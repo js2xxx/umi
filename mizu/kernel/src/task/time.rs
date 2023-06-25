@@ -101,6 +101,7 @@ impl Times {
 pub struct Counter {
     interval: Duration,
     next_tick: Instant,
+    activated: bool,
     now: fn(&Times) -> Instant,
     sig: Sig,
 }
@@ -110,6 +111,7 @@ impl Counter {
         Counter {
             interval: Duration::ZERO,
             next_tick: Instant::now(),
+            activated: false,
             now: |_| Instant::now(),
             sig: Sig::SIGALRM,
         }
@@ -119,6 +121,7 @@ impl Counter {
         Counter {
             interval: Duration::ZERO,
             next_tick: Instant::from_su(0, 0),
+            activated: false,
             now: |times| {
                 let [user, _] = times.get_process_raw();
                 unsafe { Instant::from_raw(user) }
@@ -131,6 +134,7 @@ impl Counter {
         Counter {
             interval: Duration::ZERO,
             next_tick: Instant::from_su(0, 0),
+            activated: false,
             now: |times| {
                 let [user, system] = times.get_process_raw();
                 unsafe { Instant::from_raw(user + system) }
@@ -140,12 +144,15 @@ impl Counter {
     }
 
     pub fn update(&mut self, times: &Times) -> Option<SigInfo> {
-        if self.interval.is_zero() {
+        if !self.activated {
             return None;
         }
         let now = (self.now)(times);
-        if self.next_tick >= now {
+        if self.next_tick <= now {
             self.next_tick = now + self.interval;
+            if self.interval.is_zero() {
+                self.activated = false;
+            }
             return Some(SigInfo {
                 sig: self.sig,
                 code: SigCode::TIMER as _,
@@ -165,6 +172,7 @@ impl Counter {
         if let Some((interval, next_diff)) = set {
             self.interval = interval;
             self.next_tick = now + next_diff;
+            self.activated = true;
         }
         old
     }
