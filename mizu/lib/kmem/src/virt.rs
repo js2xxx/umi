@@ -359,6 +359,8 @@ impl Virt {
     }
 
     pub async fn unmap(&self, range: Range<LAddr>) -> Result<(), Error> {
+        log::trace!("Virt::unmap {range:?}");
+
         if range.start.val() & PAGE_MASK != 0 || range.end.val() & PAGE_MASK != 0 {
             return Err(EINVAL);
         }
@@ -404,6 +406,8 @@ impl Virt {
     }
 
     pub async fn clear(&self) {
+        log::trace!("Virt::clear table = {:p}", self.root.as_ptr());
+
         let mut map = self.map.lock().await;
         let mut table = self.root.lock().await;
 
@@ -457,6 +461,8 @@ impl Virt {
 
 impl Drop for Virt {
     fn drop(&mut self) {
+        log::trace!("Virt::drop table = {:p}", self.root.as_ptr());
+
         let range = self.map.get_mut().root_range();
         let count = (range.end.val() - range.start.val()) >> PAGE_SHIFT;
         self.root
