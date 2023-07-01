@@ -97,6 +97,7 @@ impl<T: Copy, D> UserPtr<T, D> {
     {
         let mut start = self.addr.val();
         let mut end = (start + PAGE_MASK) & !PAGE_MASK;
+        len *= mem::size_of::<T>();
 
         log::trace!("UserPtr::op at {start:#x}, len = {len}");
 
@@ -194,8 +195,8 @@ impl<T: Copy, D: InPtr> UserPtr<T, D> {
                 let dst = buf.as_mut_ptr().into();
                 checked_copy(virt, range.start, dst, count, Attr::READABLE).await?;
             }
-            let has_zero = buf[..count].contains(&Default::default());
-            Ok((&mut buf[count..], !has_zero))
+            let has_zero = buf[..count / mem::size_of::<T>()].contains(&Default::default());
+            Ok((&mut buf[count / mem::size_of::<T>()..], !has_zero))
         }
 
         let rest_len = self
