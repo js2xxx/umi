@@ -23,6 +23,8 @@ pub enum Scn {
     UMOUNT2 = 39,
     MOUNT = 40,
     STATFS = 43,
+    TRUNCATE = 45,
+    FTRUNCATE = 46,
     FACCESSAT = 48,
     CHDIR = 49,
     FCHOWN = 55,

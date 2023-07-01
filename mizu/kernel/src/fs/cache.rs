@@ -206,6 +206,13 @@ impl Entry for CachedFile {
     fn metadata<'a: 'b, 'b>(&'a self) -> Boxed<'b, Metadata> {
         self.entry.metadata()
     }
+
+    fn set_metadata<'a: 'b, 'b>(&'a self, metadata: SetMetadata) -> Boxed<'b, Result<(), Error>> {
+        if let Some(new_len) = metadata.len {
+            self.phys.resize(new_len);
+        }
+        self.entry.set_metadata(metadata)
+    }
 }
 
 impl IoPoll for CachedFile {

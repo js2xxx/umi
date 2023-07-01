@@ -196,6 +196,18 @@ impl FrameInfo {
         }
     }
 
+    fn truncate(&mut self, new_len: usize) {
+        let (frame, len) = match &mut self.state {
+            Some(FrameState::Shared(frame, len)) => (frame, len),
+            Some(FrameState::Unique(frame, len)) => (frame, len),
+            _ => return,
+        };
+        if new_len < *len {
+            unsafe { frame.as_ptr().as_mut()[new_len..*len].fill(0) };
+        }
+        *len = new_len;
+    }
+
     fn branch(&mut self, write: Option<usize>, cow: bool) -> Result<(Commit, bool), Error> {
         // log::trace!("branch write = {write:?} cow = {cow}");
         match mem::take(&mut self.state) {
@@ -614,6 +626,40 @@ impl Phys {
             Ok(Commit::Unique(..)) => unreachable!(),
             Err(err) => Err(err),
         }
+    }
+
+    pub fn resize(&self, new_len: usize) {
+        if new_len == 0 {
+            ksync::critical(|| {
+                let mut list = self.list.lock();
+                list.frames.clear();
+                if let Some(Parent::Phys { start, end, .. }) = &mut list.parent {
+                    *end = Some(*start)
+                }
+            });
+            return;
+        }
+
+        let (index, offset) = {
+            let index = new_len >> PAGE_SHIFT;
+            let offset = new_len - (index << PAGE_SHIFT);
+            if offset == 0 {
+                (index - 1, PAGE_SIZE)
+            } else {
+                (index, offset)
+            }
+        };
+
+        ksync::critical(|| {
+            let mut list = self.list.lock();
+            list.frames.retain(|&i, _| i <= index);
+            if let Some(ent) = list.frames.get_mut(&index) {
+                ent.truncate(offset);
+            }
+            if let Some(Parent::Phys { start, end, .. }) = &mut list.parent {
+                *end = Some(*start + index + 1)
+            }
+        })
     }
 
     pub async fn flush(&self, mut index: usize, force_dirty: Option<bool>) -> Result<(), Error> {

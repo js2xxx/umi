@@ -12,7 +12,7 @@ use spin::Mutex;
 use umifs::{
     path::{Path, PathBuf},
     traits::{Directory, DirectoryMut, Entry, FileSystem, Io, ToIo},
-    types::{DirEntry, FileType, FsStat, Metadata, OpenOptions, Permissions, Times},
+    types::{DirEntry, FileType, FsStat, Metadata, OpenOptions, Permissions, Times, SetMetadata},
 };
 use umio::IoPoll;
 
@@ -192,19 +192,20 @@ impl Entry for TmpFile {
         }
     }
 
-    async fn set_times(&self, c: Option<Instant>, m: Option<Instant>, a: Option<Instant>) {
+    async fn set_metadata(&self, metadata: SetMetadata) -> Result<(), Error> {
         ksync::critical(|| {
             let mut times = self.times.lock();
-            if c.is_some() {
-                times.last_created = c;
+            if metadata.times.last_created.is_some() {
+                times.last_created = metadata.times.last_created;
             }
-            if m.is_some() {
-                times.last_modified = m;
+            if metadata.times.last_modified.is_some() {
+                times.last_modified = metadata.times.last_modified;
             }
-            if a.is_some() {
-                times.last_access = a;
+            if metadata.times.last_access.is_some() {
+                times.last_access = metadata.times.last_access;
             }
-        })
+        });
+        Ok(())
     }
 }
 

@@ -318,7 +318,7 @@ impl<T: TimeProvider> FatDir<T> {
                 }
                 // free data
                 if let Some(n) = e.first_cluster() {
-                    node.file.fs.fat.free(n).await?;
+                    node.file.fs.free_cluster_chain(n).await?;
                 }
                 // free long and short name entries
                 e.free_all_entries(&self.file).await?;

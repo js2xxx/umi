@@ -21,7 +21,7 @@ use ksc::{
 use ktime::{Instant, TimeOutExt};
 use rand_riscv::RandomState;
 use sygnal::SigSet;
-use umifs::types::{FileType, Metadata, OpenOptions, Permissions};
+use umifs::types::{FileType, Metadata, OpenOptions, Permissions, SetMetadata, Times};
 use umio::SeekFrom;
 
 use super::Files;
@@ -751,8 +751,15 @@ fssc!(
             };
             (a, m)
         };
-        file.set_times(None, m, a).await;
-        Ok(())
+        let metadata = SetMetadata {
+            times: Times {
+                last_created: None,
+                last_modified: m,
+                last_access: a,
+            },
+            ..Default::default()
+        };
+        file.set_metadata(metadata).await
     }
 
     pub async fn getdents64(
@@ -1207,6 +1214,49 @@ pub async fn pselect(
         }
 
         Ok(count)
+    };
+    cx.ret(fut.await);
+    ScRet::Continue(None)
+}
+
+#[async_handler]
+pub async fn ftruncate(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(i32, usize) -> Result<(), Error>>,
+) -> ScRet {
+    let (fd, len) = cx.args();
+    let fut = async {
+        let file = ts.files.get(fd).await?;
+        let metadata = SetMetadata {
+            len: Some(len),
+            ..Default::default()
+        };
+        file.set_metadata(metadata).await
+    };
+    cx.ret(fut.await);
+    ScRet::Continue(None)
+}
+
+#[async_handler]
+pub async fn truncate(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(UserPtr<u8, In>, usize) -> Result<(), Error>>,
+) -> ScRet {
+    let (path, len) = cx.args();
+    let mut buf = [0; MAX_PATH_LEN];
+    let fut = async {
+        let (path, _) = path.read_path(ts.virt.as_ref(), &mut buf).await?;
+        let (file, _) = crate::fs::open(
+            path,
+            OpenOptions::RDONLY,
+            Permissions::all_same(true, false, false),
+        )
+        .await?;
+        let metadata = SetMetadata {
+            len: Some(len),
+            ..Default::default()
+        };
+        file.set_metadata(metadata).await
     };
     cx.ret(fut.await);
     ScRet::Continue(None)

@@ -1,17 +1,23 @@
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
-use core::sync::atomic::{
-    AtomicUsize,
-    Ordering::{Relaxed, SeqCst},
+use core::{
+    future::ready,
+    sync::atomic::{
+        AtomicUsize,
+        Ordering::{Relaxed, SeqCst},
+    },
 };
 
 use arsc_rs::Arsc;
 use async_trait::async_trait;
-use ksc_core::Error::{self, EINVAL, EISDIR, ENOSYS, ENOTDIR};
+use ksc_core::{
+    handler::Boxed,
+    Error::{self, EINVAL, EISDIR, ENOSYS, ENOTDIR},
+};
 use ksync::{Mutex, RwLock, RwLockUpgradableReadGuard, RwLockWriteGuard};
 use umifs::{
     path::Path,
     traits::{Entry, Io},
-    types::{FileType, Metadata, OpenOptions, Permissions},
+    types::{FileType, Metadata, OpenOptions, Permissions, SetMetadata},
 };
 use umio::{advance_slices, IoPoll, IoSlice, IoSliceMut, SeekFrom};
 
@@ -198,6 +204,10 @@ impl<T: TimeProvider> Io for FatFile<T> {
         Ok(offset)
     }
 
+    fn stream_len<'a: 'b, 'b>(&'a self) -> Boxed<'b, Result<usize, Error>> {
+        Box::pin(ready(Ok(self.len.load(SeqCst))))
+    }
+
     async fn read_at(&self, offset: usize, mut buffer: &mut [IoSliceMut]) -> Result<usize, Error> {
         // let ioslice_len = umio::ioslice_len(&buffer);
         // log::trace!("FatFile::read_at {offset:#x}, buffer len = {ioslice_len}");
@@ -279,7 +289,7 @@ impl<T: TimeProvider> Io for FatFile<T> {
                     let mut prev = clusters.last().map(|&(c, _)| c);
 
                     loop {
-                        let new = self.fs.fat.allocate(prev, None).await?;
+                        let new = self.fs.alloc_cluster(prev, true).await?;
 
                         if let Some(&(_, old_end)) = clusters.last() {
                             for (_, end) in clusters.iter_mut().rev() {
@@ -360,6 +370,13 @@ impl<T: TimeProvider> Entry for FatFile<T> {
             block_count: self.clusters.read().await.len(),
             times: Default::default(),
         }
+    }
+
+    async fn set_metadata(&self, metadata: SetMetadata) -> Result<(), Error> {
+        if let Some(new_len) = metadata.len {
+            self.truncate(new_len.try_into()?).await?;
+        }
+        Ok(())
     }
 }
 impl<T: TimeProvider> IoPoll for FatFile<T> {}
