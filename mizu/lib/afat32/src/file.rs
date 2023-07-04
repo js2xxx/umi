@@ -75,7 +75,7 @@ impl<T: TimeProvider> FatFile<T> {
     }
 
     pub async fn truncate(&self, new_len: u32) -> Result<(), Error> {
-        log::trace!("FatFile::truncate to {new_len}");
+        // log::trace!("FatFile::truncate to {new_len}");
 
         let Some(ref entry) = self.entry else {
             return Err(ENOSYS)
@@ -178,7 +178,7 @@ impl<T: TimeProvider> FatFile<T> {
 #[async_trait]
 impl<T: TimeProvider> Io for FatFile<T> {
     async fn seek(&self, whence: SeekFrom) -> Result<usize, Error> {
-        log::trace!("FatFile::seek {whence:?}");
+        // log::trace!("FatFile::seek {whence:?}");
 
         let offset = match whence {
             SeekFrom::Start(offset) => offset,
@@ -210,8 +210,8 @@ impl<T: TimeProvider> Io for FatFile<T> {
     }
 
     async fn read_at(&self, offset: usize, mut buffer: &mut [IoSliceMut]) -> Result<usize, Error> {
-        let ioslice_len = umio::ioslice_len(&buffer);
-        log::trace!("FatFile::read_at {offset:#x}, buffer len = {ioslice_len}");
+        // let ioslice_len = umio::ioslice_len(&buffer);
+        // log::trace!("FatFile::read_at {offset:#x}, buffer len = {ioslice_len}");
 
         let cluster_shift = self.cluster_shift;
         let (cluster_index, offset_in_cluster) = self.decomp(offset);
