@@ -1,9 +1,10 @@
 use alloc::sync::Arc;
 use core::num::NonZeroU32;
 
-use devices::dev::{Block, VirtioBlock};
+use devices::block::Block;
 use fdt::node::FdtNode;
 use rv39_paging::{PAddr, ID_OFFSET};
+use virtio::block::VirtioBlock;
 use virtio_drivers::transport::{mmio::MmioTransport, DeviceType, Transport};
 
 use super::block::BLOCKS;

@@ -211,25 +211,15 @@ dependencies = [
 name = "devices"
 version = "0.1.0"
 dependencies = [
- "arsc-rs",
  "async-trait",
- "bitflags",
  "crossbeam-queue",
  "futures-lite",
- "futures-util",
- "hart-id",
- "hashbrown",
- "kmem",
  "ksc",
  "ksync",
  "ktime",
  "log",
- "rand-riscv",
- "rv39-paging",
  "spin",
- "static_assertions",
  "umio",
- "virtio-drivers",
  "volatile",
 ]
 
@@ -553,6 +543,7 @@ dependencies = [
  "ktime",
  "log",
  "pin-project",
+ "plic",
  "r0",
  "rand-riscv",
  "riscv",
@@ -562,8 +553,10 @@ dependencies = [
  "spin",
  "static_assertions",
  "sygnal",
+ "uart",
  "umifs",
  "umio",
+ "virtio",
  "virtio-drivers",
 ]
 
@@ -665,6 +658,22 @@ name = "plain"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
+
+[[package]]
+name = "plic"
+version = "0.1.0"
+dependencies = [
+ "crossbeam-queue",
+ "devices",
+ "hart-id",
+ "hashbrown",
+ "ksync",
+ "log",
+ "rand-riscv",
+ "spin",
+ "static_assertions",
+ "volatile",
+]
 
 [[package]]
 name = "ppv-lite86"
@@ -907,6 +916,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "uart"
+version = "0.1.0"
+dependencies = [
+ "bitflags",
+]
+
+[[package]]
 name = "umifs"
 version = "0.1.0"
 dependencies = [
@@ -943,6 +959,24 @@ name = "version_check"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "49874b5167b65d7193b8aba1567f5c7d93d001cafc34600cee003eda787e483f"
+
+[[package]]
+name = "virtio"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "crossbeam-queue",
+ "devices",
+ "futures-util",
+ "kmem",
+ "ksc",
+ "ksync",
+ "log",
+ "spin",
+ "static_assertions",
+ "umio",
+ "virtio-drivers",
+]
 
 [[package]]
 name = "virtio-drivers"

@@ -7,6 +7,7 @@ use core::{
 
 use async_trait::async_trait;
 use crossbeam_queue::ArrayQueue;
+use devices::{block::Block, impl_io_for_block};
 use futures_util::{stream, Future, FutureExt, StreamExt, TryStreamExt};
 use ksc::Error::{self, EINVAL, EIO, ENOBUFS, ENOMEM, EPERM};
 use ksync::{
@@ -23,7 +24,7 @@ use virtio_drivers::{
     transport::mmio::MmioTransport,
 };
 
-use super::{block::Block, HalImpl};
+use super::HalImpl;
 
 struct Token(ArrayQueue<Request>);
 

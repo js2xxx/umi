@@ -1,0 +1,20 @@
+[package]
+edition = "2021"
+name = "virtio"
+version = "0.1.0"
+
+[dependencies]
+# Local crates
+devices = {path = "../../lib/devices"}
+kmem = {path = "../../lib/kmem"}
+ksc = {path = "../../lib/ksc"}
+ksync = {path = "../../lib/ksync"}
+umio = {path = "../../lib/umio"}
+# External crates
+async-trait = "0"
+crossbeam-queue = {version = "0", default-features = false, features = ["alloc", "nightly"]}
+futures-util = {version = "0", default-features = false, features = ["alloc"]}
+log = "0"
+spin = "0"
+static_assertions = "1"
+virtio-drivers = "0"

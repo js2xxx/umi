@@ -1,6 +1,6 @@
 use alloc::{sync::Arc, vec::Vec};
 
-use devices::dev::Block;
+use devices::block::Block;
 use spin::Mutex;
 
 pub static BLOCKS: Mutex<Vec<Arc<dyn Block>>> = Mutex::new(Vec::new());

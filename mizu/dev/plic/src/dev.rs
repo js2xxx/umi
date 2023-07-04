@@ -2,13 +2,12 @@
 
 use core::{mem, ptr::NonNull};
 
+use devices::{bitmap_index_u32, MmioReg};
 use static_assertions::const_assert_eq;
 use volatile::{
     access::{ReadOnly, ReadWrite},
     map_field,
 };
-
-use crate::dev::common::{bitmap_index_u32, MmioReg};
 
 pub const NR_INTR: usize = 1024;
 const NR_INTR_BY_BITS: usize = NR_INTR / u32::BITS as usize;

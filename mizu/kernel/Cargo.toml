@@ -14,7 +14,7 @@ test = [
 ]
 
 [dependencies]
-# Local crates
+# Local libs
 afat32 = {path = "../lib/afat32"}
 art = {path = "../lib/art"}
 co-trap = {path = "../lib/co-trap"}
@@ -31,6 +31,10 @@ rv39-paging = {path = "../lib/paging"}
 sygnal = {path = "../lib/sygnal"}
 umifs = {path = "../lib/umifs"}
 umio = {path = "../lib/umio"}
+# Local drivers
+plic = {path = "../dev/plic"}
+uart = {path = "../dev/uart"}
+virtio = {path = "../dev/virtio"}
 # External crates
 arsc-rs = {git = "https://github.com/js2xxx/arsc"}
 async-trait = "0"

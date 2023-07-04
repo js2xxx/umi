@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use ksc::Error;
 use umio::Io;
 
-use crate::Interrupt;
+use crate::intr::Interrupt;
 
 #[async_trait]
 pub trait Block: Io {
@@ -33,6 +33,7 @@ pub trait Block: Io {
     }
 }
 
+#[macro_export]
 macro_rules! impl_io_for_block {
     ($type:ident) => {
         #[async_trait]

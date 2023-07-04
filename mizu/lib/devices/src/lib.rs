@@ -1,10 +1,10 @@
 #![no_std]
 #![feature(pointer_byte_offsets)]
-#![feature(slice_ptr_get)]
 
 extern crate alloc;
 
-pub mod dev;
-mod intr;
+pub mod block;
+mod common;
+pub mod intr;
 
-pub use self::intr::*;
+pub use self::common::*;

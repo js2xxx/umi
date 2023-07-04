@@ -1,0 +1,18 @@
+[package]
+edition = "2021"
+name = "plic"
+version = "0.1.0"
+
+[dependencies]
+# Local crates
+devices = {path = "../../lib/devices"}
+hart-id = {path = "../../lib/hart-id"}
+rand-riscv = {path = "../../lib/rand-riscv"}
+ksync = {path = "../../lib/ksync"}
+# External crates
+crossbeam-queue = {version = "0", default-features = false, features = ["alloc", "nightly"]}
+hashbrown = {version = "0", default-features = false, features = ["inline-more"]}
+log = "0"
+spin = "0"
+static_assertions = "1"
+volatile = "0"
