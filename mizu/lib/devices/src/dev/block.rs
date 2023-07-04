@@ -54,23 +54,26 @@ macro_rules! impl_io_for_block {
                 offset: usize,
                 mut buffer: &mut [umio::IoSliceMut],
             ) -> Result<usize, ksc::Error> {
-                if offset & ((1 << self.block_shift()) - 1) != 0 {
+                let block_shift = self.block_shift();
+                if offset & ((1 << block_shift) - 1) != 0 {
                     return Ok(0);
                 }
-                let mut block = offset >> self.block_shift();
+                let cap = self.capacity_blocks();
+                let mut block = offset >> block_shift;
                 let mut read_len = 0;
                 loop {
-                    if buffer.is_empty() {
+                    if buffer.is_empty() || block >= cap {
                         break Ok(read_len);
                     }
                     let buf = &mut buffer[0];
-                    let len = Block::read(self, block, buf).await?;
-                    read_len += len;
-                    umio::advance_slices(&mut buffer, len);
-                    if len < Self::SECTOR_SIZE {
+                    let len = buf.len().min((cap - block) << block_shift);
+                    let actual_len = Block::read(self, block, &mut buf[..len]).await?;
+                    read_len += actual_len;
+                    if actual_len < len || len < buf.len() {
                         break Ok(read_len);
                     }
-                    block += len >> self.block_shift();
+                    umio::advance_slices(&mut buffer, actual_len);
+                    block += actual_len >> block_shift;
                 }
             }
 
@@ -79,23 +82,26 @@ macro_rules! impl_io_for_block {
                 offset: usize,
                 mut buffer: &mut [umio::IoSlice],
             ) -> Result<usize, ksc::Error> {
-                if offset & ((1 << self.block_shift()) - 1) != 0 {
+                let block_shift = self.block_shift();
+                if offset & ((1 << block_shift) - 1) != 0 {
                     return Ok(0);
                 }
-                let mut block = offset >> self.block_shift();
+                let cap = self.capacity_blocks();
+                let mut block = offset >> block_shift;
                 let mut written_len = 0;
                 loop {
-                    if buffer.is_empty() {
+                    if buffer.is_empty() || block >= cap {
                         break Ok(written_len);
                     }
                     let buf = buffer[0];
-                    let len = Block::write(self, block, buf).await?;
-                    written_len += len;
-                    umio::advance_slices(&mut buffer, len);
-                    if len < Self::SECTOR_SIZE {
+                    let len = buf.len().min((cap - block) << block_shift);
+                    let actual_len = Block::write(self, block, &buf[..len]).await?;
+                    written_len += actual_len;
+                    if actual_len < len || len < buf.len() {
                         break Ok(written_len);
                     }
-                    block += len >> self.block_shift();
+                    umio::advance_slices(&mut buffer, actual_len);
+                    block += actual_len >> block_shift;
                 }
             }
 

@@ -518,18 +518,7 @@ impl Phys {
     ) -> Boxed<Result<Commit, Error>> {
         let cow = self.cow || cow;
         Box::pin(async move {
-            let self_get = ksync::critical(|| {
-                // log::trace!("Phys::commit_impl: return from self, index = {index}");
-                let mut list = self.list.lock();
-                if let Some(ent) = FrameEntry::get(&mut list, index) {
-                    return FrameInfo::get(ent, self.branch, write, cow).map(Some);
-                }
-                Ok::<_, Error>(None)
-            })?;
-            if let Some(commit) = self_get {
-                return Ok(commit);
-            }
-
+            // log::trace!("Phys::commit_impl: return from self, index = {index}");
             let self_get = self.merge_sole_parent(|list| {
                 if let Some(ent) = FrameEntry::get(list, index) {
                     return Some(FrameInfo::get(ent, self.branch, write, cow));
@@ -1028,12 +1017,14 @@ async fn flusher(rx: Receiver<SegQueue<FlushData>>, flushed: Arsc<Event>, backen
         let Ok(data) = rx.recv().await else { break };
         match data {
             FlushData::Single((index, frame, len)) => {
+                // log::trace!("backend write index = {index}, frame = {frame:?}, len = {len}");
                 let _ = backend
                     .write_all_at(index << PAGE_SHIFT, &frame[..len])
                     .await;
             }
             FlushData::Multiple(data) => {
                 for (index, frame, len) in data {
+                    // log::trace!("backend write index = {index}, frame = {frame:?}, len = {len}");
                     let _ = backend
                         .write_all_at(index << PAGE_SHIFT, &frame[..len])
                         .await;

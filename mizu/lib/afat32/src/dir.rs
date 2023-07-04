@@ -259,7 +259,7 @@ impl<T: TimeProvider> FatDir<T> {
                     // directory does not exist - create it
                     DirEntryOrShortName::ShortName(short_name) => {
                         // alloc cluster for directory data
-                        let cluster = node.file.fs.alloc_cluster(None, true).await?;
+                        let cluster = node.file.fs.alloc_cluster(None, &mut 1, true).await?;
                         // create entry in parent directory
                         let sfn_entry = node.create_sfn_entry(
                             short_name,

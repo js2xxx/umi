@@ -1,6 +1,7 @@
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use core::{
     future::ready,
+    iter,
     sync::atomic::{
         AtomicUsize,
         Ordering::{Relaxed, SeqCst},
@@ -13,7 +14,7 @@ use ksc_core::{
     handler::Boxed,
     Error::{self, EINVAL, EISDIR, ENOSYS, ENOTDIR},
 };
-use ksync::{Mutex, RwLock, RwLockUpgradableReadGuard, RwLockWriteGuard};
+use ksync::{Mutex, RwLock};
 use umifs::{
     path::Path,
     traits::{Entry, Io},
@@ -177,7 +178,7 @@ impl<T: TimeProvider> FatFile<T> {
 #[async_trait]
 impl<T: TimeProvider> Io for FatFile<T> {
     async fn seek(&self, whence: SeekFrom) -> Result<usize, Error> {
-        // log::trace!("FatFile::seek {whence:?}");
+        log::trace!("FatFile::seek {whence:?}");
 
         let offset = match whence {
             SeekFrom::Start(offset) => offset,
@@ -209,8 +210,8 @@ impl<T: TimeProvider> Io for FatFile<T> {
     }
 
     async fn read_at(&self, offset: usize, mut buffer: &mut [IoSliceMut]) -> Result<usize, Error> {
-        // let ioslice_len = umio::ioslice_len(&buffer);
-        // log::trace!("FatFile::read_at {offset:#x}, buffer len = {ioslice_len}");
+        let ioslice_len = umio::ioslice_len(&buffer);
+        log::trace!("FatFile::read_at {offset:#x}, buffer len = {ioslice_len}");
 
         let cluster_shift = self.cluster_shift;
         let (cluster_index, offset_in_cluster) = self.decomp(offset);
@@ -238,7 +239,7 @@ impl<T: TimeProvider> Io for FatFile<T> {
             }
             None => (count << cluster_shift) - offset_in_cluster,
         };
-        // log::trace!("FatFile::read_at: rest {rest:#x} bytes can be read");
+        log::trace!("FatFile::read_at: rest {rest:#x} bytes can be read");
 
         let mut cluster_offset = self.fs.offset_from_cluster(cluster) as usize + offset_in_cluster;
         let mut read_len = 0;
@@ -249,12 +250,12 @@ impl<T: TimeProvider> Io for FatFile<T> {
                 break Ok(read_len);
             }
             let len = rest.min(buffer[0].len());
-            // log::trace!("FatFile::read_at: attempt to read {len:#x} bytes");
+            log::trace!("FatFile::read_at: attempt to read {len:#x} bytes");
 
             let len = device
                 .read_at(cluster_offset, &mut [&mut buffer[0][..len]])
                 .await?;
-            // log::trace!("FatFile::read_at: actual read {len:#x} bytes");
+            log::trace!("FatFile::read_at: actual read {len:#x} bytes");
 
             cluster_offset += len;
             read_len += len;
@@ -268,46 +269,55 @@ impl<T: TimeProvider> Io for FatFile<T> {
         mut offset: usize,
         mut buffer: &mut [IoSlice],
     ) -> Result<usize, Error> {
-        // let ioslice_len = umio::ioslice_len(&buffer);
+        let ioslice_len = umio::ioslice_len(&buffer);
         // log::trace!("FatFile::write_at {offset:#x}, buffer len = {ioslice_len}");
 
         let cluster_shift = self.cluster_shift;
         let (cluster_index, offset_in_cluster) = self.decomp(offset);
 
-        let clusters = self.clusters.upgradable_read().await;
+        let mut clusters = self.clusters.write().await;
 
-        let (cluster, count, _clusters) = {
+        let (cluster, count) = {
             let cluster = clusters.get(cluster_index).cloned();
             match cluster {
                 Some((cluster, cluster_end)) => {
                     let count = (cluster_end + 1 - cluster) as usize;
-                    (cluster, count, clusters)
+                    (cluster, count)
                 }
                 None => {
-                    let mut clusters = RwLockUpgradableReadGuard::upgrade(clusters).await;
-                    let mut times = cluster_index + 1 - clusters.len();
+                    let mut times = (cluster_index
+                        + ((ioslice_len + ((1 << cluster_shift) - 1)) >> cluster_shift)
+                        - clusters.len())
+                    .try_into()?;
                     let mut prev = clusters.last().map(|&(c, _)| c);
 
                     loop {
-                        let new = self.fs.alloc_cluster(prev, true).await?;
+                        let mut count = times;
+                        // log::trace!(
+                        //     "FatFile::write_at {self:p} remaining {count} clusters to allocate"
+                        // );
+                        let new = self.fs.alloc_cluster(prev, &mut count, true).await?;
+                        let new_end = new + count - 1;
 
                         if let Some(&(_, old_end)) = clusters.last() {
-                            for (_, end) in clusters.iter_mut().rev() {
-                                if *end != old_end {
-                                    break;
+                            if old_end + 1 == new {
+                                for (_, end) in clusters.iter_mut().rev() {
+                                    if *end != old_end {
+                                        break;
+                                    }
+                                    *end = new_end;
                                 }
-                                *end = new;
                             }
                         } else if let Some(ref entry) = self.entry {
                             // No last entry means emptiness.
                             entry.lock().await.set_first_cluster(Some(new));
                         }
 
-                        clusters.push((new, new));
+                        clusters.extend((new..(new + count)).zip(iter::repeat(new_end)));
 
-                        times -= 1;
+                        times -= count;
                         if times == 0 {
-                            break (new, 1, RwLockWriteGuard::downgrade_to_upgradable(clusters));
+                            break (new, 1);
                         }
                         prev = Some(new);
                     }
