@@ -1,13 +1,12 @@
 //! Based on [PLIC specification](https://github.com/riscv/riscv-plic-spec).
 
-use core::{
-    mem,
-    ops::{Index, IndexMut},
-    ptr::NonNull,
-};
+use core::{mem, ptr::NonNull};
 
 use static_assertions::const_assert_eq;
-use volatile::access::{ReadOnly, ReadWrite};
+use volatile::{
+    access::{ReadOnly, ReadWrite},
+    map_field,
+};
 
 use crate::dev::common::{bitmap_index_u32, MmioReg};
 
@@ -55,6 +54,12 @@ impl MmioReg for Cx {
 }
 const_assert_eq!(mem::size_of::<<Cx as MmioReg>::Repr>(), 0x3e00000);
 
+macro_rules! map_index {
+    ($volatile:ident, $index:expr) => {
+        unsafe { $volatile.map(|ptr| core::ptr::NonNull::get_unchecked_mut(ptr, $index)) }
+    };
+}
+
 #[derive(Debug, Clone)]
 pub struct Plic(NonNull<()>);
 
@@ -75,25 +80,28 @@ impl Plic {
 
     pub fn priority(&self, pin: u32) -> u32 {
         let cell = unsafe { Priority::at(self.0) };
-        cell.map(|s| s.index(pin as usize)).read()
+        unsafe {
+            cell.map(|s| NonNull::get_unchecked_mut(s, pin as usize))
+                .read()
+        }
     }
 
     pub fn set_priority(&self, pin: u32, priority: u32) {
-        let mut cell = unsafe { Priority::at(self.0) };
-        cell.map_mut(|s| s.index_mut(pin as usize)).write(priority)
+        let cell = unsafe { Priority::at(self.0) };
+        map_index!(cell, pin as usize).write(priority)
     }
 
     pub fn pending(&self, pin: u32) -> bool {
         let (byte, bit_in_byte_mask) = bitmap_index_u32(pin as usize);
         let cell = unsafe { Pending::at(self.0) };
-        cell.map(|s| s.index(byte)).read() & bit_in_byte_mask != 0
+        map_index!(cell, byte).read() & bit_in_byte_mask != 0
     }
 
     pub fn is_enabled(&self, pin: u32, cx: usize) -> bool {
         let (byte, bit_in_byte_mask) = bitmap_index_u32(pin as usize);
         let all_cell = unsafe { Enable::at(self.0) };
-        let cx_cell = all_cell.map(|s| s.index(cx));
-        cx_cell.map(|s| s.index(byte)).read() & bit_in_byte_mask != 0
+        let cx_cell = map_index!(all_cell, cx);
+        map_index!(cx_cell, byte).read() & bit_in_byte_mask != 0
     }
 
     pub fn enable(&self, pin: u32, cx: usize, enable: bool) {
@@ -104,47 +112,47 @@ impl Plic {
         );
 
         let (byte, bit_in_byte_mask) = bitmap_index_u32(pin as usize);
-        let mut all_cell = unsafe { Enable::at(self.0) };
-        let mut cx_cell = all_cell.map_mut(|s| s.index_mut(cx));
-        let mut cell = cx_cell.map_mut(|s| s.index_mut(byte));
+        let all_cell = unsafe { Enable::at(self.0) };
+        let cx_cell = map_index!(all_cell, cx);
+        let cell = map_index!(cx_cell, byte);
 
         log::trace!(
-            "Plic::enable byte index = {:#x}, bit_in_byte_mask = {:#b}, cell base = {:p}",
+            "Plic::enable byte get_unchecked_mut = {:#x}, bit_in_byte_mask = {:#b}, cell base = {:p}",
             byte,
             bit_in_byte_mask,
-            cell.map_mut(|x| &mut *x).extract_inner()
+            cell.as_raw_ptr()
         );
 
         cell.update(|value| {
             if enable {
-                *value |= bit_in_byte_mask;
+                value | bit_in_byte_mask
             } else {
-                *value &= !bit_in_byte_mask;
+                value & !bit_in_byte_mask
             }
         })
     }
 
     pub fn priority_threshold(&self, cx: usize) -> u32 {
         let cx_cell = unsafe { Cx::at(self.0) };
-        let cell = cx_cell.map(|s| s.index(cx));
-        cell.map(|c| &c.priority_threshold).read()
+        let cell = map_index!(cx_cell, cx);
+        map_field!(cell.priority_threshold).read()
     }
 
     pub fn set_priority_threshold(&self, cx: usize, threshold: u32) {
-        let mut cx_cell = unsafe { Cx::at(self.0) };
-        let mut cell = cx_cell.map_mut(|s| s.index_mut(cx));
-        cell.map_mut(|c| &mut c.priority_threshold).write(threshold)
+        let cx_cell = unsafe { Cx::at(self.0) };
+        let cell = map_index!(cx_cell, cx);
+        map_field!(cell.priority_threshold).write(threshold)
     }
 
     pub fn claim(&self, cx: usize) -> u32 {
         let cx_cell = unsafe { Cx::at(self.0) };
-        let cell = cx_cell.map(|s| s.index(cx));
-        cell.map(|c| &c.claim_complete).read()
+        let cell = map_index!(cx_cell, cx);
+        map_field!(cell.claim_complete).read()
     }
 
     pub fn complete(&self, cx: usize, pin: u32) {
-        let mut cx_cell = unsafe { Cx::at(self.0) };
-        let mut cell = cx_cell.map_mut(|s| s.index_mut(cx));
-        cell.map_mut(|c| &mut c.claim_complete).write(pin)
+        let cx_cell = unsafe { Cx::at(self.0) };
+        let cell = map_index!(cx_cell, cx);
+        map_field!(cell.claim_complete).write(pin)
     }
 }

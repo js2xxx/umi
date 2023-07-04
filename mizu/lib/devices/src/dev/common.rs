@@ -1,7 +1,7 @@
 use core::{mem, num::NonZeroUsize, ptr::NonNull};
 
 use rv39_paging::{LAddr, PAddr, ID_OFFSET};
-use volatile::Volatile;
+use volatile::VolatilePtr;
 
 pub trait MmioReg {
     const OFFSET: usize;
@@ -12,7 +12,7 @@ pub trait MmioReg {
     ///
     /// The caller must ensure the exclusive access of the given `Self::Access`
     /// at the given base during the given `'a` lifetime.
-    unsafe fn at<'a>(base: NonNull<()>) -> Volatile<&'a mut Self::Repr, Self::Access> {
+    unsafe fn at<'a>(base: NonNull<()>) -> VolatilePtr<'a, Self::Repr, Self::Access> {
         mem::transmute(base.as_ptr().byte_add(Self::OFFSET).cast::<Self::Repr>())
     }
 }
