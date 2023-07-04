@@ -108,6 +108,18 @@ pub struct Metadata {
     pub perm: Permissions,
     pub block_size: usize,
     pub block_count: usize,
+    pub times: Times,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub struct SetMetadata {
+    pub len: Option<usize>,
+    pub perm: Option<Permissions>,
+    pub times: Times,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub struct Times {
     pub last_access: Option<Instant>,
     pub last_modified: Option<Instant>,
     pub last_created: Option<Instant>,

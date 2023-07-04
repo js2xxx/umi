@@ -259,7 +259,7 @@ impl<T: TimeProvider> FatDir<T> {
                     // directory does not exist - create it
                     DirEntryOrShortName::ShortName(short_name) => {
                         // alloc cluster for directory data
-                        let cluster = node.file.fs.alloc_cluster(None, true).await?;
+                        let cluster = node.file.fs.alloc_cluster(None, &mut 1, true).await?;
                         // create entry in parent directory
                         let sfn_entry = node.create_sfn_entry(
                             short_name,
@@ -318,7 +318,7 @@ impl<T: TimeProvider> FatDir<T> {
                 }
                 // free data
                 if let Some(n) = e.first_cluster() {
-                    node.file.fs.fat.free(n).await?;
+                    node.file.fs.free_cluster_chain(n).await?;
                 }
                 // free long and short name entries
                 e.free_all_entries(&self.file).await?;
@@ -505,9 +505,7 @@ impl<T: TimeProvider> Directory for FatDir<T> {
                 perm: Permissions::all(),
                 block_size: fm.block_size,
                 block_count: fm.block_count,
-                last_access: None,
-                last_modified: None,
-                last_created: None,
+                times: Default::default(),
             },
         }))
     }

@@ -62,15 +62,7 @@ impl VirtioBlock {
     }
 
     pub fn ack_interrupt(&self) {
-        loop {
-            let used = ksync::critical(|| {
-                let mut blk = self.device.lock();
-                blk.ack_interrupt();
-                blk.peek_used()
-            });
-            let Some(used) = used else { break };
-            unsafe { self.token[used as usize].complete(used, self) }
-        }
+        Token::ack_interrupt(self)
     }
 
     pub fn capacity_blocks(&self) -> usize {
@@ -83,14 +75,6 @@ impl VirtioBlock {
 
     pub fn max_concurrents(&self) -> usize {
         unsafe { (*self.device.data_ptr()).virt_queue_size() as usize / Self::OP_COUNT }
-    }
-
-    #[inline]
-    fn i<F, T>(&self, func: F) -> T
-    where
-        F: FnOnce(&mut VirtIOBlk<HalImpl, MmioTransport>) -> T,
-    {
-        ksync::critical(|| func(&mut self.device.lock()))
     }
 
     pub fn read_chunk(&self, block: usize, mut buf: Vec<u8>) -> ChunkOp {
@@ -226,11 +210,16 @@ impl Future for ChunkOp<'_> {
                     buf,
                     listener,
                 } => {
-                    let res = this.device.i(|blk| match dir {
-                        Direction::Read => unsafe { blk.read_block_nb(this.block, req, buf, resp) },
-                        Direction::Write => unsafe {
-                            blk.write_block_nb(this.block, req, buf, resp)
-                        },
+                    let res = ksync::critical(|| {
+                        let mut blk = this.device.device.lock();
+                        match dir {
+                            Direction::Read => unsafe {
+                                blk.read_block_nb(this.block, req, buf, resp)
+                            },
+                            Direction::Write => unsafe {
+                                blk.write_block_nb(this.block, req, buf, resp)
+                            },
+                        }
                     });
                     let token = match res {
                         Ok(token) => token,
@@ -277,22 +266,38 @@ impl Token {
         Token(ArrayQueue::new(1))
     }
 
-    unsafe fn complete(&self, used: u16, device: &VirtioBlock) {
-        if let Some(mut request) = self.0.pop() {
-            // log::trace!(
-            //     "VirtioBlock::ack_interrupt: complete request {:?}({used})",
-            //     request.dir
-            // );
-            let _ = device.i(|blk| match request.dir {
-                Direction::Read => unsafe {
-                    blk.complete_read_block(used, &request.req, &mut request.buf, &mut request.resp)
-                },
-                Direction::Write => unsafe {
-                    blk.complete_write_block(used, &request.req, &request.buf, &mut request.resp)
-                },
-            });
-            device.virt_queue.notify(1);
-            let _ = request.ret.send(request.buf);
-        }
+    fn ack_interrupt(device: &VirtioBlock) {
+        ksync::critical(|| {
+            let mut blk = device.device.lock();
+            blk.ack_interrupt();
+
+            while let Some(used) = blk.peek_used() {
+                if let Some(request) = device.token[used as usize].0.pop() {
+                    // log::trace!(
+                    //     "VirtioBlock::ack_interrupt: complete request {:?}({used})",
+                    //     request.dir
+                    // );
+                    unsafe { Token::complete(request, used, &mut blk, &device.virt_queue) }
+                }
+            }
+        })
+    }
+
+    unsafe fn complete(
+        mut request: Request,
+        used: u16,
+        device: &mut VirtIOBlk<HalImpl, MmioTransport>,
+        virt_queue: &Event,
+    ) {
+        let _ = match request.dir {
+            Direction::Read => unsafe {
+                device.complete_read_block(used, &request.req, &mut request.buf, &mut request.resp)
+            },
+            Direction::Write => unsafe {
+                device.complete_write_block(used, &request.req, &request.buf, &mut request.resp)
+            },
+        };
+        virt_queue.notify_additional(1);
+        let _ = request.ret.send(request.buf);
     }
 }

@@ -61,9 +61,7 @@ impl Entry for Null {
             perm: Permissions::all_same(true, true, false),
             block_size: 0,
             block_count: 0,
-            last_access: None,
-            last_modified: None,
-            last_created: None,
+            times: Default::default(),
         }
     }
 }
@@ -124,9 +122,7 @@ impl Entry for Zero {
             perm: Permissions::all_same(true, true, false),
             block_size: 0,
             block_count: 0,
-            last_access: None,
-            last_modified: None,
-            last_created: None,
+            times: Default::default(),
         }
     }
 }

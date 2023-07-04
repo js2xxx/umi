@@ -145,9 +145,7 @@ impl Entry for MemInfo {
             perm: Permissions::all_same(true, true, false),
             block_size: 1024,
             block_count: 0,
-            last_access: None,
-            last_modified: None,
-            last_created: None,
+            times: Default::default(),
         }
     }
 }
@@ -227,9 +225,7 @@ impl Entry for Mounts {
             perm: Permissions::all_same(true, true, false),
             block_size: 1024,
             block_count: 0,
-            last_access: None,
-            last_modified: None,
-            last_created: None,
+            times: Default::default(),
         }
     }
 }

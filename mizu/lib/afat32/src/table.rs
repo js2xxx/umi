@@ -7,6 +7,7 @@ use core::{
 
 use futures_util::{future::try_join_all, stream, FutureExt, Stream, StreamExt, TryStreamExt};
 use ksc_core::Error::{self, EINVAL, ENOSPC};
+use ksync::Mutex;
 use umifs::traits::{Io, IoExt};
 
 use crate::raw::BiosParameterBlock;
@@ -84,6 +85,8 @@ pub struct Fat {
     start_offset: usize,
     cluster_count: u32,
     mirrors: u8,
+    set_lock: Mutex<()>,
+    allocate_lock: Mutex<()>,
 }
 
 impl fmt::Debug for Fat {
@@ -114,6 +117,8 @@ impl Fat {
             start_offset: bpb.bytes_from_sectors(fat_first_sector) as usize,
             cluster_count: bpb.total_clusters(),
             mirrors,
+            set_lock: Default::default(),
+            allocate_lock: Default::default(),
         }
     }
 
@@ -189,17 +194,19 @@ impl Fat {
         Ok(zip.map(|(&raw, cluster)| (cluster, FatEntry::from_raw(raw, cluster))))
     }
 
-    #[allow(dead_code)]
     pub async fn set_range(
         &self,
         start: u32,
         buf: &mut [u32],
-        entry: FatEntry,
+        entry: impl IntoIterator<Item = FatEntry>,
     ) -> Result<(), Error> {
         buf.fill(0);
+
+        let _set = self.set_lock.lock().await;
+
         let len = unsafe { self.get_range_raw(start, mem::transmute(&mut *buf)) }.await?;
 
-        for (raw, cluster) in buf[..len].iter_mut().zip(start..) {
+        for ((raw, cluster), entry) in buf[..len].iter_mut().zip(start..).zip(entry) {
             let old = *raw & 0xf000_0000;
             *raw = entry.into_raw(cluster, old)
         }
@@ -226,6 +233,8 @@ impl Fat {
     }
 
     pub async fn set(&self, cluster: u32, entry: FatEntry) -> Result<(), Error> {
+        let _set = self.set_lock.lock().await;
+
         let old = self.get_raw(cluster).await? & 0xf000_0000;
         let raw = entry.into_raw(cluster, old);
 
@@ -239,7 +248,7 @@ impl Fat {
         Ok(())
     }
 
-    async fn find_free<R>(&self, cluster_range: R) -> Result<u32, Error>
+    async fn find_free<R>(&self, cluster_range: R, num: &mut u32) -> Result<u32, Error>
     where
         R: RangeBounds<u32>,
     {
@@ -259,13 +268,29 @@ impl Fat {
         let mut buf = [0; BATCH_LEN];
 
         // The range may be massive so that `try_join_all` will allocate huge amount of
-        // memory, reaulting in a potential memory exhaustion.
+        // memory, resulting in potential memory exhaustion.
+        let mut count = 0;
+        let mut ret = None;
         for start in (start..end).step_by(BATCH_LEN) {
             let len = BATCH_LEN.min((end - start) as usize);
             for (cluster, entry) in self.get_range(start, &mut buf[..len]).await? {
                 if entry == FatEntry::Free {
+                    if count >= *num {
+                        *num = count;
+                        return Ok(ret.unwrap());
+                    }
+                    if count == 0 {
+                        ret = Some(cluster);
+                    }
+                    count += 1;
+                } else if let Some(cluster) = ret {
+                    *num = count;
                     return Ok(cluster);
                 }
+            }
+            if let Some(cluster) = ret {
+                *num = count;
+                return Ok(cluster);
             }
         }
         Err(ENOSPC)
@@ -277,19 +302,35 @@ impl Fat {
         stream.count().await
     }
 
-    pub async fn allocate(&self, prev: Option<u32>, hint: Option<u32>) -> Result<u32, Error> {
+    pub async fn allocate(
+        &self,
+        prev: Option<u32>,
+        hint: Option<u32>,
+        num: &mut u32,
+    ) -> Result<u32, Error> {
         let hint = hint.unwrap_or(self.allocable_range().start);
 
-        let ret = match self.find_free(hint..).await {
+        let _alloc = self.allocate_lock.lock().await;
+
+        let ret = match self.find_free(hint.., &mut *num).await {
             Ok(cluster) => cluster,
-            Err(ENOSPC) => self.find_free(..hint).await?,
+            Err(ENOSPC) => self.find_free(..hint, &mut *num).await?,
             Err(err) => return Err(err),
         };
 
-        self.set(ret, FatEntry::End).await?;
         if let Some(prev) = prev {
             self.set(prev, FatEntry::Next(ret)).await?;
         }
+        if *num > 1 {
+            let mut buf = [0; BATCH_LEN];
+            self.set_range(
+                ret,
+                &mut buf[..((*num as usize) - 1)],
+                ((ret + 1)..(ret + *num)).map(FatEntry::Next),
+            )
+            .await?;
+        }
+        self.set(ret + *num - 1, FatEntry::End).await?;
         Ok(ret)
     }
 

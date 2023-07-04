@@ -377,6 +377,7 @@ impl InitTask {
             brk: 0,
             virt: self.virt,
             futex: Arsc::new(Futexes::new()),
+            shm: Default::default(),
             files: self.files,
             sig_actions: Arsc::new(ActionSet::new()),
             tid_clear: None,
@@ -394,10 +395,15 @@ impl InitTask {
         crate::trap::FP.with(|fp| fp.mark_reset());
         crate::task::yield_now().await;
         ts.task.shared_sig.swap(Default::default(), SeqCst);
+        ts.sig_mask = SigSet::EMPTY;
+        ts.sig_stack = None;
         ts.brk = 0;
         ts.virt = self.virt;
-        ts.files.close_on_exec().await;
         ts.futex = Arsc::new(Default::default());
+        ts.files.close_on_exec().await;
+        ts.sig_actions = Arsc::new(ActionSet::new());
+        ts.tid_clear = None;
+        ts.exit_signal = Some(Sig::SIGCHLD);
         *tf = self.tf;
         super::yield_now().await
     }

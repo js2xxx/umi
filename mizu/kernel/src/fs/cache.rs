@@ -68,7 +68,7 @@ impl Clone for CachedFile {
     fn clone(&self) -> Self {
         Self {
             entry: self.entry.clone(),
-            phys: Arc::new(self.phys.clone_as(false, 0, None)),
+            phys: Arc::new((*self.phys).clone()),
         }
     }
 }
@@ -205,6 +205,13 @@ impl Entry for CachedFile {
 
     fn metadata<'a: 'b, 'b>(&'a self) -> Boxed<'b, Metadata> {
         self.entry.metadata()
+    }
+
+    fn set_metadata<'a: 'b, 'b>(&'a self, metadata: SetMetadata) -> Boxed<'b, Result<(), Error>> {
+        if let Some(new_len) = metadata.len {
+            self.phys.resize(new_len);
+        }
+        self.entry.set_metadata(metadata)
     }
 }
 

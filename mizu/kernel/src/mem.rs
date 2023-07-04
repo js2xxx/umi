@@ -1,4 +1,5 @@
 mod futex;
+mod shm;
 mod syscall;
 mod user;
 
@@ -13,6 +14,7 @@ use umifs::traits::{IntoAnyExt, Io, IoExt};
 
 pub use self::{
     futex::{FutexWait, Futexes},
+    shm::Shm,
     syscall::*,
     user::{In, InOut, Out, UserBuffer, UserPtr, UA_FAULT},
 };

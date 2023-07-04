@@ -368,6 +368,11 @@ async fn clone_task(
         } else {
             Arsc::new(ts.futex.deep_fork())
         },
+        shm: if flags.contains(Flags::VM) {
+            ts.shm.clone()
+        } else {
+            Default::default()
+        },
         files: ts
             .files
             .deep_fork(flags.contains(Flags::FS), flags.contains(Flags::FILES))

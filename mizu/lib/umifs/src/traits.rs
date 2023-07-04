@@ -3,13 +3,12 @@ use alloc::{boxed::Box, sync::Arc};
 use arsc_rs::Arsc;
 use async_trait::async_trait;
 use ksc_core::Error;
-use ktime_core::Instant;
 use umio::IoPoll;
 pub use umio::{IntoAny, IntoAnyExt, Io, IoExt, ToIo};
 
 use crate::{
     path::Path,
-    types::{DirEntry, FsStat, Metadata, OpenOptions, Permissions},
+    types::{DirEntry, FsStat, Metadata, OpenOptions, Permissions, SetMetadata},
 };
 
 #[async_trait]
@@ -32,8 +31,9 @@ pub trait Entry: IntoAny + Send + ToIo + IoPoll + Sync + 'static {
 
     async fn metadata(&self) -> Metadata;
 
-    async fn set_times(&self, c: Option<Instant>, m: Option<Instant>, a: Option<Instant>) {
-        let _ = (c, m, a);
+    async fn set_metadata(&self, metadata: SetMetadata) -> Result<(), Error> {
+        let _ = metadata;
+        Ok(())
     }
 
     fn to_dir(self: Arc<Self>) -> Option<Arc<dyn Directory>> {

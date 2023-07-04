@@ -31,7 +31,7 @@ use self::{
     signal::SigStack,
     time::{Counter, Times},
 };
-use crate::mem::{Futexes, Out, UserPtr};
+use crate::mem::{Futexes, Out, Shm, UserPtr};
 
 const DEFAULT_STACK_SIZE: usize = PAGE_SIZE * 64;
 const DEFAULT_STACK_ATTR: Attr = Attr::USER_ACCESS
@@ -98,6 +98,7 @@ pub struct TaskState {
 
     pub(crate) virt: Pin<Arsc<Virt>>,
     pub(crate) futex: Arsc<Futexes>,
+    pub(crate) shm: Arsc<Shm>,
     sig_actions: Arsc<ActionSet>,
     pub(crate) files: Files,
     tid_clear: Option<UserPtr<usize, Out>>,

@@ -13,7 +13,7 @@ use async_trait::async_trait;
 use crossbeam_queue::SegQueue;
 use futures_util::Future;
 use hashbrown::{
-    hash_map::{Entry, OccupiedEntry},
+    hash_map::{Entry, OccupiedEntry, VacantEntry},
     HashMap,
 };
 use ksc_core::{
@@ -142,6 +142,46 @@ enum Commit {
     Unique(FrameInfo),
 }
 
+enum FrameEntry<'a> {
+    NewFi(VacantEntry<'a, usize, FrameInfo, RandomState>, FrameInfo),
+    Entry(OccupiedEntry<'a, usize, FrameInfo, RandomState>),
+}
+
+impl<'a> FrameEntry<'a> {
+    fn get(list: &'a mut FrameList, index: usize) -> Option<Self> {
+        match list.frames.entry(index) {
+            Entry::Occupied(ent) => Some(FrameEntry::Entry(ent)),
+            Entry::Vacant(_) => None,
+        }
+    }
+
+    fn try_insert(list: &'a mut FrameList, index: usize, fi: FrameInfo) -> Self {
+        match list.frames.entry(index) {
+            Entry::Occupied(ent) => FrameEntry::Entry(ent),
+            Entry::Vacant(ent) => FrameEntry::NewFi(ent, fi),
+        }
+    }
+
+    fn get_mut(&mut self) -> &mut FrameInfo {
+        match self {
+            FrameEntry::NewFi(_, fi) => fi,
+            FrameEntry::Entry(ent) => ent.get_mut(),
+        }
+    }
+
+    fn remove(self) {
+        if let FrameEntry::Entry(ent) = self {
+            ent.remove();
+        }
+    }
+
+    fn insert(self) {
+        if let FrameEntry::NewFi(ent, fi) = self {
+            ent.insert(fi);
+        }
+    }
+}
+
 #[derive(Debug)]
 struct FrameInfo {
     state: Option<FrameState>,
@@ -154,6 +194,18 @@ impl FrameInfo {
             state: Some(FrameState::Shared(frame, len)),
             dirty: false,
         }
+    }
+
+    fn truncate(&mut self, new_len: usize) {
+        let (frame, len) = match &mut self.state {
+            Some(FrameState::Shared(frame, len)) => (frame, len),
+            Some(FrameState::Unique(frame, len)) => (frame, len),
+            _ => return,
+        };
+        if new_len < *len {
+            unsafe { frame.as_ptr().as_mut()[new_len..*len].fill(0) };
+        }
+        *len = new_len;
     }
 
     fn branch(&mut self, write: Option<usize>, cow: bool) -> Result<(Commit, bool), Error> {
@@ -218,7 +270,7 @@ impl FrameInfo {
     }
 
     fn get(
-        mut this: OccupiedEntry<usize, FrameInfo, RandomState>,
+        mut this: FrameEntry,
         branch: bool,
         write: Option<usize>,
         cow: bool,
@@ -227,10 +279,13 @@ impl FrameInfo {
             let (ret, remove) = this.get_mut().branch(write, cow)?;
             if remove {
                 this.remove();
+            } else {
+                this.insert();
             }
             Ok(ret)
         } else {
             let (frame, len) = this.get_mut().leaf(write)?;
+            this.insert();
             Ok(Commit::Shared(frame, len))
         }
     }
@@ -386,6 +441,12 @@ impl Phys {
     }
 }
 
+impl Clone for Phys {
+    fn clone(&self) -> Self {
+        self.clone_as(false, 0, None)
+    }
+}
+
 impl Phys {
     fn merge_sole_parent<R, F: FnMut(&mut FrameList) -> Option<R>>(&self, mut f: F) -> Option<R> {
         loop {
@@ -405,7 +466,7 @@ impl Phys {
             });
 
             match sole_parent {
-                None => break None,
+                None => break ksync::critical(|| f(&mut self.list.lock())),
                 Some((mut parent, start, end)) => {
                     // log::trace!("merging sole parent: start_index = {start}");
                     let ret = ksync::critical(|| {
@@ -457,20 +518,9 @@ impl Phys {
     ) -> Boxed<Result<Commit, Error>> {
         let cow = self.cow || cow;
         Box::pin(async move {
-            let self_get = ksync::critical(|| {
-                // log::trace!("Phys::commit_impl: return from self, index = {index}");
-                let mut list = self.list.lock();
-                if let Entry::Occupied(ent) = list.frames.entry(index) {
-                    return FrameInfo::get(ent, self.branch, write, cow).map(Some);
-                }
-                Ok::<_, Error>(None)
-            })?;
-            if let Some(commit) = self_get {
-                return Ok(commit);
-            }
-
+            // log::trace!("Phys::commit_impl: return from self, index = {index}");
             let self_get = self.merge_sole_parent(|list| {
-                if let Entry::Occupied(ent) = list.frames.entry(index) {
+                if let Some(ent) = FrameEntry::get(list, index) {
                     return Some(FrameInfo::get(ent, self.branch, write, cow));
                 }
                 None
@@ -496,7 +546,8 @@ impl Phys {
                                 Ok(s @ Commit::Shared(..)) => Ok(s),
                                 Ok(Commit::Unique(fi)) => ksync::critical(|| {
                                     let mut list = self.list.lock();
-                                    let ent = list.frames.entry(index).insert(fi);
+
+                                    let ent = FrameEntry::try_insert(&mut list, index, fi);
                                     FrameInfo::get(ent, self.branch, write, cow)
                                 }),
                                 Err(err) => Err(err),
@@ -530,7 +581,7 @@ impl Phys {
                         let fi = FrameInfo::new(Arsc::new(frame), len);
                         return ksync::critical(|| {
                             let mut list = self.list.lock();
-                            let ent = list.frames.entry(index).insert(fi);
+                            let ent = FrameEntry::try_insert(&mut list, index, fi);
                             FrameInfo::get(ent, self.branch, write, cow)
                         });
                     }
@@ -546,7 +597,7 @@ impl Phys {
             let fi = FrameInfo::new(Arsc::new(Frame::new()?), new_len);
             ksync::critical(|| {
                 let mut list = self.list.lock();
-                let ent = list.frames.entry(index).insert(fi);
+                let ent = FrameEntry::try_insert(&mut list, index, fi);
                 FrameInfo::get(ent, self.branch, write, cow)
             })
         })
@@ -570,6 +621,40 @@ impl Phys {
             Ok(Commit::Unique(..)) => unreachable!(),
             Err(err) => Err(err),
         }
+    }
+
+    pub fn resize(&self, new_len: usize) {
+        if new_len == 0 {
+            ksync::critical(|| {
+                let mut list = self.list.lock();
+                list.frames.clear();
+                if let Some(Parent::Phys { start, end, .. }) = &mut list.parent {
+                    *end = Some(*start)
+                }
+            });
+            return;
+        }
+
+        let (index, offset) = {
+            let index = new_len >> PAGE_SHIFT;
+            let offset = new_len - (index << PAGE_SHIFT);
+            if offset == 0 {
+                (index - 1, PAGE_SIZE)
+            } else {
+                (index, offset)
+            }
+        };
+
+        ksync::critical(|| {
+            let mut list = self.list.lock();
+            list.frames.retain(|&i, _| i <= index);
+            if let Some(ent) = list.frames.get_mut(&index) {
+                ent.truncate(offset);
+            }
+            if let Some(Parent::Phys { start, end, .. }) = &mut list.parent {
+                *end = Some(*start + index + 1)
+            }
+        })
     }
 
     pub async fn flush(&self, mut index: usize, force_dirty: Option<bool>) -> Result<(), Error> {
@@ -635,11 +720,16 @@ impl Phys {
 
         let mut storage = None;
         let mut this = self;
+        let mut start_index = 0;
+        let mut end_index = None;
 
         loop {
             let data = ksync::critical(|| {
                 let mut list = this.list.lock();
                 let iter = list.frames.iter_mut().filter_map(|(&index, fi)| {
+                    if !(start_index <= index && end_index.map_or(true, |e| index < e)) {
+                        return None;
+                    }
                     let dirty = mem::replace(&mut fi.dirty, false);
                     dirty
                         .then(|| fi.state.as_mut().map(|s| s.frame(None)))
@@ -657,8 +747,14 @@ impl Phys {
             }
 
             let parent = ksync::critical(|| this.list.lock().parent.clone());
-            let Some(Parent::Phys { phys, start, .. }) = parent else {
+            let Some(Parent::Phys { phys, start, end }) = parent else {
                 break Ok(())
+            };
+            start_index += start;
+            end_index = match (end_index, end) {
+                (None, end) => end,
+                (Some(end), None) => Some(end + start),
+                (Some(end), Some(e)) => Some((end + start).min(e)),
             };
 
             flusher.offset -= start;
@@ -675,6 +771,8 @@ impl Drop for Phys {
 
         let mut storage = None;
         let mut this = self;
+        let mut start_index = 0;
+        let mut end_index = None;
 
         loop {
             if flusher.sender.is_closed() {
@@ -682,6 +780,9 @@ impl Drop for Phys {
             }
             let list = this.list.get_mut();
             let data = list.frames.iter_mut().filter_map(|(&index, fi)| {
+                if !(start_index <= index && end_index.map_or(true, |e| index < e)) {
+                    return None;
+                }
                 let dirty = mem::replace(&mut fi.dirty, false);
                 dirty
                     .then(|| fi.state.as_mut().map(|s| s.frame(None)))
@@ -693,8 +794,14 @@ impl Drop for Phys {
                 let _ = flusher.sender.try_send(FlushData::Multiple(data));
             }
 
-            let Some(Parent::Phys { phys, start, .. }) = list.parent.take() else {
+            let Some(Parent::Phys { phys, start, end }) = list.parent.take() else {
                 break
+            };
+            start_index += start;
+            end_index = match (end_index, end) {
+                (None, end) => end,
+                (Some(end), None) => Some(end + start),
+                (Some(end), Some(e)) => Some((end + start).min(e)),
             };
 
             flusher.offset -= start;
@@ -910,12 +1017,14 @@ async fn flusher(rx: Receiver<SegQueue<FlushData>>, flushed: Arsc<Event>, backen
         let Ok(data) = rx.recv().await else { break };
         match data {
             FlushData::Single((index, frame, len)) => {
+                // log::trace!("backend write index = {index}, frame = {frame:?}, len = {len}");
                 let _ = backend
                     .write_all_at(index << PAGE_SHIFT, &frame[..len])
                     .await;
             }
             FlushData::Multiple(data) => {
                 for (index, frame, len) in data {
+                    // log::trace!("backend write index = {index}, frame = {frame:?}, len = {len}");
                     let _ = backend
                         .write_all_at(index << PAGE_SHIFT, &frame[..len])
                         .await;

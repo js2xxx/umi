@@ -98,22 +98,23 @@ impl<T: TimeProvider> FatFileSystem<T> {
     pub(crate) async fn alloc_cluster(
         &self,
         prev_cluster: Option<u32>,
+        num: &mut u32,
         zero: bool,
     ) -> Result<u32, Error> {
         let hint = ksync::critical(|| self.fs_info.read().next_free_cluster);
-        let cluster = self.fat.allocate(prev_cluster, hint).await?;
+        let cluster = self.fat.allocate(prev_cluster, hint, &mut *num).await?;
         if zero {
             write_zeros(
                 &**self.fat.device(),
                 self.offset_from_cluster(cluster) as usize,
-                self.bpb.cluster_size() as usize,
+                (self.bpb.cluster_size() * *num) as usize,
             )
             .await?;
         }
         ksync::critical(|| {
             let mut fs_info = self.fs_info.write();
-            fs_info.set_next_free_cluster(cluster + 1);
-            fs_info.map_free_clusters(|n| n - 1);
+            fs_info.set_next_free_cluster(cluster + *num);
+            fs_info.map_free_clusters(|n| n - *num);
         });
         Ok(cluster)
     }
@@ -253,7 +254,7 @@ pub(crate) async fn write_zeros(
     mut start: usize,
     mut len: usize,
 ) -> Result<(), Error> {
-    const ZEROS: [u8; 512] = [0_u8; 512];
+    const ZEROS: [u8; 4096] = [0; 4096];
     while len > 0 {
         let write_size = len.min(ZEROS.len());
         disk.write_all_at(start, &ZEROS[..write_size]).await?;

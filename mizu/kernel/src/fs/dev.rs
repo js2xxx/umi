@@ -156,9 +156,7 @@ impl Entry for BlockEntry {
             perm: Permissions::all_same(true, true, true),
             block_size: 1 << self.block_shift,
             block_count: self.block_count,
-            last_access: None,
-            last_modified: None,
-            last_created: None,
+            times: Default::default(),
         }
     }
 }
