@@ -377,6 +377,7 @@ impl InitTask {
             brk: 0,
             virt: self.virt,
             futex: Arsc::new(Futexes::new()),
+            shm: Default::default(),
             files: self.files,
             sig_actions: Arsc::new(ActionSet::new()),
             tid_clear: None,

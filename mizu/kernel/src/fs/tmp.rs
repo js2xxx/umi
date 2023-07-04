@@ -12,7 +12,7 @@ use spin::Mutex;
 use umifs::{
     path::{Path, PathBuf},
     traits::{Directory, DirectoryMut, Entry, FileSystem, Io, ToIo},
-    types::{DirEntry, FileType, FsStat, Metadata, OpenOptions, Permissions, Times, SetMetadata},
+    types::{DirEntry, FileType, FsStat, Metadata, OpenOptions, Permissions, SetMetadata, Times},
 };
 use umio::IoPoll;
 
@@ -74,9 +74,9 @@ impl Entry for TmpRoot {
                 times: Mutex::new({
                     let now = Instant::now();
                     Times {
-                        last_created:  Some(now),
+                        last_created: Some(now),
                         last_modified: Some(now),
-                        last_access:   Some(now),
+                        last_access: Some(now),
                     }
                 }),
             });

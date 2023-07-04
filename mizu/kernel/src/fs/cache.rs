@@ -68,7 +68,7 @@ impl Clone for CachedFile {
     fn clone(&self) -> Self {
         Self {
             entry: self.entry.clone(),
-            phys: Arc::new(self.phys.clone_as(false, 0, None)),
+            phys: Arc::new((*self.phys).clone()),
         }
     }
 }

@@ -176,8 +176,8 @@ impl<'a> FrameEntry<'a> {
     }
 
     fn insert(self) {
-        if let FrameEntry::NewFi(list, fi) = self {
-            list.insert(fi);
+        if let FrameEntry::NewFi(ent, fi) = self {
+            ent.insert(fi);
         }
     }
 }
@@ -441,6 +441,12 @@ impl Phys {
     }
 }
 
+impl Clone for Phys {
+    fn clone(&self) -> Self {
+        self.clone_as(false, 0, None)
+    }
+}
+
 impl Phys {
     fn merge_sole_parent<R, F: FnMut(&mut FrameList) -> Option<R>>(&self, mut f: F) -> Option<R> {
         loop {
@@ -460,7 +466,7 @@ impl Phys {
             });
 
             match sole_parent {
-                None => break None,
+                None => break ksync::critical(|| f(&mut self.list.lock())),
                 Some((mut parent, start, end)) => {
                     // log::trace!("merging sole parent: start_index = {start}");
                     let ret = ksync::critical(|| {

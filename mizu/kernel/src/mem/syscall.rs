@@ -5,7 +5,7 @@ use co_trap::UserCx;
 use kmem::Phys;
 use ksc::{
     async_handler,
-    Error::{self, EAGAIN, EINVAL, EISDIR, ENOSYS, EPERM, ETIMEDOUT},
+    Error::{self, EAGAIN, EINVAL, EISDIR, ENOENT, ENOSYS, EPERM, ETIMEDOUT},
 };
 use ktime::TimeOutExt;
 use rv39_paging::{Attr, LAddr, PAGE_MASK, PAGE_SHIFT};
@@ -295,6 +295,81 @@ pub async fn membarrier(
             crate::cpu::IPI.remote_fence(hart_id::hart_ids())
         }
         Ok(0)
+    });
+    ScRet::Continue(None)
+}
+
+#[async_handler]
+pub async fn shmget(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(i32, usize, i32) -> Result<i32, Error>>,
+) -> ScRet {
+    let (key, len, flags) = cx.args();
+    let len = (len + PAGE_MASK) & !PAGE_MASK;
+    cx.ret(ts.shm.insert(key, len, flags));
+
+    ScRet::Continue(None)
+}
+
+#[async_handler]
+pub async fn shmat(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(i32, usize, i32) -> Result<usize, Error>>,
+) -> ScRet {
+    const SHM_RDONLY: i32 = 0o10000; // read-only access
+    const SHM_RND: i32 = 0o20000; // round attach address to SHMLBA boundary
+    const SHM_REMAP: i32 = 0o40000; // take-over region on attach
+    const SHM_EXEC: i32 = 0o100000; // execution access
+
+    let (shmid, shmaddr, flags) = cx.args();
+    let fut = async {
+        let addr = if shmaddr != 0 {
+            Some(if flags & SHM_RND != 0 {
+                (shmaddr & !PAGE_MASK).into()
+            } else if shmaddr & PAGE_MASK != 0 {
+                return Err(EINVAL);
+            } else {
+                shmaddr.into()
+            })
+        } else {
+            None
+        };
+
+        let attr = Attr::builder()
+            .user_access(true)
+            .readable(true)
+            .writable(flags & SHM_RDONLY == 0)
+            .executable(flags & SHM_EXEC != 0)
+            .build();
+
+        let (phys, len) = ksync::critical(|| ts.shm.get(shmid).ok_or(ENOENT))?;
+
+        if flags & SHM_REMAP != 0 {
+            if let Some(addr) = addr {
+                ts.virt.unmap(addr..(addr + len)).await?;
+            }
+        }
+
+        let addr = ts
+            .virt
+            .map(addr, phys, 0, (len + PAGE_MASK) >> PAGE_SHIFT, attr)
+            .await?;
+
+        ksync::critical(|| ts.shm.mapping().insert(addr, addr + len));
+
+        Ok(addr.val())
+    };
+    cx.ret(fut.await);
+    ScRet::Continue(None)
+}
+
+#[async_handler]
+pub async fn shmdt(ts: &mut TaskState, cx: UserCx<'_, fn(usize) -> Result<(), Error>>) -> ScRet {
+    let start = LAddr::from(cx.args());
+    let end = ksync::critical(|| ts.shm.mapping().remove(&start));
+    cx.ret(match end {
+        Some(end) => ts.virt.unmap(start..end).await,
+        None => Err(EINVAL),
     });
     ScRet::Continue(None)
 }
