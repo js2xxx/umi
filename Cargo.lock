@@ -8,7 +8,7 @@ version = "0.1.0"
 dependencies = [
  "arsc-rs",
  "async-trait",
- "bitflags",
+ "bitflags 2.3.3",
  "concat-arrays",
  "futures-util",
  "ksc-core",
@@ -115,6 +115,12 @@ checksum = "dc827186963e592360843fb5ba4b973e145841266c1357f7180c43526f2e5b61"
 
 [[package]]
 name = "bitflags"
+version = "1.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bef38d45163c2f1dde094a7dfd33ccf595c92905c8f8f4fdc18d06fb1037718a"
+
+[[package]]
+name = "bitflags"
 version = "2.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "630be753d4e58660abd17930c71b647fe46c27ea6b63cc59e1e3851406972e42"
@@ -208,16 +214,53 @@ dependencies = [
 ]
 
 [[package]]
+name = "defmt"
+version = "0.3.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a8a2d011b2fee29fb7d659b83c43fce9a2cb4df453e16d441a51448e448f3f98"
+dependencies = [
+ "bitflags 1.3.2",
+ "defmt-macros",
+]
+
+[[package]]
+name = "defmt-macros"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "54f0216f6c5acb5ae1a47050a6645024e6edafc2ee32d421955eccfef12ef92e"
+dependencies = [
+ "defmt-parser",
+ "proc-macro-error",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.23",
+]
+
+[[package]]
+name = "defmt-parser"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "269924c02afd7f94bc4cecbfa5c379f6ffcf9766b3408fe63d22c728654eccd0"
+dependencies = [
+ "thiserror",
+]
+
+[[package]]
 name = "devices"
 version = "0.1.0"
 dependencies = [
+ "arsc-rs",
  "async-trait",
  "crossbeam-queue",
- "futures-lite",
+ "futures-util",
+ "heapless",
  "ksc",
  "ksync",
  "ktime",
  "log",
+ "managed",
+ "rand-riscv",
+ "smoltcp",
  "spin",
  "umio",
  "volatile",
@@ -489,6 +532,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b06a4cde4c0f271a446782e3eff8de789548ce57dbc8eca9292c27f4a42004b4"
 
 [[package]]
+name = "managed"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ca88d725a0a943b096803bd34e73a4437208b6077654cc4ecb2947a5f91618d"
+
+[[package]]
 name = "memchr"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -526,7 +575,7 @@ dependencies = [
  "arsc-rs",
  "art",
  "async-trait",
- "bitflags",
+ "bitflags 2.3.3",
  "co-trap",
  "config",
  "crossbeam-queue",
@@ -682,6 +731,30 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5b40af805b3121feab8a3c29f04d8ad262fa8e0561883e7653e024ae4479e6de"
 
 [[package]]
+name = "proc-macro-error"
+version = "1.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "da25490ff9892aab3fcf7c36f08cfb902dd3e71ca0f9f9517bea02a73a5ce38c"
+dependencies = [
+ "proc-macro-error-attr",
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
+ "version_check",
+]
+
+[[package]]
+name = "proc-macro-error-attr"
+version = "1.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a1be40180e52ecc98ad80b184934baf3d0d29f979574e439af5a55274b35f869"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "version_check",
+]
+
+[[package]]
 name = "proc-macro2"
 version = "1.0.63"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -776,7 +849,7 @@ dependencies = [
 name = "rv39-paging"
 version = "0.1.0"
 dependencies = [
- "bitflags",
+ "bitflags 2.3.3",
  "static_assertions",
 ]
 
@@ -850,6 +923,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "smoltcp"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8d2e3a36ac8fea7b94e666dfa3871063d6e0a5c9d5d4fec9a1a6b7b6760f0229"
+dependencies = [
+ "bitflags 1.3.2",
+ "byteorder",
+ "cfg-if",
+ "defmt",
+ "heapless",
+ "log",
+ "managed",
+]
+
+[[package]]
 name = "spin"
 version = "0.9.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -916,10 +1004,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "thiserror"
+version = "1.0.41"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c16a64ba9387ef3fdae4f9c1a7f07a0997fce91985c0336f1ddc1822b3b37802"
+dependencies = [
+ "thiserror-impl",
+]
+
+[[package]]
+name = "thiserror-impl"
+version = "1.0.41"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d14928354b01c4d6a4f0e549069adef399a284e7995c7ccca94e8a07a5346c59"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.23",
+]
+
+[[package]]
 name = "uart"
 version = "0.1.0"
 dependencies = [
- "bitflags",
+ "bitflags 2.3.3",
 ]
 
 [[package]]
@@ -928,7 +1036,7 @@ version = "0.1.0"
 dependencies = [
  "arsc-rs",
  "async-trait",
- "bitflags",
+ "bitflags 2.3.3",
  "ksc-core",
  "ktime-core",
  "log",
@@ -942,7 +1050,7 @@ version = "0.1.0"
 dependencies = [
  "arsc-rs",
  "async-trait",
- "bitflags",
+ "bitflags 2.3.3",
  "futures-util",
  "ksc-core",
  "log",
@@ -984,7 +1092,7 @@ version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c1b8da1e59e77cdae29b32fb936614dc849352d7f58da199072067fe402bbcf"
 dependencies = [
- "bitflags",
+ "bitflags 2.3.3",
  "log",
  "zerocopy",
 ]

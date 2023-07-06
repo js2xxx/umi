@@ -12,11 +12,35 @@ test = []
 ksc = {path = "../ksc"}
 ksync = {path = "../ksync"}
 ktime = {path = "../ktime"}
+rand-riscv = {path = "../rand-riscv"}
 umio = {path = "../umio"}
 # External crates
 async-trait = "0"
 crossbeam-queue = {version = "0", default-features = false, features = ["alloc", "nightly"]}
-futures-lite = {version = "1", default-features = false, features = ["alloc"]}
+futures-util = {version = "0", default-features = false, features = ["alloc"]}
+heapless = "0"
 log = "0"
+managed = {version = "0", default-features = false, features = ["alloc"]}
 spin = "0"
 volatile = "0"
+arsc-rs = {git = "https://github.com/js2xxx/arsc"}
+
+[dependencies.smoltcp]
+default-features = false
+features = [
+  "log",
+  "medium-ethernet",
+  "proto-ipv4",
+  "proto-igmp",
+  "proto-dhcpv4",
+  "proto-ipv6",
+  "proto-dns",
+  "socket-raw",
+  "socket-udp",
+  "socket-tcp",
+  "socket-dhcpv4",
+  "socket-dns",
+  "async",
+  "alloc",
+]
+version = "0"
