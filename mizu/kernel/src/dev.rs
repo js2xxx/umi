@@ -1,5 +1,6 @@
 mod block;
 mod intr;
+mod net;
 mod serial;
 mod virtio;
 

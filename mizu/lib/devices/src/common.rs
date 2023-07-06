@@ -2,6 +2,8 @@ use core::{mem, ptr::NonNull};
 
 use volatile::VolatilePtr;
 
+use crate::intr::Interrupt;
+
 pub trait MmioReg {
     const OFFSET: usize;
     type Repr: Sized;
@@ -24,4 +26,13 @@ pub fn bitmap_index_u32(index: usize) -> (usize, u32) {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct Token(pub u32);
+pub struct Token(pub usize);
+
+pub async fn intr_dispatch(ack: impl Fn(), intr: Interrupt) {
+    loop {
+        if !intr.wait().await {
+            break;
+        }
+        ack();
+    }
+}

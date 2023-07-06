@@ -1,13 +1,14 @@
 use alloc::sync::Arc;
 use core::num::NonZeroU32;
 
-use devices::block::Block;
+use devices::{intr_dispatch, net::Net};
 use fdt::node::FdtNode;
 use rv39_paging::{PAddr, ID_OFFSET};
-use virtio::block::VirtioBlock;
+use spin::RwLock;
+use virtio::{block::VirtioBlock, net::VirtioNet};
 use virtio_drivers::transport::{mmio::MmioTransport, DeviceType, Transport};
 
-use super::block::BLOCKS;
+use super::{block::BLOCKS, net::NETS};
 use crate::{dev::intr::intr_man, executor, someb, tryb};
 
 pub fn init_mmio(node: &FdtNode) -> bool {
@@ -36,10 +37,34 @@ pub fn init_mmio(node: &FdtNode) -> bool {
             let intr = someb!(intr_manager.insert(intr_pin));
 
             let device = Arc::new(device);
+            let d2 = device.clone();
             executor()
-                .spawn(device.clone().intr_dispatch(intr))
+                .spawn(intr_dispatch(move || d2.ack_interrupt(), intr))
                 .detach();
             ksync::critical(|| BLOCKS.lock().push(device));
+
+            true
+        }
+        DeviceType::Network => {
+            let device = tryb!(VirtioNet::<16>::new(mmio).inspect_err(|err| {
+                log::debug!("Failed to initialize VirtIO block device: {err}");
+            }));
+            let intr = someb!(intr_manager.insert(intr_pin));
+
+            let device = Arc::new(RwLock::new(device));
+            ksync::critical(|| device.write().start_up());
+            let d2 = device.clone();
+            let ack = move || {
+                ksync::critical(|| loop {
+                    if let Some(device) = d2.try_read() {
+                        device.ack_interrupt();
+                        break;
+                    }
+                    core::hint::spin_loop()
+                })
+            };
+            executor().spawn(intr_dispatch(ack, intr)).detach();
+            ksync::critical(|| NETS.lock().push(device));
 
             true
         }

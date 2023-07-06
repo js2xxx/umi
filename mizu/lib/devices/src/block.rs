@@ -1,10 +1,8 @@
-use alloc::{boxed::Box, sync::Arc};
+use alloc::boxed::Box;
 
 use async_trait::async_trait;
 use ksc::Error;
 use umio::Io;
-
-use crate::intr::Interrupt;
 
 #[async_trait]
 pub trait Block: Io {
@@ -22,15 +20,6 @@ pub trait Block: Io {
     async fn read(&self, block: usize, buf: &mut [u8]) -> Result<usize, Error>;
 
     async fn write(&self, block: usize, buf: &[u8]) -> Result<usize, Error>;
-
-    async fn intr_dispatch(self: Arc<Self>, intr: Interrupt) {
-        loop {
-            if !intr.wait().await {
-                break;
-            }
-            self.ack_interrupt();
-        }
-    }
 }
 
 #[macro_export]

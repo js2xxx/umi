@@ -52,7 +52,7 @@ sbi-rt = {git = "https://github.com/js2xxx/sbi-rt", branch = "multitarget"}
 scoped-tls = {git = "https://github.com/js2xxx/scoped-tls", branch = "no_std"}
 spin = "0"
 static_assertions = "1"
-virtio-drivers = "0"
+virtio-drivers = {git = "https://github.com/rcore-os/virtio-drivers", branch = "new-netdev" }
 
 [build-dependencies]
 config = {path = "../lib/config", default-features = false}

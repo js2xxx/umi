@@ -9,6 +9,8 @@ pub trait Net: Send + Sync {
 
     fn address(&self) -> [u8; 6];
 
+    fn ack_interrupt(&self);
+
     fn is_link_up(&self) -> bool;
 
     fn queues(&mut self) -> (&mut dyn NetTx, &mut dyn NetRx);
@@ -23,6 +25,10 @@ impl<T: Net + ?Sized> Net for &'_ mut T {
         (**self).address()
     }
 
+    fn ack_interrupt(&self) {
+        (**self).ack_interrupt()
+    }
+
     fn is_link_up(&self) -> bool {
         (**self).is_link_up()
     }
@@ -32,13 +38,13 @@ impl<T: Net + ?Sized> Net for &'_ mut T {
     }
 }
 
-pub trait NetTx: Send + Sync {
+pub trait NetTx: Send {
     fn tx_peek(&mut self, cx: &mut Context<'_>) -> Option<Token>;
     fn tx_buffer(&mut self, token: Token) -> &mut [u8];
-    fn transmit(&mut self, token: Token);
+    fn transmit(&mut self, token: Token, len: usize);
 }
 
-pub trait NetRx: Send + Sync {
+pub trait NetRx: Send {
     fn rx_peek(&mut self, cx: &mut Context<'_>) -> Option<Token>;
     fn rx_buffer(&mut self, token: Token) -> &mut [u8];
     fn receive(&mut self, token: Token);
@@ -54,7 +60,8 @@ pub(in crate::net) trait NetExt: Net {
 }
 impl<T: Net + ?Sized> NetExt for T {}
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
+#[non_exhaustive]
 pub struct Features {
     pub max_unit: usize,
 }
@@ -131,7 +138,7 @@ impl phy::TxToken for TxToken<'_> {
     {
         let buf = self.device.tx_buffer(self.token);
         let res = f(&mut buf[..len]);
-        self.device.transmit(self.token);
+        self.device.transmit(self.token, len);
         res
     }
 }

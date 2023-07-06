@@ -1,6 +1,8 @@
 #![no_std]
+#![feature(split_array)]
 
 pub mod block;
+pub mod net;
 
 extern crate alloc;
 
