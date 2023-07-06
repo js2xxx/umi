@@ -7,6 +7,7 @@ use core::{
 };
 
 use arsc_rs::Arsc;
+use ksc::Error::{self, ECONNREFUSED, EEXIST, EINVAL, ENOTCONN, EPROTO};
 use managed::ManagedSlice;
 use smoltcp::{
     iface::{Interface, SocketHandle},
@@ -17,33 +18,6 @@ use spin::RwLock;
 
 use super::BUFFER_CAP;
 use crate::net::{time::duration_to_smoltcp, Stack};
-
-/// Error returned by TcpSocket read/write functions.
-#[derive(PartialEq, Eq, Clone, Copy, Debug)]
-pub enum Error {
-    /// The connection was reset.
-    ///
-    /// This can happen on receiving a RST packet, or on timeout.
-    ConnectionReset,
-}
-
-/// Error returned by [`TcpSocket::connect`] and [`TcpSocket::listen`].
-#[derive(PartialEq, Eq, Clone, Copy, Debug)]
-pub enum ConnectError {
-    /// The socket is already connected or listening.
-    InvalidState,
-    /// The remote host rejected the connection with a RST packet.
-    ConnectionReset,
-    /// No route to host.
-    NoRoute,
-}
-
-/// Error returned by [`TcpSocket::accept`].
-#[derive(PartialEq, Eq, Clone, Copy, Debug)]
-pub enum AcceptError {
-    /// The socket is already connected or listening.
-    InvalidState,
-}
 
 #[derive(Debug)]
 pub struct Socket {
@@ -82,11 +56,9 @@ impl Socket {
         }
     }
 
-    fn poll_for_establishment(&self, cx: &mut Context) -> Poll<Result<SocketHandle, ConnectError>> {
+    fn poll_for_establishment(&self, cx: &mut Context) -> Poll<Result<SocketHandle, Error>> {
         self.with_mut(|handle, s, _| match s.state() {
-            tcp::State::Closed | tcp::State::TimeWait => {
-                Poll::Ready(Err(ConnectError::ConnectionReset))
-            }
+            tcp::State::Closed | tcp::State::TimeWait => Poll::Ready(Err(ENOTCONN)),
             tcp::State::Listen | tcp::State::SynSent | tcp::State::SynReceived => {
                 s.register_send_waker(cx.waker());
                 Poll::Pending
@@ -95,32 +67,28 @@ impl Socket {
         })
     }
 
-    pub async fn connect(&self, remote: impl Into<IpEndpoint>) -> Result<(), ConnectError> {
+    pub async fn connect(&self, remote: impl Into<IpEndpoint>) -> Result<(), Error> {
         let local_port = self.stack.with_socket_mut(|s| s.next_local_port());
 
         match self.with_mut(|_, socket, i| socket.connect(i.context(), remote, local_port)) {
             Ok(()) => {}
-            Err(tcp::ConnectError::InvalidState) => return Err(ConnectError::InvalidState),
-            Err(tcp::ConnectError::Unaddressable) => return Err(ConnectError::NoRoute),
+            Err(tcp::ConnectError::InvalidState) => return Err(EEXIST),
+            Err(tcp::ConnectError::Unaddressable) => return Err(EINVAL),
         }
 
         poll_fn(|cx| self.poll_for_establishment(cx)).await?;
         Ok(())
     }
 
-    pub fn listen(&self, local_endpoint: impl Into<IpListenEndpoint>) -> Result<(), ConnectError> {
-        match self.with_mut(|_, socket, _| socket.listen(local_endpoint)) {
-            Ok(()) => {}
-            Err(tcp::ListenError::InvalidState) => return Err(ConnectError::InvalidState),
-            Err(tcp::ListenError::Unaddressable) => return Err(ConnectError::NoRoute),
-        }
-        Ok(())
+    pub fn listen(&self, local_endpoint: impl Into<IpListenEndpoint>) -> Result<(), Error> {
+        self.with_mut(|_, socket, _| socket.listen(local_endpoint))
+            .map_err(|_| EINVAL)
     }
 
-    pub async fn accept(&self) -> Result<Self, AcceptError> {
+    pub async fn accept(&self) -> Result<Self, Error> {
         loop {
             if !self.with(|socket| socket.is_listening()) {
-                break Err(AcceptError::InvalidState);
+                break Err(EPROTO);
             }
             let res = poll_fn(|cx| self.poll_for_establishment(cx)).await;
             if let Ok(handle) = res {
@@ -163,7 +131,7 @@ impl Socket {
             }
             Ok(n) => Poll::Ready(Ok(n)),
             Err(tcp::RecvError::Finished) => Poll::Ready(Ok(0)),
-            Err(tcp::RecvError::InvalidState) => Poll::Ready(Err(Error::ConnectionReset)),
+            Err(tcp::RecvError::InvalidState) => Poll::Ready(Err(ECONNREFUSED)),
         })
     }
 
@@ -178,15 +146,45 @@ impl Socket {
                 Poll::Pending
             }
             Ok(n) => Poll::Ready(Ok(n)),
-            Err(tcp::SendError::InvalidState) => Poll::Ready(Err(Error::ConnectionReset)),
+            Err(tcp::SendError::InvalidState) => Poll::Ready(Err(ECONNREFUSED)),
         })
     }
 
-    pub async fn send(&self, buf: &mut [u8]) -> Result<usize, Error> {
+    pub async fn send(&self, buf: &[u8]) -> Result<usize, Error> {
         poll_fn(|cx| self.poll_send(buf, cx)).await
     }
 
-    pub fn poll_flush(&self, cx: &mut Context) -> Poll<Result<(), Error>> {
+    fn poll_wait_for_recv(&self, cx: &mut Context) -> Poll<()> {
+        self.with_mut(|_, s, _| {
+            if s.can_recv() {
+                Poll::Ready(())
+            } else {
+                s.register_recv_waker(cx.waker());
+                Poll::Pending
+            }
+        })
+    }
+
+    pub async fn wait_for_recv(&self) {
+        poll_fn(|cx| self.poll_wait_for_recv(cx)).await
+    }
+
+    fn poll_wait_for_send(&self, cx: &mut Context<'_>) -> Poll<()> {
+        self.with_mut(|_, s, _| {
+            if s.can_send() {
+                Poll::Ready(())
+            } else {
+                s.register_send_waker(cx.waker());
+                Poll::Pending
+            }
+        })
+    }
+
+    pub async fn wait_for_send(&self) {
+        poll_fn(|cx| self.poll_wait_for_send(cx)).await
+    }
+
+    pub fn poll_flush(&self, cx: &mut Context) -> Poll<()> {
         self.with_mut(|_, s, _| {
             let waiting_close = s.state() == tcp::State::Closed && s.remote_endpoint().is_some();
             // If there are outstanding send operations, register for wake up and wait
@@ -196,12 +194,12 @@ impl Socket {
                 Poll::Pending
             // No outstanding sends, socket is flushed
             } else {
-                Poll::Ready(Ok(()))
+                Poll::Ready(())
             }
         })
     }
 
-    pub async fn flush(&self) -> Result<(), Error> {
+    pub async fn flush(&self) {
         poll_fn(|cx| self.poll_flush(cx)).await
     }
 

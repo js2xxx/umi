@@ -52,7 +52,7 @@ pub fn init_mmio(node: &FdtNode) -> bool {
             let intr = someb!(intr_manager.insert(intr_pin));
 
             let device = Arc::new(RwLock::new(device));
-            ksync::critical(|| device.write().start_up());
+            ksync::critical(|| device.write().startup());
             let d2 = device.clone();
             let ack = move || {
                 ksync::critical(|| loop {

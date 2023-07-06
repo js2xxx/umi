@@ -5,6 +5,7 @@ use core::{
 };
 
 use arsc_rs::Arsc;
+use ksc::Error::{self, EEXIST, EINVAL};
 use smoltcp::{
     iface::SocketHandle,
     socket::udp::{self, BindError, PacketBuffer, PacketMetadata},
@@ -14,14 +15,10 @@ use smoltcp::{
 use super::{BUFFER_CAP, META_CAP};
 use crate::net::Stack;
 
+#[derive(Debug)]
 pub struct Socket {
     stack: Arsc<Stack>,
     handle: SocketHandle,
-}
-
-#[derive(PartialEq, Eq, Clone, Copy, Debug)]
-pub enum Error {
-    NoRoute,
 }
 
 impl Socket {
@@ -47,21 +44,21 @@ impl Socket {
         Socket { stack, handle }
     }
 
-    pub fn bind(&self, endpoint: impl Into<IpListenEndpoint>) -> Result<(), BindError> {
+    pub fn bind(&self, endpoint: impl Into<IpListenEndpoint>) -> Result<(), Error> {
         let mut endpoint: IpListenEndpoint = endpoint.into();
         if endpoint.port == 0 {
             endpoint.port = self.stack.with_socket_mut(|s| s.next_local_port());
         }
-        self.with_mut(|socket| socket.bind(endpoint))
+        match self.with_mut(|socket| socket.bind(endpoint)) {
+            Ok(()) => Ok(()),
+            Err(BindError::InvalidState) => Err(EEXIST),
+            Err(BindError::Unaddressable) => Err(EINVAL),
+        }
     }
 
-    pub fn poll_receive(
-        &self,
-        buf: &mut [u8],
-        cx: &mut Context,
-    ) -> Poll<Result<(usize, IpEndpoint), Error>> {
+    pub fn poll_receive(&self, buf: &mut [u8], cx: &mut Context) -> Poll<(usize, IpEndpoint)> {
         self.with_mut(|socket| match socket.recv_slice(buf) {
-            Ok((n, meta)) => Poll::Ready(Ok((n, meta.endpoint))),
+            Ok((n, meta)) => Poll::Ready((n, meta.endpoint)),
             Err(udp::RecvError::Exhausted) => {
                 socket.register_recv_waker(cx.waker());
                 Poll::Pending
@@ -69,7 +66,7 @@ impl Socket {
         })
     }
 
-    pub async fn receive(&self, buf: &mut [u8]) -> Result<(usize, IpEndpoint), Error> {
+    pub async fn receive(&self, buf: &mut [u8]) -> (usize, IpEndpoint) {
         poll_fn(|cx| self.poll_receive(buf, cx)).await
     }
 
@@ -78,14 +75,14 @@ impl Socket {
         buf: &[u8],
         remote_endpoint: IpEndpoint,
         cx: &mut Context,
-    ) -> Poll<Result<(), Error>> {
+    ) -> Poll<Result<usize, Error>> {
         self.with_mut(|socket| match socket.send_slice(buf, remote_endpoint) {
-            Ok(()) => Poll::Ready(Ok(())),
+            Ok(()) => Poll::Ready(Ok(buf.len())),
             Err(udp::SendError::BufferFull) => {
                 socket.register_send_waker(cx.waker());
                 Poll::Pending
             }
-            Err(udp::SendError::Unaddressable) => Poll::Ready(Err(Error::NoRoute)),
+            Err(udp::SendError::Unaddressable) => Poll::Ready(Err(EINVAL)),
         })
     }
 
@@ -93,9 +90,39 @@ impl Socket {
         &self,
         buf: &[u8],
         remote_endpoint: impl Into<IpEndpoint>,
-    ) -> Result<(), Error> {
+    ) -> Result<usize, Error> {
         let remote_endpoint: IpEndpoint = remote_endpoint.into();
         poll_fn(|cx| self.poll_send(buf, remote_endpoint, cx)).await
+    }
+
+    fn poll_wait_for_recv(&self, cx: &mut Context) -> Poll<()> {
+        self.with_mut(|s| {
+            if s.can_recv() {
+                Poll::Ready(())
+            } else {
+                s.register_recv_waker(cx.waker());
+                Poll::Pending
+            }
+        })
+    }
+
+    pub async fn wait_for_recv(&self) {
+        poll_fn(|cx| self.poll_wait_for_recv(cx)).await
+    }
+
+    fn poll_wait_for_send(&self, cx: &mut Context<'_>) -> Poll<()> {
+        self.with_mut(|s| {
+            if s.can_send() {
+                Poll::Ready(())
+            } else {
+                s.register_send_waker(cx.waker());
+                Poll::Pending
+            }
+        })
+    }
+
+    pub async fn wait_for_send(&self) {
+        poll_fn(|cx| self.poll_wait_for_send(cx)).await
     }
 
     pub fn endpoint(&self) -> IpListenEndpoint {

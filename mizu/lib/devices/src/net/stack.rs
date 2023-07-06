@@ -18,7 +18,7 @@ use smoltcp::{
         DnsQueryType, EthernetAddress, HardwareAddress, IpAddress, IpCidr, Ipv4Address, Ipv6Address,
     },
 };
-use spin::lock_api::RwLock;
+use spin::RwLock;
 
 use super::{
     config::{Config, ConfigV4, ConfigV6, DhcpV4Config, StaticConfigV4, StaticConfigV6},

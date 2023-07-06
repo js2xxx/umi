@@ -66,6 +66,7 @@ impl Default for DhcpV4Config {
 }
 
 /// Network stack configuration.
+#[derive(Default)]
 pub struct Config {
     /// IPv4 configuration
     pub ipv4: ConfigV4,
@@ -105,19 +106,23 @@ impl Config {
 }
 
 /// Network stack IPv4 configuration.
+#[derive(Default)]
 pub enum ConfigV4 {
     /// Use a static IPv4 address configuration.
     Static(StaticConfigV4),
     /// Use DHCP to obtain an IP address configuration.
     Dhcp(DhcpV4Config),
     /// Do not configure IPv6.
+    #[default]
     None,
 }
 
 /// Network stack IPv6 configuration.
+#[derive(Default)]
 pub enum ConfigV6 {
     /// Use a static IPv6 address configuration.
     Static(StaticConfigV6),
     /// Do not configure IPv6.
+    #[default]
     None,
 }

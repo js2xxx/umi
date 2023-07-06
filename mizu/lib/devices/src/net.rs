@@ -7,6 +7,7 @@ mod stack;
 mod time;
 
 pub use self::{
+    config::*,
     driver::{Features, Net, NetRx, NetTx},
     socket::*,
     stack::Stack,

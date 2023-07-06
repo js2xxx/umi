@@ -79,7 +79,7 @@ impl<const LEN: usize> VirtioNet<LEN> {
         })
     }
 
-    pub fn start_up(&mut self) {
+    pub fn startup(&mut self) {
         ksync::critical(|| {
             let mut device = self.device.borrow_mut();
             for index in 0..LEN {

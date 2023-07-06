@@ -44,6 +44,7 @@ fdt = "0"
 futures-util = {version = "0", default-features = false, features = ["alloc"]}
 goblin = {version = "0", default-features = false, features = ["elf32", "elf64", "endian_fd"]}
 hashbrown = {version = "0", default-features = false, features = ["inline-more"]}
+heapless = "0"
 log = "0"
 pin-project = "1"
 r0 = "1"
@@ -52,7 +53,17 @@ sbi-rt = {git = "https://github.com/js2xxx/sbi-rt", branch = "multitarget"}
 scoped-tls = {git = "https://github.com/js2xxx/scoped-tls", branch = "no_std"}
 spin = "0"
 static_assertions = "1"
-virtio-drivers = {git = "https://github.com/rcore-os/virtio-drivers", branch = "new-netdev" }
+virtio-drivers = {git = "https://github.com/rcore-os/virtio-drivers", branch = "new-netdev"}
+
+[dependencies.smoltcp]
+default-features = false
+features = [
+  "log",
+  "proto-ipv4",
+  "proto-ipv6",
+]
+version = "0"
+
 
 [build-dependencies]
 config = {path = "../lib/config", default-features = false}

@@ -13,6 +13,7 @@ use spin::{Lazy, Once};
 pub use self::{
     block::{block, blocks},
     intr::INTR,
+    net::{net, nets},
     serial::{Stdin, Stdout},
 };
 
