@@ -3,7 +3,7 @@ mod dev;
 mod pipe;
 mod proc;
 mod serial;
-mod socket;
+pub mod socket;
 mod tmp;
 
 use alloc::{borrow::Cow, collections::BTreeMap, format, sync::Arc};

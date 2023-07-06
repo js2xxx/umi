@@ -2,8 +2,8 @@ pub mod dns;
 pub mod tcp;
 pub mod udp;
 
-use ksc::Error::{self, EINVAL};
-use smoltcp::wire::IpEndpoint;
+use ksc::Error::{self, EOPNOTSUPP, EPROTO};
+use smoltcp::wire::{IpEndpoint, IpListenEndpoint};
 
 const BUFFER_CAP: usize = 16 * 1024;
 const META_CAP: usize = 8;
@@ -22,7 +22,7 @@ impl Socket {
     ) -> Result<usize, Error> {
         match self {
             Socket::Tcp(socket) => socket.send(buf).await,
-            Socket::Udp(socket) => socket.send(buf, remote_endpoint.ok_or(EINVAL)?).await,
+            Socket::Udp(socket) => socket.send(buf, remote_endpoint).await,
         }
     }
 
@@ -57,16 +57,60 @@ impl Socket {
         }
     }
 
-    pub fn endpoint(&self) -> Option<IpEndpoint> {
+    pub async fn connect(&self, endpoint: IpEndpoint) -> Result<(), Error> {
+        match self {
+            Socket::Tcp(socket) => socket.connect(endpoint).await,
+            Socket::Udp(socket) => {
+                socket.connect(endpoint);
+                Ok(())
+            }
+        }
+    }
+
+    pub fn bind(&self, endpoint: IpListenEndpoint) -> Result<(), Error> {
+        match self {
+            Socket::Tcp(socket) => socket.listen(endpoint),
+            Socket::Udp(socket) => socket.bind(endpoint),
+        }
+    }
+
+    pub fn listen(&self) -> Result<(), Error> {
+        match self {
+            Socket::Tcp(socket) => {
+                if socket.is_listening() {
+                    Ok(())
+                } else {
+                    Err(EPROTO)
+                }
+            }
+            Socket::Udp(_) => Err(EOPNOTSUPP),
+        }
+    }
+
+    pub async fn accept(&self) -> Result<Socket, Error> {
+        match self {
+            Socket::Tcp(socket) => socket.accept().await.map(Socket::Tcp),
+            Socket::Udp(_) => Err(EOPNOTSUPP),
+        }
+    }
+
+    pub fn local_endpoint(&self) -> Option<IpEndpoint> {
         match self {
             Socket::Tcp(socket) => socket.local_endpoint(),
             Socket::Udp(socket) => {
-                let endpoint = socket.endpoint();
+                let endpoint = socket.local_endpoint();
                 endpoint.addr.map(|addr| IpEndpoint {
                     addr,
                     port: endpoint.port,
                 })
             }
+        }
+    }
+
+    pub fn remote_endpoint(&self) -> Option<IpEndpoint> {
+        match self {
+            Socket::Tcp(socket) => socket.remote_endpoint(),
+            Self::Udp(socket) => socket.remote_endpoint(),
         }
     }
 

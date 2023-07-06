@@ -101,6 +101,13 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         .map(IOCTL, fd::ioctl)
         .map(FTRUNCATE, fd::ftruncate)
         .map(TRUNCATE, fd::truncate)
+        // Network
+        .map(SOCKET, fd::socket)
+        .map(SENDTO, fd::sendto)
+        .map(CONNECT, fd::connect)
+        .map(BIND, fd::bind)
+        .map(LISTEN, fd::listen)
+        .map(ACCEPT, fd::accept)
         // Time
         .map(GETTIMEOFDAY, gettimeofday)
         .map(CLOCK_GETTIME, clock_gettime)

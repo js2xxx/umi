@@ -54,6 +54,7 @@ scoped-tls = {git = "https://github.com/js2xxx/scoped-tls", branch = "no_std"}
 spin = "0"
 static_assertions = "1"
 virtio-drivers = {git = "https://github.com/rcore-os/virtio-drivers", branch = "new-netdev"}
+zerocopy = "0"
 
 [dependencies.smoltcp]
 default-features = false
@@ -63,7 +64,6 @@ features = [
   "proto-ipv6",
 ]
 version = "0"
-
 
 [build-dependencies]
 config = {path = "../lib/config", default-features = false}

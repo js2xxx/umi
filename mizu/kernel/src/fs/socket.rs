@@ -36,7 +36,7 @@ fn config() -> Config {
     Default::default()
 }
 
-pub fn init_stack() {
+pub(super) fn init_stack() {
     let _ = STACK.try_call_once(|| {
         if let Some(dev) = crate::dev::net(0) {
             return Ok(Stack::new(dev, config()));
@@ -45,14 +45,16 @@ pub fn init_stack() {
     });
 }
 
-#[allow(dead_code)]
 pub fn tcp() -> Result<Arc<dyn Entry>, Error> {
     Ok(Arc::new(SocketFile {
         socket: Socket::Tcp(tcp::Socket::new(STACK.get().cloned().ok_or(ENODEV)?)),
     }))
 }
 
-#[allow(dead_code)]
+pub fn tcp_accept(socket: Socket) -> Arc<dyn Entry> {
+    Arc::new(SocketFile { socket })
+}
+
 pub fn udp() -> Result<Arc<dyn Entry>, Error> {
     Ok(Arc::new(SocketFile {
         socket: Socket::Udp(udp::Socket::new(STACK.get().cloned().ok_or(ENODEV)?)),

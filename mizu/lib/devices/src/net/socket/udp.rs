@@ -11,6 +11,7 @@ use smoltcp::{
     socket::udp::{self, BindError, PacketBuffer, PacketMetadata},
     wire::{IpEndpoint, IpListenEndpoint},
 };
+use spin::Mutex;
 
 use super::{BUFFER_CAP, META_CAP};
 use crate::net::Stack;
@@ -19,6 +20,7 @@ use crate::net::Stack;
 pub struct Socket {
     stack: Arsc<Stack>,
     handle: SocketHandle,
+    remote: Mutex<Option<IpEndpoint>>,
 }
 
 impl Socket {
@@ -41,7 +43,11 @@ impl Socket {
             PacketBuffer::new(meta, buf),
         );
         let handle = stack.with_socket_mut(|s| s.sockets.add(socket));
-        Socket { stack, handle }
+        Socket {
+            stack,
+            handle,
+            remote: Default::default(),
+        }
     }
 
     pub fn bind(&self, endpoint: impl Into<IpListenEndpoint>) -> Result<(), Error> {
@@ -56,6 +62,10 @@ impl Socket {
         }
     }
 
+    pub fn connect(&self, remote: impl Into<IpEndpoint>) {
+        ksync::critical(|| *self.remote.lock() = Some(remote.into()))
+    }
+
     pub fn poll_receive(&self, buf: &mut [u8], cx: &mut Context) -> Poll<(usize, IpEndpoint)> {
         self.with_mut(|socket| match socket.recv_slice(buf) {
             Ok((n, meta)) => Poll::Ready((n, meta.endpoint)),
@@ -67,7 +77,13 @@ impl Socket {
     }
 
     pub async fn receive(&self, buf: &mut [u8]) -> (usize, IpEndpoint) {
-        poll_fn(|cx| self.poll_receive(buf, cx)).await
+        loop {
+            let (len, endpoint) = poll_fn(|cx| self.poll_receive(buf, cx)).await;
+            let remote = ksync::critical(|| *self.remote.lock());
+            if remote.is_none() || Some(endpoint) == remote {
+                break (len, endpoint);
+            }
+        }
     }
 
     pub fn poll_send(
@@ -89,9 +105,12 @@ impl Socket {
     pub async fn send(
         &self,
         buf: &[u8],
-        remote_endpoint: impl Into<IpEndpoint>,
+        remote_endpoint: Option<impl Into<IpEndpoint>>,
     ) -> Result<usize, Error> {
-        let remote_endpoint: IpEndpoint = remote_endpoint.into();
+        let remote_endpoint: IpEndpoint = match remote_endpoint {
+            Some(remote) => remote.into(),
+            None => ksync::critical(|| self.remote.lock().ok_or(EINVAL))?,
+        };
         poll_fn(|cx| self.poll_send(buf, remote_endpoint, cx)).await
     }
 
@@ -125,8 +144,12 @@ impl Socket {
         poll_fn(|cx| self.poll_wait_for_send(cx)).await
     }
 
-    pub fn endpoint(&self) -> IpListenEndpoint {
+    pub fn local_endpoint(&self) -> IpListenEndpoint {
         self.with(|socket| socket.endpoint())
+    }
+
+    pub fn remote_endpoint(&self) -> Option<IpEndpoint> {
+        ksync::critical(|| *self.remote.lock())
     }
 
     pub fn is_open(&self) -> bool {
