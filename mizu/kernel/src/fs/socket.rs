@@ -3,13 +3,12 @@ use core::{ops::Deref, pin::pin};
 
 use arsc_rs::Arsc;
 use async_trait::async_trait;
-use devices::net::{tcp, udp, Config, Socket, Stack, StaticConfigV4};
+use devices::net::{tcp, udp, Config, Socket, Stack};
 use futures_util::future::{select, Either};
 use ksc::{
     Error,
     Error::{ENODEV, ENOSYS, ESPIPE},
 };
-use smoltcp::wire::{Ipv4Address, Ipv4Cidr};
 use spin::Once;
 use umifs::{
     path::Path,
@@ -23,10 +22,15 @@ static STACK: Once<Arsc<Stack>> = Once::INIT;
 #[cfg(feature = "qemu-virt")]
 fn config() -> Config {
     Config {
-        ipv4: devices::net::ConfigV4::Static(StaticConfigV4 {
-            address: Ipv4Cidr::new(Ipv4Address::new(10, 0, 2, 15), 24),
-            gateway: Some(Ipv4Address::new(10, 0, 2, 2)),
-            dns_servers: [Ipv4Address::new(8, 8, 8, 8)].into_iter().collect(),
+        ipv4: devices::net::ConfigV4::Static(devices::net::StaticConfigV4 {
+            address: smoltcp::wire::Ipv4Cidr::new(
+                smoltcp::wire::Ipv4Address::new(10, 0, 2, 15),
+                24,
+            ),
+            gateway: Some(smoltcp::wire::Ipv4Address::new(10, 0, 2, 2)),
+            dns_servers: [smoltcp::wire::Ipv4Address::new(10, 0, 2, 3)]
+                .into_iter()
+                .collect(),
         }),
         ipv6: devices::net::ConfigV6::None,
     }
@@ -39,7 +43,10 @@ fn config() -> Config {
 pub(super) fn init_stack() {
     let _ = STACK.try_call_once(|| {
         if let Some(dev) = crate::dev::net(0) {
-            return Ok(Stack::new(dev, config()));
+            let stack = Stack::new(dev, config());
+            let s2 = stack.clone();
+            crate::executor().spawn(s2.run()).detach();
+            return Ok(stack);
         }
         Err(())
     });

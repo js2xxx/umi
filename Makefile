@@ -26,7 +26,9 @@ QEMU_ARGS := -monitor stdio \
 	-serial file:debug/qemu.log \
 	-smp 4 -m 128M \
 	-drive file=$(ROOTFS),if=none,format=raw,id=x0 \
-	-device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0
+	-device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0 \
+	-device virtio-net-device,netdev=net \
+	-netdev user,id=net
 
 ifeq ($(BOARD), qemu-virt)
 	QEMU_ARGS += -machine virt \

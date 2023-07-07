@@ -1,6 +1,7 @@
 #![no_std]
 #![feature(if_let_guard)]
 #![feature(pointer_byte_offsets)]
+#![feature(result_option_inspect)]
 
 extern crate alloc;
 

@@ -13,9 +13,11 @@ use futures_util::{task::AtomicWaker, Future, FutureExt};
 use ktime::{Instant, Timer};
 use smoltcp::{
     iface::{Interface, SocketHandle, SocketSet},
+    phy::Tracer,
     socket::{dhcpv4, dns},
     wire::{
-        DnsQueryType, EthernetAddress, HardwareAddress, IpAddress, IpCidr, Ipv4Address, Ipv6Address,
+        DnsQueryType, EthernetAddress, HardwareAddress, IpAddress, IpCidr, Ipv4Address, Ipv4Cidr,
+        Ipv6Address, Ipv6Cidr,
     },
 };
 use spin::RwLock;
@@ -29,6 +31,9 @@ use super::{
 
 const LOCAL_PORT_MIN: u16 = 1025;
 const LOCAL_PORT_MAX: u16 = 65535;
+
+pub const LOOPBACK_IPV4: IpCidr = IpCidr::Ipv4(Ipv4Cidr::new(Ipv4Address([127, 0, 0, 1]), 8));
+pub const LOOPBACK_IPV6: IpCidr = IpCidr::Ipv6(Ipv6Cidr::new(Ipv6Address::LOOPBACK, 128));
 
 pub struct Stack {
     device: Arc<RwLock<dyn Net>>,
@@ -333,7 +338,10 @@ impl State {
         Stack::update_interface(&mut s.iface, device);
 
         let instant = instant_to_smoltcp(ktime::Instant::now());
-        let mut poller = device.with_cx(Some(cx));
+        let mut poller = Tracer::new(device.with_cx(Some(cx)), |instant, packet| {
+            log::info!("net stack: at {instant}:");
+            log::info!("\t {packet}");
+        });
         s.iface.poll(instant, &mut poller, &mut s.sockets);
 
         let old = mem::replace(&mut self.link_up, device.is_link_up());
@@ -396,11 +404,15 @@ impl Future for StackBackground {
                 ready!(timer.poll_unpin(cx));
                 self.timer = None;
             }
-            if let Some(ddl) = self
+            let ddl = self
                 .stack
-                .with_mut(|device, state, s| state.poll(cx, device, s))
-            {
-                self.timer = Some(Timer::deadline(ddl));
+                .with_mut(|device, state, s| state.poll(cx, device, s));
+            match ddl {
+                Some(ddl) => self.timer = Some(Timer::deadline(ddl)),
+                None => {
+                    cx.waker().wake_by_ref();
+                    break Poll::Pending;
+                }
             }
         }
     }

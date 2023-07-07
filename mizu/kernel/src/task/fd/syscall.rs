@@ -1,42 +1,10 @@
-macro_rules! fssc {
-    (
-        $(pub async fn $name:ident(
-            $virt:ident: Pin<&Virt>,
-            $files:ident: &Files,
-            $($arg_name:ident : $arg_ty:ty),* $(,)?
-        ) -> $out:ty $body:block)*
-    ) => {
-        $(
-            #[async_handler]
-            pub async fn $name(
-                ts: &mut TaskState,
-                cx: UserCx<'_, fn($($arg_ty),*) -> $out>,
-            ) -> ScRet {
-                #[allow(unused_mut, unused_parens)]
-                async fn inner(
-                    $virt: Pin<&Virt>,
-                    $files: &Files,
-                    ($(mut $arg_name),*): ($($arg_ty),*),
-                ) -> $out $body
-
-                let ret = inner(ts.virt.as_ref(), &ts.files, cx.args()).await;
-                cx.ret(ret);
-
-                ScRet::Continue(None)
-            }
-        )*
-    };
-}
-
 mod fs;
 mod io;
 mod net;
 
 use alloc::boxed::Box;
-use core::pin::Pin;
 
 use co_trap::UserCx;
-use kmem::Virt;
 use ksc::{
     async_handler,
     Error::{self, *},
@@ -44,11 +12,10 @@ use ksc::{
 use umifs::types::{OpenOptions, Permissions};
 
 pub use self::{fs::*, io::*, net::*};
-use super::Files;
 use crate::{
     mem::{In, Out, UserPtr},
     syscall::ScRet,
-    task::TaskState,
+    task::{fd::FdInfo, TaskState},
 };
 
 #[async_handler]
@@ -96,73 +63,88 @@ pub async fn readlinkat(
 
 pub const MAX_PATH_LEN: usize = 256;
 
-fssc! {
-    pub async fn chdir(
-        virt: Pin<&Virt>,
-        files: &Files,
-        path: UserPtr<u8, In>,
-    ) -> Result<(), Error> {
+#[async_handler]
+pub async fn chdir(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(UserPtr<u8, In>) -> Result<(), Error>>,
+) -> ScRet {
+    let path = cx.args();
+    let fut = async {
         let mut buf = [0; MAX_PATH_LEN];
-        let (path, root) = path.read_path(virt, &mut buf).await?;
+        let (path, root) = path.read_path(ts.virt.as_ref(), &mut buf).await?;
 
         log::trace!("user chdir path = {path:?}");
         if root {
             crate::fs::open_dir(path, OpenOptions::RDONLY, Permissions::SELF_R).await?;
 
-            files.chdir(path).await;
+            ts.files.chdir(path).await;
         } else {
-            let path = files.cwd().join(path);
+            let path = ts.files.cwd().join(path);
             crate::fs::open_dir(&path, OpenOptions::RDONLY, Permissions::SELF_R).await?;
-            files.chdir(&path).await;
+            ts.files.chdir(&path).await;
         }
         Ok(())
-    }
+    };
+    cx.ret(fut.await);
+    ScRet::Continue(None)
+}
 
-    pub async fn getcwd(
-        virt: Pin<&Virt>,
-        files: &Files,
-        buf: UserPtr<u8, Out>,
-        len: usize,
-    ) -> Result<UserPtr<u8, Out>, Error> {
+#[async_handler]
+pub async fn getcwd(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(UserPtr<u8, Out>, usize) -> Result<UserPtr<u8, Out>, Error>>,
+) -> ScRet {
+    let (mut buf, len) = cx.args();
+    let fut = async {
         log::trace!("user getcwd buf = {buf:?}, len = {len}");
 
-        let cwd = files.cwd();
+        let cwd = ts.files.cwd();
         let path = cwd.as_str().as_bytes();
         if path.len() >= len {
             Err(ERANGE)
         } else {
-            buf.write_slice(virt, path, true).await?;
+            buf.write_slice(ts.virt.as_ref(), path, true).await?;
             Ok(buf)
         }
-    }
+    };
+    cx.ret(fut.await);
+    ScRet::Continue(None)
+}
 
-    pub async fn dup(_v: Pin<&Virt>, files: &Files, fd: i32) -> Result<i32, Error> {
-        log::trace!("user dup fd = {fd}");
+#[async_handler]
+pub async fn dup(ts: &mut TaskState, cx: UserCx<'_, fn(i32) -> Result<i32, Error>>) -> ScRet {
+    let fd = cx.args();
+    log::trace!("user dup fd = {fd}");
 
-        files.dup(fd, None).await
-    }
+    cx.ret(ts.files.dup(fd, None).await);
+    ScRet::Continue(None)
+}
 
-    pub async fn dup3(
-        _v: Pin<&Virt>,
-        files: &Files,
-        old: i32,
-        new: i32,
-        flags: i32,
-    ) -> Result<i32, Error> {
+#[async_handler]
+pub async fn dup3(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(i32, i32, i32) -> Result<i32, Error>>,
+) -> ScRet {
+    let (old, new, flags) = cx.args();
+    let fut = async {
         log::trace!("user dup old = {old}, new = {new}, flags = {flags}");
 
-        let fi = files.get_fi(old).await?;
-        files.reopen(new, fi.entry, fi.perm, flags != 0).await;
+        let mut fi = ts.files.get_fi(old).await?;
+        fi.close_on_exec = flags != 0;
+        ts.files.reopen(new, fi).await;
         Ok(new)
-    }
+    };
+    cx.ret(fut.await);
+    ScRet::Continue(None)
+}
 
-    pub async fn fcntl(
-        _v: Pin<&Virt>,
-        files: &Files,
-        fd: i32,
-        cmd: usize,
-        arg: usize,
-    ) -> Result<i32, Error> {
+#[async_handler]
+pub async fn fcntl(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(i32, usize, usize) -> Result<i32, Error>>,
+) -> ScRet {
+    let (fd, cmd, arg) = cx.args();
+    let fut = async {
         const DUPFD: usize = 0;
         const GETFD: usize = 1;
         const SETFD: usize = 2;
@@ -171,37 +153,79 @@ fssc! {
         const DUPFD_CLOEXEC: usize = 1030;
 
         match cmd {
-            DUPFD => files.dup(fd, None).await,
-            DUPFD_CLOEXEC => files.dup(fd, Some(arg != 0)).await,
-            GETFD => files.get_fi(fd).await.map(|fi| fi.close_on_exec as i32),
+            DUPFD => ts.files.dup(fd, None).await,
+            DUPFD_CLOEXEC => ts.files.dup(fd, Some(arg != 0)).await,
+
+            GETFD => ts.files.get_fi(fd).await.map(|fi| fi.close_on_exec as i32),
             SETFD => {
-                let c = arg != 0;
-                files.set_fi(fd, Some(c), None, None).await.map(|_| 0)
+                let set = |fi: &mut FdInfo| fi.close_on_exec = arg != 0;
+                ts.files.set_fi(fd, set).await.map(|_| 0)
             }
-            GETFL => files.get_fi(fd).await.map(|fi| fi.perm.bits() as _),
+
+            GETFL => {
+                let res = ts.files.get_fi(fd).await;
+                res.map(|fi| (fi.nonblock as i32) << OpenOptions::NONBLOCK.bits().ilog2())
+            }
             SETFL => {
-                let perm = Permissions::from_bits_truncate(arg as u32);
-                files.set_fi(fd, None, Some(perm), None).await.map(|_| 0)
+                let set = |fi: &mut FdInfo| fi.nonblock = arg != 0;
+                ts.files.set_fi(fd, set).await.map(|_| 0)
             }
             _ => Err(EINVAL),
         }
-    }
+    };
+    cx.ret(fut.await);
+    ScRet::Continue(None)
+}
 
-    pub async fn close(_v: Pin<&Virt>, files: &Files, fd: i32) -> Result<(), Error> {
-        log::trace!("user close fd = {fd}");
+#[async_handler]
+pub async fn close(ts: &mut TaskState, cx: UserCx<'_, fn(i32) -> Result<(), Error>>) -> ScRet {
+    let fd = cx.args();
+    log::trace!("user close fd = {fd}");
 
-        files.close(fd).await
-    }
+    cx.ret(ts.files.close(fd).await);
+    ScRet::Continue(None)
+}
 
-    pub async fn pipe(virt: Pin<&Virt>, files: &Files, fd: UserPtr<i32, Out>) -> Result<(), Error> {
+#[async_handler]
+pub async fn pipe(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(UserPtr<i32, Out>) -> Result<(), Error>>,
+) -> ScRet {
+    let mut fd = cx.args();
+    let fut = async {
         let (tx, rx) = crate::fs::pipe();
-        let tx = files.open(tx, Permissions::SELF_W, false).await?;
-        let rx = files.open(rx, Permissions::SELF_R, false).await?;
-        fd.write_slice(virt, &[rx, tx], false).await
-    }
 
-    pub async fn ioctl(_v: Pin<&Virt>, files: &Files, fd: i32) -> Result<(), Error> {
-        files.get(fd).await?;
+        let tx = crate::task::fd::FdInfo {
+            entry: tx,
+            close_on_exec: false,
+            nonblock: false,
+            perm: Permissions::SELF_W,
+            saved_next_dirent: Default::default(),
+        };
+        let tx = ts.files.open(tx).await?;
+
+        let rx = crate::task::fd::FdInfo {
+            entry: rx,
+            close_on_exec: false,
+            nonblock: false,
+            perm: Permissions::SELF_R,
+            saved_next_dirent: Default::default(),
+        };
+        let rx = ts.files.open(rx).await?;
+
+        fd.write_slice(ts.virt.as_ref(), &[rx, tx], false).await
+    };
+    cx.ret(fut.await);
+    ScRet::Continue(None)
+}
+
+#[async_handler]
+pub async fn ioctl(ts: &mut TaskState, cx: UserCx<'_, fn(i32) -> Result<(), Error>>) -> ScRet {
+    let fd = cx.args();
+    let fut = async {
+        ts.files.get(fd).await?;
         Ok(())
-    }
+    };
+    cx.ret(fut.await);
+    ScRet::Continue(None)
 }

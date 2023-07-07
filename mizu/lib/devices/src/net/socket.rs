@@ -2,7 +2,7 @@ pub mod dns;
 pub mod tcp;
 pub mod udp;
 
-use ksc::Error::{self, EOPNOTSUPP, EPROTO};
+use ksc::Error::{self, EOPNOTSUPP};
 use smoltcp::wire::{IpEndpoint, IpListenEndpoint};
 
 const BUFFER_CAP: usize = 16 * 1024;
@@ -69,20 +69,14 @@ impl Socket {
 
     pub fn bind(&self, endpoint: IpListenEndpoint) -> Result<(), Error> {
         match self {
-            Socket::Tcp(socket) => socket.listen(endpoint),
+            Socket::Tcp(socket) => socket.bind(endpoint),
             Socket::Udp(socket) => socket.bind(endpoint),
         }
     }
 
     pub fn listen(&self) -> Result<(), Error> {
         match self {
-            Socket::Tcp(socket) => {
-                if socket.is_listening() {
-                    Ok(())
-                } else {
-                    Err(EPROTO)
-                }
-            }
+            Socket::Tcp(socket) => socket.listen(),
             Socket::Udp(_) => Err(EOPNOTSUPP),
         }
     }
@@ -94,16 +88,10 @@ impl Socket {
         }
     }
 
-    pub fn local_endpoint(&self) -> Option<IpEndpoint> {
+    pub fn listen_endpoint(&self) -> Option<IpListenEndpoint> {
         match self {
-            Socket::Tcp(socket) => socket.local_endpoint(),
-            Socket::Udp(socket) => {
-                let endpoint = socket.local_endpoint();
-                endpoint.addr.map(|addr| IpEndpoint {
-                    addr,
-                    port: endpoint.port,
-                })
-            }
+            Socket::Tcp(socket) => socket.listen_endpoint(),
+            Socket::Udp(socket) => Some(socket.listen_endpoint()),
         }
     }
 

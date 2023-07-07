@@ -5,10 +5,10 @@ use core::{
 };
 
 use arsc_rs::Arsc;
-use ksc::Error::{self, EEXIST, EINVAL};
+use ksc::Error::{self, EINVAL};
 use smoltcp::{
     iface::SocketHandle,
-    socket::udp::{self, BindError, PacketBuffer, PacketMetadata},
+    socket::udp::{self, PacketBuffer, PacketMetadata},
     wire::{IpEndpoint, IpListenEndpoint},
 };
 use spin::Mutex;
@@ -55,11 +55,8 @@ impl Socket {
         if endpoint.port == 0 {
             endpoint.port = self.stack.with_socket_mut(|s| s.next_local_port());
         }
-        match self.with_mut(|socket| socket.bind(endpoint)) {
-            Ok(()) => Ok(()),
-            Err(BindError::InvalidState) => Err(EEXIST),
-            Err(BindError::Unaddressable) => Err(EINVAL),
-        }
+        self.with_mut(|socket| socket.bind(endpoint))
+            .map_or(Err(EINVAL), Ok)
     }
 
     pub fn connect(&self, remote: impl Into<IpEndpoint>) {
@@ -144,7 +141,7 @@ impl Socket {
         poll_fn(|cx| self.poll_wait_for_send(cx)).await
     }
 
-    pub fn local_endpoint(&self) -> IpListenEndpoint {
+    pub fn listen_endpoint(&self) -> IpListenEndpoint {
         self.with(|socket| socket.endpoint())
     }
 

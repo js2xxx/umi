@@ -103,6 +103,7 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         .map(TRUNCATE, fd::truncate)
         // Network
         .map(SOCKET, fd::socket)
+        .map(GETSOCKNAME, fd::getsockname)
         .map(SENDTO, fd::sendto)
         .map(CONNECT, fd::connect)
         .map(BIND, fd::bind)

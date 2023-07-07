@@ -7,14 +7,14 @@ use core::{
 };
 
 use arsc_rs::Arsc;
-use ksc::Error::{self, ECONNREFUSED, EEXIST, EINVAL, ENOTCONN, EPROTO};
+use ksc::Error::{self, ECONNREFUSED, EEXIST, EINVAL, ENOTCONN};
 use managed::ManagedSlice;
 use smoltcp::{
     iface::{Interface, SocketHandle},
-    socket::tcp,
+    socket::tcp::{self, State},
     wire::{IpEndpoint, IpListenEndpoint},
 };
-use spin::RwLock;
+use spin::{Mutex, RwLock};
 
 use super::BUFFER_CAP;
 use crate::net::{time::duration_to_smoltcp, Stack};
@@ -23,6 +23,7 @@ use crate::net::{time::duration_to_smoltcp, Stack};
 pub struct Socket {
     stack: Arsc<Stack>,
     handle: RwLock<SocketHandle>,
+    listen: Mutex<Option<IpListenEndpoint>>,
 }
 
 impl Socket {
@@ -53,13 +54,14 @@ impl Socket {
         Socket {
             stack,
             handle: RwLock::new(handle),
+            listen: Default::default(),
         }
     }
 
     fn poll_for_establishment(&self, cx: &mut Context) -> Poll<Result<SocketHandle, Error>> {
         self.with_mut(|handle, s, _| match s.state() {
-            tcp::State::Closed | tcp::State::TimeWait => Poll::Ready(Err(ENOTCONN)),
-            tcp::State::Listen | tcp::State::SynSent | tcp::State::SynReceived => {
+            State::Closed | State::TimeWait => Poll::Ready(Err(ENOTCONN)),
+            State::Listen | State::SynSent | State::SynReceived => {
                 s.register_send_waker(cx.waker());
                 Poll::Pending
             }
@@ -80,15 +82,32 @@ impl Socket {
         Ok(())
     }
 
-    pub fn listen(&self, local_endpoint: impl Into<IpListenEndpoint>) -> Result<(), Error> {
-        self.with_mut(|_, socket, _| socket.listen(local_endpoint))
+    pub fn bind(&self, local_endpoint: impl Into<IpListenEndpoint>) -> Result<(), Error> {
+        let mut endpoint: IpListenEndpoint = local_endpoint.into();
+        if endpoint.port == 0 {
+            endpoint.port = self.stack.with_socket_mut(|s| s.next_local_port());
+        }
+        ksync::critical(|| match &mut *self.listen.lock() {
+            Some(_) => Err(EINVAL),
+            slot @ None => {
+                *slot = Some(endpoint);
+                Ok(())
+            }
+        })
+    }
+
+    pub fn listen(&self) -> Result<(), Error> {
+        let Some(endpoint) = ksync::critical(|| *self.listen.lock()) else {
+            return Err(EINVAL);
+        };
+        self.with_mut(|_, socket, _| socket.listen(endpoint))
             .map_err(|_| EINVAL)
     }
 
     pub async fn accept(&self) -> Result<Self, Error> {
         loop {
-            if !self.with(|socket| socket.is_listening()) {
-                break Err(EPROTO);
+            if ksync::critical(|| self.listen.lock().is_none()) {
+                break Err(EINVAL);
             }
             let res = poll_fn(|cx| self.poll_for_establishment(cx)).await;
             if let Ok(handle) = res {
@@ -117,6 +136,7 @@ impl Socket {
                     break Ok(Socket {
                         stack: self.stack.clone(),
                         handle: RwLock::new(conn),
+                        listen: Default::default(),
                     });
                 }
             }
@@ -186,7 +206,7 @@ impl Socket {
 
     pub fn poll_flush(&self, cx: &mut Context) -> Poll<()> {
         self.with_mut(|_, s, _| {
-            let waiting_close = s.state() == tcp::State::Closed && s.remote_endpoint().is_some();
+            let waiting_close = s.state() == State::Closed && s.remote_endpoint().is_some();
             // If there are outstanding send operations, register for wake up and wait
             // smoltcp issues wake-ups when octets are dequeued from the send buffer
             if s.send_queue() > 0 || waiting_close {
@@ -223,8 +243,8 @@ impl Socket {
         self.with_mut(|_, socket, _| socket.set_nagle_enabled(nagle_enabled))
     }
 
-    pub fn local_endpoint(&self) -> Option<IpEndpoint> {
-        self.with(|socket| socket.local_endpoint())
+    pub fn listen_endpoint(&self) -> Option<IpListenEndpoint> {
+        ksync::critical(|| *self.listen.lock())
     }
 
     pub fn remote_endpoint(&self) -> Option<IpEndpoint> {

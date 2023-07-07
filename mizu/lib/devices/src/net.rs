@@ -10,5 +10,5 @@ pub use self::{
     config::*,
     driver::{Features, Net, NetRx, NetTx},
     socket::*,
-    stack::Stack,
+    stack::{LOOPBACK_IPV4, LOOPBACK_IPV6, Stack, StackBackground},
 };

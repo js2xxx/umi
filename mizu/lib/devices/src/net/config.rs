@@ -106,15 +106,19 @@ impl Config {
 }
 
 /// Network stack IPv4 configuration.
-#[derive(Default)]
 pub enum ConfigV4 {
     /// Use a static IPv4 address configuration.
     Static(StaticConfigV4),
     /// Use DHCP to obtain an IP address configuration.
     Dhcp(DhcpV4Config),
     /// Do not configure IPv6.
-    #[default]
     None,
+}
+
+impl Default for ConfigV4 {
+    fn default() -> Self {
+        ConfigV4::Dhcp(Default::default())
+    }
 }
 
 /// Network stack IPv6 configuration.
