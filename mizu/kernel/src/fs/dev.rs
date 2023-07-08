@@ -3,7 +3,7 @@ use alloc::{boxed::Box, sync::Arc};
 use arsc_rs::Arsc;
 use async_trait::async_trait;
 use kmem::Phys;
-use ksc::Error::{self, EEXIST, ENOENT, ENOTDIR, EPERM};
+use ksc::Error::{self, EACCES, EEXIST, ENOENT, ENOTDIR, EPERM};
 use rv39_paging::PAGE_SIZE;
 use umifs::{
     misc::{Null, Zero},
@@ -11,7 +11,7 @@ use umifs::{
     traits::{Entry, FileSystem, Io, ToIo},
     types::*,
 };
-use umio::IoPoll;
+use umio::{IoPoll, IoSlice, IoSliceMut, SeekFrom};
 
 use super::serial::Serial;
 
@@ -63,6 +63,10 @@ impl Entry for DevRoot {
                 let serial = Arc::new(Serial::default());
                 serial.open(Path::new(""), options, perm).await
             }
+            "urandom" => {
+                let random = Arc::new(Random);
+                random.open(Path::new(""), options, perm).await
+            }
             _ => {
                 let (dir, next) = {
                     let mut comp = path.components();
@@ -73,7 +77,7 @@ impl Entry for DevRoot {
                         let dev_blocks = Arc::new(DevBlocks);
                         dev_blocks.open(next, options, perm).await
                     }
-                    "null" | "zero" | "serial" => Err(ENOTDIR),
+                    "null" | "zero" | "serial" | "urandom" => Err(ENOTDIR),
                     _ => Err(ENOENT),
                 }
             }
@@ -166,5 +170,62 @@ impl IoPoll for BlockEntry {}
 impl ToIo for BlockEntry {
     fn to_io(self: Arc<Self>) -> Option<Arc<dyn Io>> {
         Some(self.io.clone())
+    }
+}
+
+pub struct Random;
+
+#[async_trait]
+impl Entry for Random {
+    async fn open(
+        self: Arc<Self>,
+        path: &Path,
+        options: OpenOptions,
+        perm: Permissions,
+    ) -> Result<(Arc<dyn Entry>, bool), Error> {
+        umifs::misc::open_file(
+            self,
+            path,
+            options,
+            perm,
+            Permissions::all_same(true, true, false),
+        )
+        .await
+    }
+
+    async fn metadata(&self) -> Metadata {
+        Metadata {
+            ty: FileType::FILE,
+            len: 0,
+            offset: 0,
+            perm: Permissions::all_same(true, false, false),
+            block_size: 0,
+            block_count: 0,
+            times: Default::default(),
+        }
+    }
+}
+
+impl IoPoll for Random {}
+
+#[async_trait]
+impl Io for Random {
+    async fn seek(&self, _: SeekFrom) -> Result<usize, Error> {
+        Ok(0)
+    }
+
+    async fn read_at(&self, _: usize, buffer: &mut [IoSliceMut]) -> Result<usize, Error> {
+        Ok(buffer.iter_mut().fold(0, |acc, buf| {
+            rand_riscv::seed(buf);
+            acc + buf.len()
+        }))
+    }
+
+    async fn write_at(&self, _: usize, _: &mut [IoSlice]) -> Result<usize, Error> {
+        Err(EACCES)
+    }
+
+    async fn flush(&self) -> Result<(), Error> {
+        Ok(())
     }
 }

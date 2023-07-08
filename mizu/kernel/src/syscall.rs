@@ -106,6 +106,7 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         .map(GETSOCKNAME, fd::getsockname)
         .map(GETSOCKOPT, fd::getsockopt)
         .map(SETSOCKOPT, fd::setsockopt)
+        .map(GETPEERNAME, fd::getpeername)
         .map(SENDTO, fd::sendto)
         .map(RECVFROM, fd::recvfrom)
         .map(CONNECT, fd::connect)
@@ -118,6 +119,7 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         .map(NANOSLEEP, sleep)
         // Miscellaneous
         .map(UNAME, uname)
+        .map(SETSID, dummy_zero)
         .map(GETEUID, dummy_zero)
         .map(GETEGID, dummy_zero)
         .map(GETPGID, dummy_zero)

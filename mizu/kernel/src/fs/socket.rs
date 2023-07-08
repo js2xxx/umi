@@ -53,16 +53,19 @@ pub(super) fn init_stack() {
 }
 
 pub fn tcp() -> Result<Arc<dyn Entry>, Error> {
+    log::trace!("Created new TCP socket");
     Ok(Arc::new(SocketFile::new(Socket::Tcp(tcp::Socket::new(
         STACK.get().cloned().ok_or(ENODEV)?,
     )))))
 }
 
 pub fn tcp_accept(socket: Socket) -> Arc<dyn Entry> {
+    log::trace!("Accepted new TCP socket");
     Arc::new(SocketFile::new(socket))
 }
 
 pub fn udp() -> Result<Arc<dyn Entry>, Error> {
+    log::trace!("Created new UDP socket");
     Ok(Arc::new(SocketFile::new(Socket::Udp(udp::Socket::new(
         STACK.get().cloned().ok_or(ENODEV)?,
     )))))

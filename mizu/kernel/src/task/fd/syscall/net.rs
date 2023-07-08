@@ -6,7 +6,7 @@ use devices::net::{Socket, BUFFER_CAP};
 use kmem::Virt;
 use ksc::{
     async_handler,
-    Error::{self, EAFNOSUPPORT, EAGAIN, EINVAL, ENOPROTOOPT, ENOTSOCK},
+    Error::{self, EAFNOSUPPORT, EAGAIN, EINVAL, ENOTCONN, ENOTSOCK},
 };
 use smoltcp::wire::{IpAddress, IpEndpoint, IpListenEndpoint, Ipv4Address, Ipv6Address};
 use umifs::types::{OpenOptions, Permissions};
@@ -268,29 +268,29 @@ pub async fn getsockopt(
 ) -> ScRet {
     let (fd, level, opt, mut ptr, mut len) = cx.args();
     let fut = async {
-        if level != SOL_SOCKET {
-            return Err(ENOPROTOOPT);
-        }
         let mut storage = None;
         let (socket, _) = sock(&ts.files, fd, &mut storage).await?;
 
-        let (value, value_len) = match opt {
-            SO_RCVBUF | SO_SNDBUF => {
-                let value = BUFFER_CAP.try_into()?;
-                (SockOpt { value }, mem::size_of::<u32>())
-            }
-            SO_RCVTIMEO => {
-                let tv = ksync::critical(|| *socket.recv_timeout.lock())
-                    .unwrap_or(Duration::MAX)
-                    .into();
-                (SockOpt { tv }, mem::size_of::<Tv>())
-            }
-            SO_SNDTIMEO => {
-                let tv = ksync::critical(|| *socket.send_timeout.lock())
-                    .unwrap_or(Duration::MAX)
-                    .into();
-                (SockOpt { tv }, mem::size_of::<Tv>())
-            }
+        let (value, value_len) = match level {
+            SOL_SOCKET => match opt {
+                SO_RCVBUF | SO_SNDBUF => {
+                    let value = BUFFER_CAP.try_into()?;
+                    (SockOpt { value }, mem::size_of::<u32>())
+                }
+                SO_RCVTIMEO => {
+                    let tv = ksync::critical(|| *socket.recv_timeout.lock())
+                        .unwrap_or(Duration::MAX)
+                        .into();
+                    (SockOpt { tv }, mem::size_of::<Tv>())
+                }
+                SO_SNDTIMEO => {
+                    let tv = ksync::critical(|| *socket.send_timeout.lock())
+                        .unwrap_or(Duration::MAX)
+                        .into();
+                    (SockOpt { tv }, mem::size_of::<Tv>())
+                }
+                _ => return Ok(()),
+            },
             _ => return Ok(()),
         };
 
@@ -312,29 +312,30 @@ pub async fn setsockopt(
 ) -> ScRet {
     let (fd, level, opt, ptr, len) = cx.args();
     let fut = async {
-        if level != SOL_SOCKET {
-            return Err(ENOPROTOOPT);
-        }
         let mut storage = None;
         let (socket, _) = sock(&ts.files, fd, &mut storage).await?;
 
-        let mut value = SockOpt { value: 0 };
-        match value.as_bytes_mut().get_mut(..len) {
-            Some(bytes) => ptr.read_slice(ts.virt.as_ref(), bytes).await?,
-            None => return Err(EINVAL),
-        }
-
-        match opt {
-            SO_RCVBUF | SO_SNDBUF => {} // Ignored buffer setting.
-            SO_RCVTIMEO => ksync::critical(|| {
-                let duration = unsafe { value.tv }.into();
-                *socket.recv_timeout.lock() = Some(duration)
-            }),
-            SO_SNDTIMEO => ksync::critical(|| {
-                let duration = unsafe { value.tv }.into();
-                *socket.send_timeout.lock() = Some(duration)
-            }),
-            _ => {}
+        match level {
+            SOL_SOCKET => {
+                let mut value = SockOpt { value: 0 };
+                match value.as_bytes_mut().get_mut(..len) {
+                    Some(bytes) => ptr.read_slice(ts.virt.as_ref(), bytes).await?,
+                    None => return Err(EINVAL),
+                }
+                match opt {
+                    SO_RCVBUF | SO_SNDBUF => {} // Ignored buffer setting.
+                    SO_RCVTIMEO => ksync::critical(|| {
+                        let duration = unsafe { value.tv }.into();
+                        *socket.recv_timeout.lock() = Some(duration)
+                    }),
+                    SO_SNDTIMEO => ksync::critical(|| {
+                        let duration = unsafe { value.tv }.into();
+                        *socket.send_timeout.lock() = Some(duration)
+                    }),
+                    _ => {}
+                }
+            }
+            _ => return Ok(()),
         }
 
         Ok(())
@@ -439,6 +440,23 @@ pub async fn recvfrom(
                 None => 0,
             }),
         }
+    };
+    cx.ret(fut.await);
+    ScRet::Continue(None)
+}
+
+#[async_handler]
+pub async fn getpeername(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(i32, UserPtr<u16, Out>, UserPtr<usize, InOut>) -> Result<(), Error>>,
+) -> ScRet {
+    let (fd, ptr, len) = cx.args();
+    let fut = async {
+        let mut storage = None;
+        let (socket, _) = sock(&ts.files, fd, &mut storage).await?;
+        let IpEndpoint { addr, port } = socket.remote_endpoint().ok_or(ENOTCONN)?;
+        write_ipaddr(ts.virt.as_ref(), (Some(addr), port), ptr, len).await?;
+        Ok(())
     };
     cx.ret(fut.await);
     ScRet::Continue(None)

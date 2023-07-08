@@ -37,8 +37,8 @@ const LOCAL_PORT_MAX: u16 = 65535;
 pub const LOOPBACK_IPV4: IpCidr = IpCidr::Ipv4(Ipv4Cidr::new(Ipv4Address([127, 0, 0, 1]), 8));
 pub const LOOPBACK_IPV6: IpCidr = IpCidr::Ipv6(Ipv6Cidr::new(Ipv6Address::LOOPBACK, 128));
 
-fn writer(instant: impl Display, packet: impl Display) {
-    log::info!("net stack: at {instant}:");
+fn writer(id: u8, instant: impl Display, packet: impl Display) {
+    log::info!("net stack #{id}: at {instant}:");
     log::info!("\t {packet}");
 }
 
@@ -144,7 +144,9 @@ impl Stack {
 
         let mut socket = SocketStack {
             sockets: SocketSet::new(Vec::new()),
-            loopback: Tracer::new(Loopback::new(smoltcp::phy::Medium::Ip), |i, p| writer(i, p)),
+            loopback: Tracer::new(Loopback::new(smoltcp::phy::Medium::Ip), |i, p| {
+                writer(0, i, p)
+            }),
             ifaces: Default::default(),
             waker: AtomicWaker::new(),
             next_local_port,
@@ -380,7 +382,7 @@ impl State {
             .unwrap()
             .poll(instant, &mut s.loopback, &mut s.sockets);
 
-        let mut poller = Tracer::new(device.with_cx(Some(cx)), |i, p| writer(i, p));
+        let mut poller = Tracer::new(device.with_cx(Some(cx)), |i, p| writer(1, i, p));
         for (_id, iface) in extern_ifaces!(s) {
             iface.poll(instant, &mut poller, &mut s.sockets);
         }
