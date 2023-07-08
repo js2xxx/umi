@@ -2,6 +2,7 @@ use alloc::vec;
 use core::{
     future::poll_fn,
     mem,
+    sync::atomic::{AtomicU8, Ordering::SeqCst},
     task::{Context, Poll},
     time::Duration,
 };
@@ -24,6 +25,7 @@ pub struct Socket {
     stack: Arsc<Stack>,
     handle: RwLock<SocketHandle>,
     listen: Mutex<Option<IpListenEndpoint>>,
+    iface_id: AtomicU8,
 }
 
 impl Socket {
@@ -33,8 +35,13 @@ impl Socket {
     ) -> T {
         ksync::critical(|| {
             let handle = self.handle.read();
-            self.stack
-                .with_socket_mut(|s| f(*handle, s.sockets.get_mut(*handle), &mut s.iface))
+            self.stack.with_socket_mut(|s| {
+                f(
+                    *handle,
+                    s.sockets.get_mut(*handle),
+                    s.ifaces.get_mut(&self.iface_id.load(SeqCst)).unwrap(),
+                )
+            })
         })
     }
 
@@ -55,6 +62,7 @@ impl Socket {
             stack,
             handle: RwLock::new(handle),
             listen: Default::default(),
+            iface_id: Default::default(),
         }
     }
 
@@ -70,9 +78,24 @@ impl Socket {
     }
 
     pub async fn connect(&self, remote: impl Into<IpEndpoint>) -> Result<(), Error> {
-        let local_port = self.stack.with_socket_mut(|s| s.next_local_port());
+        let remote: IpEndpoint = remote.into();
 
-        match self.with_mut(|_, socket, i| socket.connect(i.context(), remote, local_port)) {
+        let mut local = IpListenEndpoint {
+            addr: None,
+            port: self.stack.with_socket_mut(|s| s.next_local_port()),
+        };
+
+        let res = self.stack.with_socket_mut(|s| {
+            let iface_id = s.select_tcp_addr(&remote, &mut local);
+            self.iface_id.store(iface_id, SeqCst);
+
+            let handle = self.handle.read();
+            let socket = s.sockets.get_mut::<tcp::Socket>(*handle);
+            let iface = s.ifaces.get_mut(&iface_id).unwrap();
+            socket.connect(iface.context(), remote, local)
+        });
+
+        match res {
             Ok(()) => {}
             Err(tcp::ConnectError::InvalidState) => return Err(EEXIST),
             Err(tcp::ConnectError::Unaddressable) => return Err(EINVAL),
@@ -111,10 +134,11 @@ impl Socket {
             }
             let res = poll_fn(|cx| self.poll_for_establishment(cx)).await;
             if let Ok(handle) = res {
+                let endpoint = ksync::critical(|| self.listen.lock().take().unwrap());
                 let buf = vec![0u8; BUFFER_CAP];
 
                 let mut socket = tcp::Socket::new(buf.clone().into(), ManagedSlice::Owned(buf));
-                let endpoint = self.with(|s| {
+                self.with(|s| {
                     socket.set_timeout(s.timeout());
                     socket.set_keep_alive(s.keep_alive());
                     socket.set_ack_delay(s.ack_delay());
@@ -137,6 +161,7 @@ impl Socket {
                         stack: self.stack.clone(),
                         handle: RwLock::new(conn),
                         listen: Default::default(),
+                        iface_id: Default::default(),
                     });
                 }
             }
@@ -273,5 +298,12 @@ impl Socket {
 
     pub fn can_recv(&self) -> bool {
         self.with(|socket| socket.can_recv())
+    }
+}
+
+impl Drop for Socket {
+    fn drop(&mut self) {
+        self.stack
+            .with_socket_mut(|s| s.sockets.remove(*self.handle.get_mut()));
     }
 }

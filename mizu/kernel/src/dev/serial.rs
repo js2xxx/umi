@@ -154,6 +154,7 @@ impl log::Log for Logger {
                 println!("[{time:?}] {}#{id}: {}", record.level(), record.args())
             } else {
                 let file = record.file().unwrap_or("<NULL>");
+                let (_, file) = file.split_at(file.len().saturating_sub(50));
                 let line = OptionU32Display(record.line());
                 println!(
                     "[{time:?}] {}#{id}: [{file}:{line}] {}",

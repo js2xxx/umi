@@ -107,4 +107,11 @@ impl Socket {
             socket.flush().await
         }
     }
+
+    pub fn is_closed(&self) -> bool {
+        match self {
+            Socket::Tcp(socket) => !socket.is_open(),
+            Socket::Udp(_) => false,
+        }
+    }
 }

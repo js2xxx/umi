@@ -1,7 +1,7 @@
 use alloc::{sync::Arc, vec::Vec};
 use core::{
     convert::Infallible,
-    fmt,
+    fmt::{self, Display},
     future::poll_fn,
     mem,
     pin::Pin,
@@ -10,14 +10,16 @@ use core::{
 
 use arsc_rs::Arsc;
 use futures_util::{task::AtomicWaker, Future, FutureExt};
+use hashbrown::HashMap;
 use ktime::{Instant, Timer};
+use rand_riscv::RandomState;
 use smoltcp::{
-    iface::{Interface, SocketHandle, SocketSet},
-    phy::Tracer,
+    iface::{self, Interface, SocketHandle, SocketSet},
+    phy::{Loopback, Tracer},
     socket::{dhcpv4, dns},
     wire::{
-        DnsQueryType, EthernetAddress, HardwareAddress, IpAddress, IpCidr, Ipv4Address, Ipv4Cidr,
-        Ipv6Address, Ipv6Cidr,
+        DnsQueryType, EthernetAddress, HardwareAddress, IpAddress, IpCidr, IpEndpoint,
+        IpListenEndpoint, Ipv4Address, Ipv4Cidr, Ipv6Address, Ipv6Cidr,
     },
 };
 use spin::RwLock;
@@ -34,6 +36,11 @@ const LOCAL_PORT_MAX: u16 = 65535;
 
 pub const LOOPBACK_IPV4: IpCidr = IpCidr::Ipv4(Ipv4Cidr::new(Ipv4Address([127, 0, 0, 1]), 8));
 pub const LOOPBACK_IPV6: IpCidr = IpCidr::Ipv6(Ipv6Cidr::new(Ipv6Address::LOOPBACK, 128));
+
+fn writer(instant: impl Display, packet: impl Display) {
+    log::info!("net stack: at {instant}:");
+    log::info!("\t {packet}");
+}
 
 pub struct Stack {
     device: Arc<RwLock<dyn Net>>,
@@ -56,7 +63,10 @@ pub(in crate::net) struct State {
 pub(in crate::net) struct SocketStack {
     pub sockets: SocketSet<'static>,
     next_local_port: u16,
-    pub iface: Interface,
+
+    pub loopback: Tracer<Loopback>,
+    pub ifaces: HashMap<u8, Interface, RandomState>,
+
     waker: AtomicWaker,
 }
 
@@ -89,16 +99,24 @@ impl Stack {
         f: impl FnOnce(&mut dyn Net, &mut State, &mut SocketStack) -> T,
     ) -> T {
         ksync::critical(|| {
-            f(
+            let mut socket = self.socket.write();
+            let res = f(
                 &mut *self.device.write(),
                 &mut self.state.write(),
-                &mut self.socket.write(),
-            )
+                &mut socket,
+            );
+            socket.waker.wake();
+            res
         })
     }
 
     pub(in crate::net) fn with_socket_mut<T>(&self, f: impl FnOnce(&mut SocketStack) -> T) -> T {
-        ksync::critical(|| f(&mut self.socket.write()))
+        ksync::critical(|| {
+            let mut socket = self.socket.write();
+            let res = f(&mut socket);
+            socket.waker.wake();
+            res
+        })
     }
 
     pub(in crate::net) fn with_socket<T>(&self, f: impl FnOnce(&SocketStack) -> T) -> T {
@@ -107,19 +125,10 @@ impl Stack {
 }
 
 impl Stack {
-    fn new_interface(device: &Arc<RwLock<dyn Net>>) -> Interface {
-        let mut config =
-            smoltcp::iface::Config::new(HardwareAddress::Ethernet(ksync::critical(|| {
-                EthernetAddress(device.read().address())
-            })));
+    fn new_iface_config(hardware_addr: HardwareAddress) -> iface::Config {
+        let mut config = iface::Config::new(hardware_addr);
         config.random_seed = rand_riscv::seed64();
-        ksync::critical(|| {
-            Interface::new(
-                config,
-                &mut device.write().with_cx(None),
-                instant_to_smoltcp(ktime::Instant::now()),
-            )
-        })
+        config
     }
 
     fn update_interface(iface: &mut Interface, device: &mut dyn Net) {
@@ -127,16 +136,36 @@ impl Stack {
     }
 
     pub fn new(device: Arc<RwLock<dyn Net>>, config: Config) -> Arsc<Self> {
+        let now = instant_to_smoltcp(ktime::Instant::now());
+
         let next_local_port = (rand_riscv::seed64() % (LOCAL_PORT_MAX - LOCAL_PORT_MIN) as u64)
             as u16
             + LOCAL_PORT_MIN;
 
         let mut socket = SocketStack {
             sockets: SocketSet::new(Vec::new()),
-            iface: Self::new_interface(&device),
+            loopback: Tracer::new(Loopback::new(smoltcp::phy::Medium::Ip), |i, p| writer(i, p)),
+            ifaces: Default::default(),
             waker: AtomicWaker::new(),
             next_local_port,
         };
+
+        let mut loopback_interface = Interface::new(
+            Self::new_iface_config(HardwareAddress::Ip),
+            &mut socket.loopback,
+            now,
+        );
+        loopback_interface
+            .update_ip_addrs(|addrs| *addrs = [LOOPBACK_IPV4, LOOPBACK_IPV6].into_iter().collect());
+        socket.ifaces.insert_unique_unchecked(0, loopback_interface);
+
+        ksync::critical(|| {
+            let config = Self::new_iface_config(HardwareAddress::Ethernet(EthernetAddress(
+                device.read().address(),
+            )));
+            let iface = Interface::new(config, &mut device.write().with_cx(None), now);
+            socket.ifaces.insert_unique_unchecked(1, iface)
+        });
 
         let mut state = State {
             link_up: false,
@@ -186,6 +215,13 @@ impl Stack {
     }
 }
 
+macro_rules! extern_ifaces {
+    ($sstack:expr) => {{
+        let iter = $sstack.ifaces.iter_mut();
+        iter.filter_map(|(&id, iface)| (id != 0).then_some((id, iface)))
+    }};
+}
+
 impl Stack {
     pub async fn dns_query(
         &self,
@@ -228,13 +264,14 @@ impl Stack {
     ) -> Poll<Result<dns::QueryHandle, dns::StartQueryError>> {
         self.with_mut(|_, state, s| {
             let socket = s.sockets.get_mut::<dns::Socket>(state.dns_socket);
-            match socket.start_query(s.iface.context(), name, ty) {
-                Err(dns::StartQueryError::NoFreeSlot) => {
-                    state.dns_waker.register(cx.waker());
-                    Poll::Pending
+            for (_, iface) in extern_ifaces!(s) {
+                match socket.start_query(iface.context(), name, ty) {
+                    Err(dns::StartQueryError::NoFreeSlot) => {}
+                    res => return Poll::Ready(res),
                 }
-                res => Poll::Ready(res),
             }
+            state.dns_waker.register(cx.waker());
+            Poll::Pending
         })
     }
 
@@ -270,18 +307,17 @@ impl Stack {
 
 impl State {
     fn apply_ipv4_config(&mut self, s: &mut SocketStack, config: StaticConfigV4) {
-        s.iface.update_ip_addrs(|addrs| match addrs.first_mut() {
+        let iface = s.ifaces.get_mut(&1).unwrap();
+
+        iface.update_ip_addrs(|addrs| match addrs.first_mut() {
             Some(addr) => *addr = IpCidr::Ipv4(config.address),
             None => addrs.push(IpCidr::Ipv4(config.address)).unwrap(),
         });
 
         if let Some(gateway) = config.gateway {
-            s.iface
-                .routes_mut()
-                .add_default_ipv4_route(gateway)
-                .unwrap();
+            iface.routes_mut().add_default_ipv4_route(gateway).unwrap();
         } else {
-            s.iface.routes_mut().remove_default_ipv4_route();
+            iface.routes_mut().remove_default_ipv4_route();
         }
 
         self.dns_servers_ipv4 = config.dns_servers;
@@ -289,18 +325,17 @@ impl State {
     }
 
     fn apply_ipv6_config(&mut self, s: &mut SocketStack, config: StaticConfigV6) {
-        s.iface.update_ip_addrs(|addrs| match addrs.first_mut() {
+        let iface = s.ifaces.get_mut(&1).unwrap();
+
+        iface.update_ip_addrs(|addrs| match addrs.first_mut() {
             Some(addr) => *addr = IpCidr::Ipv6(config.address),
             None => addrs.push(IpCidr::Ipv6(config.address)).unwrap(),
         });
 
         if let Some(gateway) = config.gateway {
-            s.iface
-                .routes_mut()
-                .add_default_ipv6_route(gateway)
-                .unwrap();
+            iface.routes_mut().add_default_ipv6_route(gateway).unwrap();
         } else {
-            s.iface.routes_mut().remove_default_ipv6_route();
+            iface.routes_mut().remove_default_ipv6_route();
         }
 
         self.dns_servers_ipv6 = config.dns_servers;
@@ -323,8 +358,9 @@ impl State {
     }
 
     fn unapply_dhcpv4_config(&mut self, s: &mut SocketStack) {
-        s.iface.update_ip_addrs(|addrs| addrs.clear());
-        s.iface.routes_mut().remove_default_ipv4_route();
+        let iface = s.ifaces.get_mut(&1).unwrap();
+        iface.update_ip_addrs(|addrs| addrs.clear());
+        iface.routes_mut().remove_default_ipv4_route();
         self.dns_servers_ipv4.clear();
     }
 
@@ -335,14 +371,19 @@ impl State {
         s: &mut SocketStack,
     ) -> Option<Instant> {
         s.waker.register(cx.waker());
-        Stack::update_interface(&mut s.iface, device);
+        Stack::update_interface(s.ifaces.get_mut(&1).unwrap(), device);
 
         let instant = instant_to_smoltcp(ktime::Instant::now());
-        let mut poller = Tracer::new(device.with_cx(Some(cx)), |instant, packet| {
-            log::info!("net stack: at {instant}:");
-            log::info!("\t {packet}");
-        });
-        s.iface.poll(instant, &mut poller, &mut s.sockets);
+
+        s.ifaces
+            .get_mut(&0)
+            .unwrap()
+            .poll(instant, &mut s.loopback, &mut s.sockets);
+
+        let mut poller = Tracer::new(device.with_cx(Some(cx)), |i, p| writer(i, p));
+        for (_id, iface) in extern_ifaces!(s) {
+            iface.poll(instant, &mut poller, &mut s.sockets);
+        }
 
         let old = mem::replace(&mut self.link_up, device.is_link_up());
         if old != self.link_up {
@@ -371,9 +412,15 @@ impl State {
             }
         }
 
-        s.iface
-            .poll_at(instant, &s.sockets)
-            .map(instant_from_smoltcp)
+        let ddl = s.ifaces.values_mut().fold(None, |acc, iface| {
+            let next = iface.poll_at(instant, &s.sockets);
+            match (acc, next) {
+                (None, next) => next,
+                (acc, None) => acc,
+                (Some(acc), Some(next)) => Some(next.min(acc)),
+            }
+        });
+        ddl.map(instant_from_smoltcp)
     }
 }
 
@@ -386,6 +433,21 @@ impl SocketStack {
             res + 1
         };
         res
+    }
+
+    pub fn select_tcp_addr(&mut self, remote: &IpEndpoint, local: &mut IpListenEndpoint) -> u8 {
+        let loopback_ipv4 = LOOPBACK_IPV4.contains_addr(&remote.addr);
+        let loopback_ipv6 = LOOPBACK_IPV6.contains_addr(&remote.addr);
+        match (loopback_ipv4, loopback_ipv6) {
+            (true, _) => local.addr = Some(LOOPBACK_IPV4.address()),
+            (_, true) => local.addr = Some(LOOPBACK_IPV6.address()),
+            _ => {}
+        }
+        if loopback_ipv4 || loopback_ipv6 {
+            0
+        } else {
+            self.ifaces.keys().find(|&&k| k != 0).copied().unwrap()
+        }
     }
 }
 
@@ -404,15 +466,14 @@ impl Future for StackBackground {
                 ready!(timer.poll_unpin(cx));
                 self.timer = None;
             }
+            // log::trace!("Start polling net stack");
             let ddl = self
                 .stack
                 .with_mut(|device, state, s| state.poll(cx, device, s));
+            // log::trace!("End polling net stack with deadline {ddl:?}");
             match ddl {
                 Some(ddl) => self.timer = Some(Timer::deadline(ddl)),
-                None => {
-                    cx.waker().wake_by_ref();
-                    break Poll::Pending;
-                }
+                None => break Poll::Pending,
             }
         }
     }

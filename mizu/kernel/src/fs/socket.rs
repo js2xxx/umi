@@ -108,6 +108,9 @@ impl Entry for SocketFile {
 #[async_trait]
 impl IoPoll for SocketFile {
     async fn event(&self, expected: Event) -> Option<Event> {
+        if self.socket.is_closed() {
+            return Some(Event::HANG_UP)
+        }
         let send = expected.contains(Event::WRITABLE);
         let recv = expected.contains(Event::READABLE);
         match (send, recv) {

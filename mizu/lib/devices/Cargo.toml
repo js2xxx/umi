@@ -19,6 +19,7 @@ arsc-rs = {git = "https://github.com/js2xxx/arsc"}
 async-trait = "0"
 crossbeam-queue = {version = "0", default-features = false, features = ["alloc", "nightly"]}
 futures-util = {version = "0", default-features = false, features = ["alloc"]}
+hashbrown = {version = "0", default-features = false, features = ["inline-more"]}
 heapless = "0"
 log = "0"
 managed = {version = "0", default-features = false, features = ["alloc"]}
@@ -30,6 +31,7 @@ default-features = false
 features = [
   "log",
   "medium-ethernet",
+  "medium-ip",
   "proto-ipv4",
   "proto-igmp",
   "proto-dhcpv4",

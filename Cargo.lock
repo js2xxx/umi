@@ -253,6 +253,7 @@ dependencies = [
  "async-trait",
  "crossbeam-queue",
  "futures-util",
+ "hashbrown",
  "heapless",
  "ksc",
  "ksync",
