@@ -1,5 +1,5 @@
 use alloc::{boxed::Box, sync::Arc};
-use core::{ops::Deref, pin::pin};
+use core::{ops::Deref, pin::pin, time::Duration};
 
 use arsc_rs::Arsc;
 use async_trait::async_trait;
@@ -9,7 +9,7 @@ use ksc::{
     Error,
     Error::{ENODEV, ENOSYS, ESPIPE},
 };
-use spin::Once;
+use spin::{Once, mutex::Mutex};
 use umifs::{
     path::Path,
     traits::Entry,
@@ -53,24 +53,36 @@ pub(super) fn init_stack() {
 }
 
 pub fn tcp() -> Result<Arc<dyn Entry>, Error> {
-    Ok(Arc::new(SocketFile {
-        socket: Socket::Tcp(tcp::Socket::new(STACK.get().cloned().ok_or(ENODEV)?)),
-    }))
+    Ok(Arc::new(SocketFile::new(Socket::Tcp(tcp::Socket::new(
+        STACK.get().cloned().ok_or(ENODEV)?,
+    )))))
 }
 
 pub fn tcp_accept(socket: Socket) -> Arc<dyn Entry> {
-    Arc::new(SocketFile { socket })
+    Arc::new(SocketFile::new(socket))
 }
 
 pub fn udp() -> Result<Arc<dyn Entry>, Error> {
-    Ok(Arc::new(SocketFile {
-        socket: Socket::Udp(udp::Socket::new(STACK.get().cloned().ok_or(ENODEV)?)),
-    }))
+    Ok(Arc::new(SocketFile::new(Socket::Udp(udp::Socket::new(
+        STACK.get().cloned().ok_or(ENODEV)?,
+    )))))
 }
 
 #[derive(Debug)]
 pub struct SocketFile {
     socket: Socket,
+    pub send_timeout: Mutex<Option<Duration>>,
+    pub recv_timeout: Mutex<Option<Duration>>,
+}
+
+impl SocketFile {
+    fn new(socket: Socket) -> Self {
+        SocketFile {
+            socket,
+            send_timeout: Default::default(),
+            recv_timeout: Default::default(),
+        }
+    }
 }
 
 impl Deref for SocketFile {
@@ -109,7 +121,7 @@ impl Entry for SocketFile {
 impl IoPoll for SocketFile {
     async fn event(&self, expected: Event) -> Option<Event> {
         if self.socket.is_closed() {
-            return Some(Event::HANG_UP)
+            return Some(Event::HANG_UP);
         }
         let send = expected.contains(Event::WRITABLE);
         let recv = expected.contains(Event::READABLE);

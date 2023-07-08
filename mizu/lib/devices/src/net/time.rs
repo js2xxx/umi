@@ -13,3 +13,7 @@ pub fn instant_from_smoltcp(src: smoltcp::time::Instant) -> ktime::Instant {
 pub fn duration_to_smoltcp(src: core::time::Duration) -> smoltcp::time::Duration {
     smoltcp::time::Duration::from_micros(src.as_micros() as u64)
 }
+
+pub fn duration_from_smoltcp(src: smoltcp::time::Duration) -> core::time::Duration {
+    core::time::Duration::from_micros(src.micros())
+}

@@ -5,7 +5,7 @@ pub mod udp;
 use ksc::Error::{self, EOPNOTSUPP};
 use smoltcp::wire::{IpEndpoint, IpListenEndpoint};
 
-const BUFFER_CAP: usize = 16 * 1024;
+pub const BUFFER_CAP: usize = 16 * 1024;
 const META_CAP: usize = 8;
 
 #[derive(Debug)]

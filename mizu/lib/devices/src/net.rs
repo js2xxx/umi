@@ -4,6 +4,7 @@ mod config;
 mod driver;
 mod socket;
 mod stack;
+#[allow(dead_code)]
 mod time;
 
 pub use self::{

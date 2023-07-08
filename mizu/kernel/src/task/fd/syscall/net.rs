@@ -1,12 +1,12 @@
 use alloc::{boxed::Box, sync::Arc};
-use core::{mem, pin::Pin};
+use core::{mem, pin::Pin, time::Duration};
 
 use co_trap::UserCx;
-use devices::net::Socket;
+use devices::net::BUFFER_CAP;
 use kmem::Virt;
 use ksc::{
     async_handler,
-    Error::{self, EAFNOSUPPORT, EAGAIN, EINVAL, ENOTSOCK},
+    Error::{self, EAFNOSUPPORT, EAGAIN, EINVAL, ENOPROTOOPT, ENOTSOCK},
 };
 use smoltcp::wire::{IpAddress, IpEndpoint, IpListenEndpoint, Ipv4Address, Ipv6Address};
 use umifs::types::{OpenOptions, Permissions};
@@ -16,12 +16,12 @@ use zerocopy::{AsBytes, FromBytes};
 use crate::{
     fs::socket::{self, SocketFile},
     mem::{In, InOut, Out, UserBuffer, UserPtr},
-    syscall::ScRet,
+    syscall::{ffi::Tv, ScRet},
     task::{
         fd::{FdInfo, Files},
         TaskState,
     },
-    trap::poll_once_if,
+    trap::poll_with,
 };
 
 const AF_INET: u16 = 2; // Internet IP Protocol
@@ -173,7 +173,7 @@ async fn sock<'a>(
     files: &Files,
     fd: i32,
     storage: &'a mut Option<Arc<SocketFile>>,
-) -> Result<(&'a Socket, bool), Error> {
+) -> Result<(&'a SocketFile, bool), Error> {
     let fi = files.get_fi(fd).await?;
     Ok((
         &*storage.insert(fi.entry.downcast().ok_or(ENOTSOCK)?),
@@ -232,6 +232,117 @@ pub async fn getsockname(
     ScRet::Continue(None)
 }
 
+#[repr(C)]
+union SockOpt {
+    value: u32,
+    tv: Tv,
+}
+
+unsafe impl AsBytes for SockOpt {
+    fn only_derive_is_allowed_to_implement_this_trait()
+    where
+        Self: Sized,
+    {
+    }
+}
+
+unsafe impl FromBytes for SockOpt {
+    fn only_derive_is_allowed_to_implement_this_trait()
+    where
+        Self: Sized,
+    {
+    }
+}
+
+const SOL_SOCKET: i32 = 1;
+
+const SO_SNDBUF: i32 = 7;
+const SO_RCVBUF: i32 = 8;
+const SO_RCVTIMEO: i32 = 20;
+const SO_SNDTIMEO: i32 = 21;
+
+#[async_handler]
+pub async fn getsockopt(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(i32, i32, i32, UserPtr<u8, Out>, UserPtr<usize, InOut>) -> Result<(), Error>>,
+) -> ScRet {
+    let (fd, level, opt, mut ptr, mut len) = cx.args();
+    let fut = async {
+        if level != SOL_SOCKET {
+            return Err(ENOPROTOOPT);
+        }
+        let mut storage = None;
+        let (socket, _) = sock(&ts.files, fd, &mut storage).await?;
+
+        let (value, value_len) = match opt {
+            SO_RCVBUF | SO_SNDBUF => {
+                let value = BUFFER_CAP.try_into()?;
+                (SockOpt { value }, mem::size_of::<u32>())
+            }
+            SO_RCVTIMEO => {
+                let tv = ksync::critical(|| *socket.recv_timeout.lock())
+                    .unwrap_or(Duration::MAX)
+                    .into();
+                (SockOpt { tv }, mem::size_of::<Tv>())
+            }
+            SO_SNDTIMEO => {
+                let tv = ksync::critical(|| *socket.send_timeout.lock())
+                    .unwrap_or(Duration::MAX)
+                    .into();
+                (SockOpt { tv }, mem::size_of::<Tv>())
+            }
+            _ => return Ok(()),
+        };
+
+        let written_len = len.read(ts.virt.as_ref()).await?.min(value_len);
+        ptr.write_slice(ts.virt.as_ref(), &value.as_bytes()[..written_len], false)
+            .await?;
+        len.write(ts.virt.as_ref(), value_len).await?;
+
+        Ok(())
+    };
+    cx.ret(fut.await);
+    ScRet::Continue(None)
+}
+
+#[async_handler]
+pub async fn setsockopt(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(i32, i32, i32, UserPtr<u8, In>, usize) -> Result<(), Error>>,
+) -> ScRet {
+    let (fd, level, opt, ptr, len) = cx.args();
+    let fut = async {
+        if level != SOL_SOCKET {
+            return Err(ENOPROTOOPT);
+        }
+        let mut storage = None;
+        let (socket, _) = sock(&ts.files, fd, &mut storage).await?;
+
+        let mut value = SockOpt { value: 0 };
+        match value.as_bytes_mut().get_mut(..len) {
+            Some(bytes) => ptr.read_slice(ts.virt.as_ref(), bytes).await?,
+            None => return Err(EINVAL),
+        }
+
+        match opt {
+            SO_RCVBUF | SO_SNDBUF => {} // Ignored buffer setting.
+            SO_RCVTIMEO => ksync::critical(|| {
+                let duration = unsafe { value.tv }.into();
+                *socket.recv_timeout.lock() = Some(duration)
+            }),
+            SO_SNDTIMEO => ksync::critical(|| {
+                let duration = unsafe { value.tv }.into();
+                *socket.send_timeout.lock() = Some(duration)
+            }),
+            _ => {}
+        }
+
+        Ok(())
+    };
+    cx.ret(fut.await);
+    ScRet::Continue(None)
+}
+
 #[async_handler]
 pub async fn sendto(
     ts: &mut TaskState,
@@ -246,7 +357,12 @@ pub async fn sendto(
         let endpoint = ipaddr(ts.virt.as_ref(), addr, addr_len).await?;
         let mut storage = None;
         let (socket, nonblock) = sock(&ts.files, fd, &mut storage).await?;
-        poll_once_if(socket.send(&buf, endpoint), nonblock).await
+        let timeout = if nonblock {
+            Some(Duration::ZERO)
+        } else {
+            ksync::critical(|| *socket.send_timeout.lock())
+        };
+        poll_with(socket.send(&buf, endpoint), timeout).await
     };
     cx.ret(fut.await);
     ScRet::Continue(None)
@@ -262,7 +378,12 @@ pub async fn connect(
         let endpoint = ipaddr(ts.virt.as_ref(), addr, len).await?.ok_or(EINVAL)?;
         let mut storage = None;
         let (socket, nonblock) = sock(&ts.files, fd, &mut storage).await?;
-        match poll_once_if(socket.connect(endpoint), nonblock).await {
+        let timeout = if nonblock {
+            Some(Duration::ZERO)
+        } else {
+            ksync::critical(|| *socket.recv_timeout.lock())
+        };
+        match poll_with(socket.connect(endpoint), timeout).await {
             Err(EAGAIN) => Ok(()),
             res => res,
         }
@@ -311,7 +432,12 @@ pub async fn accept(
     let fut = async {
         let mut storage = None;
         let (socket, nonblock) = sock(&ts.files, fd, &mut storage).await?;
-        let new = poll_once_if(socket.accept(), nonblock).await?;
+        let timeout = if nonblock {
+            Some(Duration::ZERO)
+        } else {
+            ksync::critical(|| *socket.recv_timeout.lock())
+        };
+        let new = poll_with(socket.accept(), timeout).await?;
         if let Some(IpEndpoint { addr, port }) = new.remote_endpoint() {
             write_ipaddr(ts.virt.as_ref(), (Some(addr), port), ptr, len).await?;
         }

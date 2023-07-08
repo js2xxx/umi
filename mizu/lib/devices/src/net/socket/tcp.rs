@@ -4,7 +4,6 @@ use core::{
     mem,
     sync::atomic::{AtomicU8, Ordering::SeqCst},
     task::{Context, Poll},
-    time::Duration,
 };
 
 use arsc_rs::Arsc;
@@ -18,7 +17,7 @@ use smoltcp::{
 use spin::{Mutex, RwLock};
 
 use super::BUFFER_CAP;
-use crate::net::{time::duration_to_smoltcp, Stack};
+use crate::net::Stack;
 
 #[derive(Debug)]
 pub struct Socket {
@@ -246,26 +245,6 @@ impl Socket {
 
     pub async fn flush(&self) {
         poll_fn(|cx| self.poll_flush(cx)).await
-    }
-
-    pub fn set_timeout(&self, timeout: Option<Duration>) {
-        self.with_mut(|_, socket, _| socket.set_timeout(timeout.map(duration_to_smoltcp)))
-    }
-
-    pub fn set_keep_alive(&self, keep_alive: Option<Duration>) {
-        self.with_mut(|_, socket, _| socket.set_keep_alive(keep_alive.map(duration_to_smoltcp)))
-    }
-
-    pub fn set_ack_delay(&self, ack_delay: Option<Duration>) {
-        self.with_mut(|_, socket, _| socket.set_ack_delay(ack_delay.map(duration_to_smoltcp)))
-    }
-
-    pub fn set_hop_limit(&self, hop_limit: Option<u8>) {
-        self.with_mut(|_, socket, _| socket.set_hop_limit(hop_limit))
-    }
-
-    pub fn set_nagle_enabled(&self, nagle_enabled: bool) {
-        self.with_mut(|_, socket, _| socket.set_nagle_enabled(nagle_enabled))
     }
 
     pub fn listen_endpoint(&self) -> Option<IpListenEndpoint> {

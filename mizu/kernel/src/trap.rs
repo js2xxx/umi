@@ -1,8 +1,12 @@
-use core::sync::atomic::{AtomicU8, Ordering::Relaxed};
+use core::{
+    sync::atomic::{AtomicU8, Ordering::Relaxed},
+    time::Duration,
+};
 
 use co_trap::{fast_func, FastResult, TrapFrame, Tx};
 use futures_util::Future;
-use ksc::Error::{self, EAGAIN};
+use ksc::Error::{self, EAGAIN, ETIMEDOUT};
+use ktime::{TimeOutExt, Timer};
 use riscv::register::{
     scause::{self, Exception, Interrupt, Scause, Trap},
     sepc, sstatus, stval,
@@ -17,14 +21,14 @@ pub fn poll_once<T>(fut: impl Future<Output = Result<T, Error>>) -> Result<T, Er
     }
 }
 
-pub async fn poll_once_if<T>(
+pub async fn poll_with<T>(
     fut: impl Future<Output = Result<T, Error>>,
-    nonblock: bool,
+    timeout: Option<Duration>,
 ) -> Result<T, Error> {
-    if !nonblock {
-        fut.await
-    } else {
-        poll_once(fut)
+    match timeout {
+        None => fut.await,
+        Some(Duration::ZERO) => poll_once(fut),
+        Some(dur) => fut.on_timeout(Timer::after(dur), || Err(ETIMEDOUT)).await,
     }
 }
 
