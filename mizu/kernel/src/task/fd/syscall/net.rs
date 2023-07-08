@@ -2,7 +2,7 @@ use alloc::{boxed::Box, sync::Arc};
 use core::{mem, pin::Pin, time::Duration};
 
 use co_trap::UserCx;
-use devices::net::BUFFER_CAP;
+use devices::net::{Socket, BUFFER_CAP};
 use kmem::Virt;
 use ksc::{
     async_handler,
@@ -353,16 +353,92 @@ pub async fn sendto(
 ) -> ScRet {
     let (fd, buf, len, _flags, addr, addr_len) = cx.args();
     let fut = async {
-        let buf = buf.as_slice(ts.virt.as_ref(), len).await?.concat();
+        let buf = buf.as_slice(ts.virt.as_ref(), len).await?;
         let endpoint = ipaddr(ts.virt.as_ref(), addr, addr_len).await?;
+
         let mut storage = None;
         let (socket, nonblock) = sock(&ts.files, fd, &mut storage).await?;
+
         let timeout = if nonblock {
             Some(Duration::ZERO)
         } else {
             ksync::critical(|| *socket.send_timeout.lock())
         };
-        poll_with(socket.send(&buf, endpoint), timeout).await
+
+        let mut sent_len = 0;
+        for buf in buf {
+            match poll_with(socket.send(buf, endpoint), timeout).await {
+                Ok(len) => sent_len += len,
+                Err(err) => {
+                    return if sent_len != 0 {
+                        Ok(sent_len)
+                    } else {
+                        Err(err)
+                    }
+                }
+            }
+        }
+        Ok(sent_len)
+    };
+    cx.ret(fut.await);
+    ScRet::Continue(None)
+}
+
+#[async_handler]
+pub async fn recvfrom(
+    ts: &mut TaskState,
+    cx: UserCx<
+        '_,
+        fn(
+            i32,
+            UserBuffer,
+            usize,
+            i32,
+            UserPtr<u16, Out>,
+            UserPtr<usize, InOut>,
+        ) -> Result<usize, Error>,
+    >,
+) -> ScRet {
+    let (fd, mut buf, len, _flags, ptr, addr_len) = cx.args();
+    let fut = async {
+        let mut buf = buf.as_mut_slice(ts.virt.as_ref(), len).await?;
+
+        let mut storage = None;
+        let (socket, nonblock) = sock(&ts.files, fd, &mut storage).await?;
+
+        let timeout = if nonblock {
+            Some(Duration::ZERO)
+        } else {
+            ksync::critical(|| *socket.send_timeout.lock())
+        };
+
+        match &**socket {
+            Socket::Tcp(socket) => {
+                let mut received_len = 0;
+                for buf in buf {
+                    match poll_with(socket.receive(buf), timeout).await {
+                        Ok(len) => received_len += len,
+                        Err(err) => {
+                            return if received_len != 0 {
+                                Ok(received_len)
+                            } else {
+                                Err(err)
+                            }
+                        }
+                    }
+                }
+                Ok(received_len)
+            }
+            Socket::Udp(socket) => Ok(match buf.first_mut() {
+                Some(buf) => {
+                    let (received_len, IpEndpoint { addr, port }) =
+                        poll_with(socket.receive(buf), timeout).await?;
+                    write_ipaddr(ts.virt.as_ref(), (Some(addr), port), ptr, addr_len).await?;
+                    received_len
+                }
+                None => 0,
+            }),
+        }
     };
     cx.ret(fut.await);
     ScRet::Continue(None)

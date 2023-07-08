@@ -34,7 +34,7 @@ impl Socket {
         match self {
             Socket::Tcp(socket) => socket.receive(buf).await,
             Socket::Udp(socket) => {
-                let (len, remote) = socket.receive(buf).await;
+                let (len, remote) = socket.receive(buf).await?;
                 if let Some(remote_endpoint) = remote_endpoint {
                     *remote_endpoint = remote;
                 }

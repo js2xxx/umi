@@ -1,6 +1,7 @@
 use alloc::vec;
 use core::{
     future::poll_fn,
+    sync::atomic::{AtomicBool, Ordering::SeqCst},
     task::{Context, Poll},
 };
 
@@ -21,6 +22,7 @@ pub struct Socket {
     stack: Arsc<Stack>,
     handle: SocketHandle,
     remote: Mutex<Option<IpEndpoint>>,
+    bound: AtomicBool,
 }
 
 impl Socket {
@@ -47,6 +49,7 @@ impl Socket {
             stack,
             handle,
             remote: Default::default(),
+            bound: Default::default(),
         }
     }
 
@@ -56,16 +59,22 @@ impl Socket {
             endpoint.port = self.stack.with_socket_mut(|s| s.next_local_port());
         }
         self.with_mut(|socket| socket.bind(endpoint))
-            .map_or(Err(EINVAL), Ok)
+            .map_or(Err(EINVAL), |_| {
+                self.bound.store(true, SeqCst);
+                Ok(())
+            })
     }
 
     pub fn connect(&self, remote: impl Into<IpEndpoint>) {
         ksync::critical(|| *self.remote.lock() = Some(remote.into()))
     }
 
-    pub fn poll_receive(&self, buf: &mut [u8], cx: &mut Context) -> Poll<(usize, IpEndpoint)> {
+    pub fn poll_receive(&self, buf: &mut [u8], cx: &mut Context) -> Poll<Result<(usize, IpEndpoint), Error>> {
+        if !self.bound.load(SeqCst) {
+            self.bind(IpListenEndpoint::default())?;
+        }
         self.with_mut(|socket| match socket.recv_slice(buf) {
-            Ok((n, meta)) => Poll::Ready((n, meta.endpoint)),
+            Ok((n, meta)) => Poll::Ready(Ok((n, meta.endpoint))),
             Err(udp::RecvError::Exhausted) => {
                 socket.register_recv_waker(cx.waker());
                 Poll::Pending
@@ -73,12 +82,12 @@ impl Socket {
         })
     }
 
-    pub async fn receive(&self, buf: &mut [u8]) -> (usize, IpEndpoint) {
+    pub async fn receive(&self, buf: &mut [u8]) -> Result<(usize, IpEndpoint), Error> {
         loop {
-            let (len, endpoint) = poll_fn(|cx| self.poll_receive(buf, cx)).await;
+            let (len, endpoint) = poll_fn(|cx| self.poll_receive(buf, cx)).await?;
             let remote = ksync::critical(|| *self.remote.lock());
             if remote.is_none() || Some(endpoint) == remote {
-                break (len, endpoint);
+                break Ok((len, endpoint));
             }
         }
     }
@@ -89,6 +98,9 @@ impl Socket {
         remote_endpoint: IpEndpoint,
         cx: &mut Context,
     ) -> Poll<Result<usize, Error>> {
+        if !self.bound.load(SeqCst) {
+            self.bind(IpListenEndpoint::default())?;
+        }
         self.with_mut(|socket| match socket.send_slice(buf, remote_endpoint) {
             Ok(()) => Poll::Ready(Ok(buf.len())),
             Err(udp::SendError::BufferFull) => {
