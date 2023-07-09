@@ -2,10 +2,11 @@ pub mod dns;
 pub mod tcp;
 pub mod udp;
 
+use futures_util::Future;
 use ksc::Error::{self, EOPNOTSUPP};
 use smoltcp::wire::{IpEndpoint, IpListenEndpoint};
 
-pub const BUFFER_CAP: usize = 16 * 1024;
+pub const BUFFER_CAP: usize = 32768;
 const META_CAP: usize = 8;
 
 #[derive(Debug)]
@@ -74,9 +75,9 @@ impl Socket {
         }
     }
 
-    pub fn listen(&self) -> Result<(), Error> {
+    pub fn listen(&self, backlog: usize) -> Result<impl Future<Output = ()> + 'static, Error> {
         match self {
-            Socket::Tcp(socket) => socket.listen(),
+            Socket::Tcp(socket) => socket.listen(backlog),
             Socket::Udp(_) => Err(EOPNOTSUPP),
         }
     }

@@ -519,13 +519,14 @@ pub async fn bind(
 #[async_handler]
 pub async fn listen(
     ts: &mut TaskState,
-    cx: UserCx<'_, fn(i32, i32) -> Result<(), Error>>,
+    cx: UserCx<'_, fn(i32, usize) -> Result<(), Error>>,
 ) -> ScRet {
-    let (fd, _backlog) = cx.args();
+    let (fd, backlog) = cx.args();
     let fut = async {
         let mut storage = None;
         let (socket, _) = sock(&ts.files, fd, &mut storage).await?;
-        socket.listen()
+        crate::executor().spawn(socket.listen(backlog)?).detach();
+        Ok(())
     };
     cx.ret(fut.await);
     ScRet::Continue(None)

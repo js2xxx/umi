@@ -2,12 +2,21 @@ use alloc::vec;
 use core::{
     future::poll_fn,
     mem,
-    sync::atomic::{AtomicU8, Ordering::SeqCst},
+    sync::atomic::{AtomicU8, AtomicUsize, Ordering::SeqCst},
     task::{Context, Poll},
 };
 
 use arsc_rs::Arsc;
+use crossbeam_queue::SegQueue;
+use futures_util::Future;
 use ksc::Error::{self, ECONNREFUSED, EEXIST, EINVAL, ENOTCONN};
+use ksync::{
+    channel::{
+        mpmc::{Receiver, Sender},
+        unbounded,
+    },
+    event::Event,
+};
 use managed::ManagedSlice;
 use smoltcp::{
     iface::SocketHandle,
@@ -24,13 +33,22 @@ use crate::net::Stack;
 
 #[derive(Debug)]
 pub struct Socket {
-    stack: Arsc<Stack>,
-    handle: RwLock<SocketHandle>,
-    listen: Mutex<Option<IpListenEndpoint>>,
-    iface_id: AtomicU8,
+    inner: Arsc<Inner>,
+    accept: Mutex<Option<Receiver<SegQueue<Socket>>>>,
 }
 
-impl Socket {
+#[derive(Debug)]
+struct Inner {
+    stack: Arsc<Stack>,
+    handle: RwLock<SocketHandle>,
+    iface_id: AtomicU8,
+
+    listen: Mutex<Option<IpListenEndpoint>>,
+    backlog: AtomicUsize,
+    accept_event: Event,
+}
+
+impl Inner {
     fn with_mut<T>(&self, f: impl FnOnce(SocketHandle, &mut tcp::Socket) -> T) -> T {
         self.stack.with_socket_mut(|s| {
             let handle = self.handle.read();
@@ -44,20 +62,6 @@ impl Socket {
             f(s.sockets.get(*handle))
         })
     }
-}
-
-impl Socket {
-    pub fn new(stack: Arsc<Stack>) -> Self {
-        let buf = vec![0u8; BUFFER_CAP];
-        let socket = tcp::Socket::new(buf.clone().into(), ManagedSlice::Owned(buf));
-        let handle = stack.with_socket_mut(|s| s.sockets.add(socket));
-        Socket {
-            stack,
-            handle: RwLock::new(handle),
-            listen: Default::default(),
-            iface_id: Default::default(),
-        }
-    }
 
     fn poll_for_establishment(&self, cx: &mut Context) -> Poll<Result<SocketHandle, Error>> {
         self.with_mut(|handle, s| match s.state() {
@@ -70,65 +74,20 @@ impl Socket {
         })
     }
 
-    pub async fn connect(&self, remote: impl Into<IpEndpoint>) -> Result<(), Error> {
-        let remote: IpEndpoint = remote.into();
-
-        let res = self.stack.with_socket_mut(|s| {
-            let handle = self.handle.read();
-            if s.sockets.get_mut::<tcp::Socket>(*handle).is_open() {
-                return Err(tcp::ConnectError::InvalidState);
-            }
-
-            let mut local = IpListenEndpoint {
-                addr: None,
-                port: s.next_local_port(),
-            };
-
-            let iface_id = s.select_tcp_addr(&remote, &mut local);
-            self.iface_id.store(iface_id, SeqCst);
-
-            let socket = s.sockets.get_mut::<tcp::Socket>(*handle);
-            let iface = s.ifaces.get_mut(&iface_id).unwrap();
-            socket.connect(iface.context(), remote, local)
-        });
-
-        match res {
-            Ok(()) => {}
-            Err(tcp::ConnectError::InvalidState) => return Err(EEXIST),
-            Err(tcp::ConnectError::Unaddressable) => return Err(EINVAL),
-        }
-
-        poll_fn(|cx| self.poll_for_establishment(cx)).await?;
-        Ok(())
-    }
-
-    pub fn bind(&self, local_endpoint: impl Into<IpListenEndpoint>) -> Result<(), Error> {
-        let mut endpoint: IpListenEndpoint = local_endpoint.into();
-        if endpoint.port == 0 {
-            endpoint.port = self.stack.with_socket_mut(|s| s.next_local_port());
-        }
-        ksync::critical(|| match &mut *self.listen.lock() {
-            Some(_) => Err(EINVAL),
-            slot @ None => {
-                *slot = Some(endpoint);
-                Ok(())
-            }
-        })
-    }
-
-    pub fn listen(&self) -> Result<(), Error> {
-        let Some(endpoint) = ksync::critical(|| *self.listen.lock()) else {
-            return Err(EINVAL);
-        };
-        self.with_mut(|_, socket| socket.listen(endpoint))
-            .map_err(|_| EINVAL)
-    }
-
-    pub async fn accept(&self) -> Result<Self, Error> {
+    async fn accept_task(
+        self: Arsc<Self>,
+        endpoint: IpListenEndpoint,
+        tx: Sender<SegQueue<Socket>>,
+    ) {
         loop {
-            let Some(endpoint) = ksync::critical(|| *self.listen.lock()) else {
-                break Err(EINVAL);
-            };
+            let mut listener = None;
+            while tx.len() >= self.backlog.load(SeqCst) {
+                match listener.take() {
+                    Some(listener) => listener.await,
+                    None => listener = Some(self.accept_event.listen()),
+                }
+            }
+
             let res = poll_fn(|cx| self.poll_for_establishment(cx)).await;
             if let Ok(handle) = res {
                 let buf = vec![0u8; BUFFER_CAP];
@@ -153,19 +112,119 @@ impl Socket {
                     Some(mem::replace(&mut *slot, next))
                 });
                 if let Some(conn) = conn {
-                    break Ok(Socket {
-                        stack: self.stack.clone(),
-                        handle: RwLock::new(conn),
-                        listen: Default::default(),
-                        iface_id: self.iface_id.load(SeqCst).into(),
+                    let fut = tx.send(Socket {
+                        inner: Arsc::new(Inner {
+                            stack: self.stack.clone(),
+                            handle: RwLock::new(conn),
+                            iface_id: self.iface_id.load(SeqCst).into(),
+
+                            listen: Default::default(),
+                            backlog: Default::default(),
+                            accept_event: Default::default(),
+                        }),
+                        accept: Default::default(),
                     });
+                    if fut.await.is_err() {
+                        break;
+                    }
                 }
             }
         }
     }
+}
+
+impl Socket {
+    pub fn new(stack: Arsc<Stack>) -> Self {
+        let buf = vec![0u8; BUFFER_CAP];
+        let socket = tcp::Socket::new(buf.clone().into(), ManagedSlice::Owned(buf));
+        let handle = stack.with_socket_mut(|s| s.sockets.add(socket));
+        Socket {
+            inner: Arsc::new(Inner {
+                stack,
+                handle: RwLock::new(handle),
+                iface_id: Default::default(),
+
+                listen: Default::default(),
+                backlog: Default::default(),
+                accept_event: Default::default(),
+            }),
+            accept: Default::default(),
+        }
+    }
+
+    pub async fn connect(&self, remote: impl Into<IpEndpoint>) -> Result<(), Error> {
+        let remote: IpEndpoint = remote.into();
+
+        let res = self.inner.stack.with_socket_mut(|s| {
+            let handle = self.inner.handle.read();
+            if s.sockets.get_mut::<tcp::Socket>(*handle).is_open() {
+                return Err(tcp::ConnectError::InvalidState);
+            }
+
+            let mut local = IpListenEndpoint {
+                addr: None,
+                port: s.next_local_port(),
+            };
+
+            let iface_id = s.select_tcp_addr(&remote, &mut local);
+            self.inner.iface_id.store(iface_id, SeqCst);
+
+            let socket = s.sockets.get_mut::<tcp::Socket>(*handle);
+            let iface = s.ifaces.get_mut(&iface_id).unwrap();
+            socket.connect(iface.context(), remote, local)
+        });
+
+        match res {
+            Ok(()) => {}
+            Err(tcp::ConnectError::InvalidState) => return Err(EEXIST),
+            Err(tcp::ConnectError::Unaddressable) => return Err(EINVAL),
+        }
+
+        poll_fn(|cx| self.inner.poll_for_establishment(cx)).await?;
+        Ok(())
+    }
+
+    pub fn bind(&self, local_endpoint: impl Into<IpListenEndpoint>) -> Result<(), Error> {
+        let mut endpoint: IpListenEndpoint = local_endpoint.into();
+        if endpoint.port == 0 {
+            endpoint.port = self.inner.stack.with_socket_mut(|s| s.next_local_port());
+        }
+        ksync::critical(|| match &mut *self.inner.listen.lock() {
+            Some(_) => Err(EINVAL),
+            slot @ None => {
+                *slot = Some(endpoint);
+                Ok(())
+            }
+        })
+    }
+
+    pub fn listen(&self, backlog: usize) -> Result<impl Future<Output = ()> + 'static, Error> {
+        let Some(endpoint) = ksync::critical(|| *self.inner.listen.lock()) else {
+            return Err(EINVAL);
+        };
+        self.inner
+            .with_mut(|_, socket| socket.listen(endpoint))
+            .map_err(|_| EINVAL)?;
+
+        self.inner.backlog.store(backlog, SeqCst);
+        let inner = self.inner.clone();
+        let (tx, rx) = unbounded();
+        ksync::critical(|| *self.accept.lock() = Some(rx));
+
+        Ok(inner.accept_task(endpoint, tx))
+    }
+
+    pub async fn accept(&self) -> Result<Self, Error> {
+        let Some(rx) = ksync::critical(|| self.accept.lock().clone()) else {
+            return Err(EINVAL);
+        };
+        let socket = rx.recv().await.unwrap();
+        self.inner.accept_event.notify(1);
+        Ok(socket)
+    }
 
     pub fn poll_receive(&self, buf: &mut [u8], cx: &mut Context) -> Poll<Result<usize, Error>> {
-        self.with_mut(|_, s| match s.recv_slice(buf) {
+        self.inner.with_mut(|_, s| match s.recv_slice(buf) {
             Ok(0) => {
                 s.register_recv_waker(cx.waker());
                 Poll::Pending
@@ -181,7 +240,7 @@ impl Socket {
     }
 
     pub fn poll_send(&self, buf: &[u8], cx: &mut Context) -> Poll<Result<usize, Error>> {
-        self.with_mut(|_, s| match s.send_slice(buf) {
+        self.inner.with_mut(|_, s| match s.send_slice(buf) {
             Ok(0) => {
                 s.register_send_waker(cx.waker());
                 Poll::Pending
@@ -196,13 +255,17 @@ impl Socket {
     }
 
     fn poll_wait_for_recv(&self, cx: &mut Context) -> Poll<()> {
-        self.with_mut(|_, s| {
+        self.inner.with_mut(|_, s| {
             if s.can_recv() {
-                Poll::Ready(())
-            } else {
-                s.register_recv_waker(cx.waker());
-                Poll::Pending
+                return Poll::Ready(());
             }
+            if let Some(accept) = &*self.accept.lock() {
+                if !accept.is_empty() {
+                    return Poll::Ready(());
+                }
+            }
+            s.register_recv_waker(cx.waker());
+            Poll::Pending
         })
     }
 
@@ -211,13 +274,17 @@ impl Socket {
     }
 
     fn poll_wait_for_send(&self, cx: &mut Context<'_>) -> Poll<()> {
-        self.with_mut(|_, s| {
+        self.inner.with_mut(|_, s| {
             if s.can_send() {
-                Poll::Ready(())
-            } else {
-                s.register_send_waker(cx.waker());
-                Poll::Pending
+                return Poll::Ready(());
             }
+            if let Some(accept) = &*self.accept.lock() {
+                if !accept.is_empty() {
+                    return Poll::Ready(());
+                }
+            }
+            s.register_send_waker(cx.waker());
+            Poll::Pending
         })
     }
 
@@ -226,7 +293,7 @@ impl Socket {
     }
 
     pub fn poll_flush(&self, cx: &mut Context) -> Poll<()> {
-        self.with_mut(|_, s| {
+        self.inner.with_mut(|_, s| {
             let waiting_close = s.state() == State::Closed && s.remote_endpoint().is_some();
             // If there are outstanding send operations, register for wake up and wait
             // smoltcp issues wake-ups when octets are dequeued from the send buffer
@@ -245,40 +312,43 @@ impl Socket {
     }
 
     pub fn listen_endpoint(&self) -> Option<IpListenEndpoint> {
-        ksync::critical(|| *self.listen.lock())
+        ksync::critical(|| *self.inner.listen.lock())
     }
 
     pub fn remote_endpoint(&self) -> Option<IpEndpoint> {
-        self.with(|socket| socket.remote_endpoint())
+        self.inner.with(|socket| socket.remote_endpoint())
     }
 
     pub fn is_open(&self) -> bool {
-        self.with(|socket| socket.is_open())
+        self.inner.with(|socket| socket.is_open())
     }
 
     pub fn is_listening(&self) -> bool {
-        self.with(|socket| socket.is_listening())
+        self.inner.with(|socket| socket.is_listening())
     }
 
     pub fn close(&self) {
-        self.with_mut(|_, socket| socket.close());
+        self.inner.with_mut(|_, socket| socket.close());
     }
 
     pub fn abort(&self) {
-        self.with_mut(|_, socket| socket.abort());
+        self.inner.with_mut(|_, socket| socket.abort());
     }
 
     pub fn can_send(&self) -> bool {
-        self.with(|socket| socket.can_send())
+        self.inner.with(|socket| socket.can_send())
     }
 
     pub fn can_recv(&self) -> bool {
-        self.with(|socket| socket.can_recv())
+        self.inner.with(|socket| socket.can_recv())
     }
 
     pub fn max_segment_size(&self) -> usize {
-        let ip_mtu =
-            self.stack.max_transmission_unit(self.iface_id.load(SeqCst)) - ETHERNET_HEADER_LEN;
+        let ip_mtu = self
+            .inner
+            .stack
+            .max_transmission_unit(self.inner.iface_id.load(SeqCst))
+            - ETHERNET_HEADER_LEN;
         let tcp_mtu = match self.remote_endpoint() {
             Some(IpEndpoint {
                 addr: IpAddress::Ipv4(..),
@@ -290,13 +360,14 @@ impl Socket {
             }) => ip_mtu - IPV6_HEADER_LEN,
             None => ip_mtu - IPV4_HEADER_LEN.max(IPV6_HEADER_LEN),
         };
-        (tcp_mtu - TCP_HEADER_LEN).min(BUFFER_CAP)
+        tcp_mtu.min(BUFFER_CAP) - TCP_HEADER_LEN
     }
 }
 
 impl Drop for Socket {
     fn drop(&mut self) {
-        self.stack
-            .with_socket_mut(|s| s.sockets.remove(*self.handle.get_mut()));
+        self.inner
+            .stack
+            .with_socket_mut(|s| s.sockets.remove(*self.inner.handle.read()));
     }
 }
