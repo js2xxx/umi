@@ -31,6 +31,7 @@ pub async fn read(
         if len == 0 {
             return Ok(0);
         }
+        // log::trace!("user read fd = {fd}, buffer len = {len}");
         let mut bufs = buffer.as_mut_slice(ts.virt.as_ref(), len).await?;
 
         let entry = ts.files.get(fd).await?;
@@ -52,6 +53,7 @@ pub async fn write(
         if len == 0 {
             return Ok(0);
         }
+        // log::trace!("user write fd = {fd}, buffer len = {len}");
         let mut bufs = buffer.as_slice(ts.virt.as_ref(), len).await?;
 
         let entry = ts.files.get(fd).await?;
@@ -346,8 +348,8 @@ async fn poll_fds(
     files: &Files,
     timeout: Option<Duration>,
 ) -> Result<usize, Error> {
-    // pfd.iter()
-    //     .for_each(|pfd| log::trace!("Polling fd: {pfd:?}"));
+    pfd.iter()
+        .for_each(|pfd| log::trace!("Polling fd: {pfd:?}"));
 
     let files = stream::iter(&*pfd)
         .then(|pfd| files.get(pfd.fd))

@@ -9,6 +9,7 @@ use ksc::{
     Error,
     Error::{ENODEV, ENOSYS, ESPIPE},
 };
+use smoltcp::wire::IpEndpoint;
 use spin::{mutex::Mutex, Once};
 use umifs::{
     path::Path,
@@ -16,6 +17,8 @@ use umifs::{
     types::{FileType, Metadata, OpenOptions, Permissions},
 };
 use umio::{advance_slices, Event, Io, IoPoll, IoSlice, IoSliceMut, SeekFrom};
+
+use crate::trap::poll_with;
 
 static STACK: Once<Arsc<Stack>> = Once::INIT;
 
@@ -84,6 +87,74 @@ impl SocketFile {
             socket,
             send_timeout: Default::default(),
             recv_timeout: Default::default(),
+        }
+    }
+
+    pub async fn send(
+        &self,
+        mut buffer: &mut [IoSlice<'_>],
+        endpoint: Option<IpEndpoint>,
+        nonblock: bool,
+    ) -> Result<usize, Error> {
+        let timeout = if nonblock {
+            Some(Duration::ZERO)
+        } else {
+            ksync::critical(|| *self.send_timeout.lock())
+        };
+
+        let mut sent_len = 0;
+        loop {
+            let Some(buf) = buffer.first() else {
+                break Ok(sent_len);
+            };
+            let send = poll_with((**self).send(buf, endpoint), timeout);
+            match send.await {
+                Ok(len) => {
+                    sent_len += len;
+                    advance_slices(&mut buffer, len)
+                }
+                Err(_) if sent_len != 0 => break Ok(sent_len),
+                Err(err) => break Err(err),
+            }
+        }
+    }
+
+    pub async fn receive(
+        &self,
+        mut buffer: &mut [IoSliceMut<'_>],
+        nonblock: bool,
+    ) -> Result<(usize, Option<IpEndpoint>), Error> {
+        let timeout = if nonblock {
+            Some(Duration::ZERO)
+        } else {
+            ksync::critical(|| *self.send_timeout.lock())
+        };
+
+        match &**self {
+            Socket::Tcp(socket) => {
+                let mut received_len = 0;
+                loop {
+                    let Some(buf) = buffer.first_mut() else {
+                        break Ok((received_len, None));
+                    };
+                    let receive = poll_with(socket.receive(buf), timeout);
+                    match receive.await {
+                        Ok(len) => {
+                            received_len += len;
+                            advance_slices(&mut buffer, len)
+                        }
+                        Err(_) if received_len != 0 => break Ok((received_len, None)),
+                        Err(err) => break Err(err),
+                    }
+                }
+            }
+            Socket::Udp(socket) => Ok(match buffer.first_mut() {
+                Some(buf) => {
+                    let (received_len, endpoint) = poll_with(socket.receive(buf), timeout).await?;
+                    (received_len, Some(endpoint))
+                }
+                None => (0, None),
+            }),
         }
     }
 }
@@ -158,28 +229,12 @@ impl IoPoll for SocketFile {
 
 #[async_trait]
 impl Io for SocketFile {
-    async fn read(&self, mut buffer: &mut [IoSliceMut]) -> Result<usize, Error> {
-        let mut read_len = 0;
-        loop {
-            let Some(buf) = buffer.first_mut() else {
-                break Ok(read_len);
-            };
-            let len = self.socket.receive(buf, None).await?;
-            read_len += len;
-            advance_slices(&mut buffer, len)
-        }
+    async fn read(&self, buffer: &mut [IoSliceMut]) -> Result<usize, Error> {
+        self.receive(buffer, false).await.map(|(len, _)| len)
     }
 
-    async fn write(&self, mut buffer: &mut [IoSlice]) -> Result<usize, Error> {
-        let mut written_len = 0;
-        loop {
-            let Some(buf) = buffer.first() else {
-                break Ok(written_len);
-            };
-            let len = self.socket.send(buf, None).await?;
-            written_len += len;
-            advance_slices(&mut buffer, len)
-        }
+    async fn write(&self, buffer: &mut [IoSlice]) -> Result<usize, Error> {
+        self.send(buffer, None, false).await
     }
 
     async fn seek(&self, _: SeekFrom) -> Result<usize, Error> {
