@@ -10,7 +10,7 @@ use ksc::{
     async_handler,
     Error::{self, *},
 };
-use ktime::{Instant, TimeOutExt};
+use ktime::TimeOutExt;
 use sygnal::SigSet;
 use umio::SeekFrom;
 
@@ -346,6 +346,9 @@ async fn poll_fds(
     files: &Files,
     timeout: Option<Duration>,
 ) -> Result<usize, Error> {
+    // pfd.iter()
+    //     .for_each(|pfd| log::trace!("Polling fd: {pfd:?}"));
+
     let files = stream::iter(&*pfd)
         .then(|pfd| files.get(pfd.fd))
         .try_collect::<Vec<_>>()
@@ -359,38 +362,26 @@ async fn poll_fds(
     let mut events = events.collect::<FuturesUnordered<_>>();
 
     let mut count = 0;
-    match timeout {
-        Some(Duration::ZERO) => loop {
-            let next = ksync::poll_once(events.next()).flatten();
-            let Some((index, event)) = next else { break };
-            if let Some(event) = event {
-                log::trace!("PFD fd = {}, event = {event:?}", pfd[index].fd);
-                pfd[index].revents |= event;
-                count += 1;
-            }
-        },
-        Some(timeout) => {
-            let ddl = Instant::now() + timeout;
-            loop {
-                let next = events.next().on_timeout(ddl, || None).await;
-                let Some((index, event)) = next else { break };
-                if let Some(event) = event {
-                    log::trace!("PFD fd = {}, event = {event:?}", pfd[index].fd);
-                    pfd[index].revents |= event;
-                    count += 1;
-                }
-            }
-        }
-        None => loop {
-            let Some((index, event)) = events.next().await else { break };
-            if let Some(event) = event {
-                log::trace!("PFD fd = {}, event = {event:?}", pfd[index].fd);
-                pfd[index].revents |= event;
-                count += 1;
-            }
-        },
+    let first = match timeout {
+        Some(Duration::ZERO) => ksync::poll_once(events.next()).flatten(),
+        Some(timeout) => events.next().on_timeout(timeout, || None).await,
+        None => events.next().await,
+    };
+    let Some((index, event)) = first else { return Ok(0) };
+    if let Some(event) = event {
+        log::trace!("PFD fd = {}, event = {event:?}", pfd[index].fd);
+        pfd[index].revents |= event;
+        count += 1;
     }
-    Ok(count)
+    loop {
+        let next = ksync::poll_once(events.next()).flatten();
+        let Some((index, event)) = next else { break Ok(count) };
+        if let Some(event) = event {
+            log::trace!("PFD fd = {}, event = {event:?}", pfd[index].fd);
+            pfd[index].revents |= event;
+            count += 1;
+        }
+    }
 }
 
 #[async_handler]

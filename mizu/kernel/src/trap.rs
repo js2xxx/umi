@@ -6,7 +6,7 @@ use core::{
 use co_trap::{fast_func, FastResult, TrapFrame, Tx};
 use futures_util::Future;
 use ksc::Error::{self, EAGAIN, ETIMEDOUT};
-use ktime::{TimeOutExt, Timer};
+use ktime::TimeOutExt;
 use riscv::register::{
     scause::{self, Exception, Interrupt, Scause, Trap},
     sepc, sstatus, stval,
@@ -28,7 +28,7 @@ pub async fn poll_with<T>(
     match timeout {
         None => fut.await,
         Some(Duration::ZERO) => poll_once(fut),
-        Some(dur) => fut.on_timeout(Timer::after(dur), || Err(ETIMEDOUT)).await,
+        Some(dur) => fut.on_timeout(dur, || Err(ETIMEDOUT)).await,
     }
 }
 

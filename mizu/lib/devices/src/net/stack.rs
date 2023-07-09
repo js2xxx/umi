@@ -15,7 +15,7 @@ use ktime::{Instant, Timer};
 use rand_riscv::RandomState;
 use smoltcp::{
     iface::{self, Interface, SocketHandle, SocketSet},
-    phy::{Loopback, Tracer},
+    phy::{Device, Loopback, Tracer},
     socket::{dhcpv4, dns},
     wire::{
         DnsQueryType, EthernetAddress, HardwareAddress, IpAddress, IpCidr, IpEndpoint,
@@ -90,10 +90,6 @@ impl fmt::Debug for Stack {
 }
 
 impl Stack {
-    fn with<T>(&self, f: impl FnOnce(&dyn Net) -> T) -> T {
-        ksync::critical(|| f(&*self.device.read()))
-    }
-
     pub(in crate::net) fn with_mut<T>(
         &self,
         f: impl FnOnce(&mut dyn Net, &mut State, &mut SocketStack) -> T,
@@ -201,14 +197,6 @@ impl Stack {
         })
     }
 
-    pub fn address(&self) -> [u8; 6] {
-        self.with(|net| net.address())
-    }
-
-    pub fn is_link_up(&self) -> bool {
-        self.with(|net| net.is_link_up())
-    }
-
     pub fn run(self: Arsc<Self>) -> StackBackground {
         StackBackground {
             stack: self,
@@ -225,6 +213,14 @@ macro_rules! extern_ifaces {
 }
 
 impl Stack {
+    pub fn max_transmission_unit(&self, iface_id: u8) -> usize {
+        if iface_id == 0 {
+            self.with_socket(|s| s.loopback.capabilities().max_transmission_unit)
+        } else {
+            ksync::critical(|| self.device.read().features().max_unit)
+        }
+    }
+
     pub async fn dns_query(
         &self,
         name: &str,

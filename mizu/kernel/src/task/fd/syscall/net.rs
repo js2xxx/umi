@@ -6,7 +6,7 @@ use devices::net::{Socket, BUFFER_CAP};
 use kmem::Virt;
 use ksc::{
     async_handler,
-    Error::{self, EAFNOSUPPORT, EAGAIN, EINVAL, ENOTCONN, ENOTSOCK},
+    Error::{self, EAFNOSUPPORT, EAGAIN, EINVAL, ENOPROTOOPT, ENOTCONN, ENOTSOCK},
 };
 use smoltcp::wire::{IpAddress, IpEndpoint, IpListenEndpoint, Ipv4Address, Ipv6Address};
 use umifs::types::{OpenOptions, Permissions};
@@ -139,11 +139,10 @@ async fn write_ipaddr(
             ptr.write(virt, AF_INET).await?;
             ptr.advance(mem::size_of::<u16>());
 
-            let mut sav4 = SockAddrIpv4 {
+            let sav4 = SockAddrIpv4 {
                 port: port.to_be_bytes(),
                 addr: addr.0,
             };
-            sav4.addr.reverse();
             let len = sav4.as_bytes().len().min(buf_len - mem::size_of::<u16>());
             ptr.cast::<u8>()
                 .write_slice(virt, &sav4.as_bytes()[..len], false)
@@ -154,12 +153,11 @@ async fn write_ipaddr(
             ptr.write(virt, AF_INET6).await?;
             ptr.advance(mem::size_of::<u16>());
 
-            let mut sav6 = SockAddrIpv6 {
+            let sav6 = SockAddrIpv6 {
                 port: port.to_be_bytes(),
                 addr: addr.0,
                 ..Default::default()
             };
-            sav6.addr.reverse();
             let len = sav6.as_bytes().len().min(buf_len - mem::size_of::<u16>());
             ptr.cast::<u8>()
                 .write_slice(virt, &sav6.as_bytes()[..len], false)
@@ -261,6 +259,12 @@ const SO_RCVBUF: i32 = 8;
 const SO_RCVTIMEO: i32 = 20;
 const SO_SNDTIMEO: i32 = 21;
 
+const IPPROTO_TCP: i32 = 6;
+#[allow(dead_code)]
+const IPPROTO_UDP: i32 = 17;
+
+const TCP_MAXSEG: i32 = 2;
+
 #[async_handler]
 pub async fn getsockopt(
     ts: &mut TaskState,
@@ -289,6 +293,16 @@ pub async fn getsockopt(
                         .into();
                     (SockOpt { tv }, mem::size_of::<Tv>())
                 }
+                _ => return Ok(()),
+            },
+            IPPROTO_TCP => match opt {
+                TCP_MAXSEG => match &**socket {
+                    Socket::Tcp(socket) => {
+                        let value = socket.max_segment_size().try_into()?;
+                        (SockOpt { value }, mem::size_of::<u32>())
+                    }
+                    _ => return Err(ENOPROTOOPT),
+                },
                 _ => return Ok(()),
             },
             _ => return Ok(()),

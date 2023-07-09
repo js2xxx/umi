@@ -9,7 +9,7 @@ use ksc::{
     Error,
     Error::{ENODEV, ENOSYS, ESPIPE},
 };
-use spin::{Once, mutex::Mutex};
+use spin::{mutex::Mutex, Once};
 use umifs::{
     path::Path,
     traits::Entry,
@@ -142,8 +142,14 @@ impl IoPoll for SocketFile {
                 let send = pin!(self.socket.wait_for_send());
                 let recv = pin!(self.socket.wait_for_recv());
                 match select(send, recv).await {
-                    Either::Left(_) => Some(Event::WRITABLE),
-                    Either::Right(_) => Some(Event::READABLE),
+                    Either::Left((_, recv)) => match ksync::poll_once(recv) {
+                        Some(()) => Some(Event::WRITABLE | Event::READABLE),
+                        None => Some(Event::WRITABLE),
+                    },
+                    Either::Right((_, send)) => match ksync::poll_once(send) {
+                        Some(()) => Some(Event::READABLE | Event::WRITABLE),
+                        None => Some(Event::READABLE),
+                    },
                 }
             }
         }
