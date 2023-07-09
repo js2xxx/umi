@@ -57,13 +57,14 @@ virtio-drivers = {git = "https://github.com/rcore-os/virtio-drivers", branch = "
 zerocopy = "0"
 
 [dependencies.smoltcp]
+branch = "reuse_endpoints"
 default-features = false
 features = [
   "log",
   "proto-ipv4",
   "proto-ipv6",
 ]
-version = "0"
+git = "https://github.com/js2xxx/smoltcp"
 
 [build-dependencies]
 config = {path = "../lib/config", default-features = false}

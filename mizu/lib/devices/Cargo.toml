@@ -27,6 +27,7 @@ spin = "0"
 volatile = "0"
 
 [dependencies.smoltcp]
+branch = "reuse_endpoints"
 default-features = false
 features = [
   "log",
@@ -45,4 +46,4 @@ features = [
   "async",
   "alloc",
 ]
-version = "0"
+git = "https://github.com/js2xxx/smoltcp"

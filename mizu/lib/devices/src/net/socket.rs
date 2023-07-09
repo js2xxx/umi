@@ -61,10 +61,7 @@ impl Socket {
     pub async fn connect(&self, endpoint: IpEndpoint) -> Result<(), Error> {
         match self {
             Socket::Tcp(socket) => socket.connect(endpoint).await,
-            Socket::Udp(socket) => {
-                socket.connect(endpoint);
-                Ok(())
-            }
+            Socket::Udp(socket) => socket.connect(endpoint),
         }
     }
 
