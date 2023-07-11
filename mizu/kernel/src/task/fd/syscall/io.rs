@@ -472,10 +472,6 @@ pub async fn pselect(
 ) -> ScRet {
     let (count, mut rd, mut wr, mut ex, timeout, _sigmask) = cx.args();
     let fut = async {
-        if count > ts.files.get_limit() {
-            return Err(EINVAL);
-        }
-
         let timeout = if timeout.is_null() {
             None
         } else {

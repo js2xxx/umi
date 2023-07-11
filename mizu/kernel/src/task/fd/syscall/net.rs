@@ -515,3 +515,24 @@ pub async fn accept(
     cx.ret(fut.await);
     ScRet::Continue(None)
 }
+
+#[async_handler]
+pub async fn shutdown(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(i32, i32) -> Result<(), Error>>,
+) -> ScRet {
+    const SHUT_WR: i32 = 1;
+    let (fd, cmd) = cx.args();
+    let fut = async {
+        let mut storage = None;
+        let (socket, _) = sock(&ts.files, fd, &mut storage).await?;
+        if cmd & SHUT_WR != 0 {
+            if let Socket::Tcp(socket) = &**socket {
+                socket.close();
+            }
+        }
+        Ok(())
+    };
+    cx.ret(fut.await);
+    ScRet::Continue(None)
+}

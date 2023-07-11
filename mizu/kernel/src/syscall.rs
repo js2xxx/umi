@@ -113,6 +113,7 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         .map(BIND, fd::bind)
         .map(LISTEN, fd::listen)
         .map(ACCEPT, fd::accept)
+        .map(SHUTDOWN, fd::shutdown)
         // Time
         .map(GETTIMEOFDAY, gettimeofday)
         .map(CLOCK_GETTIME, clock_gettime)
