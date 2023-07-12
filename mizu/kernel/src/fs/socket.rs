@@ -141,7 +141,10 @@ impl SocketFile {
                     match receive.await {
                         Ok(len) => {
                             received_len += len;
-                            advance_slices(&mut buffer, len)
+                            if len == 0 {
+                                return Ok((received_len, None));
+                            }
+                            advance_slices(&mut buffer, len);
                         }
                         Err(_) if received_len != 0 => break Ok((received_len, None)),
                         Err(err) => break Err(err),

@@ -86,7 +86,8 @@ pub async fn setitimer(
                 interval,
                 next_diff,
             } = new.read(ts.virt.as_ref()).await?;
-            Some((interval.into(), next_diff.into()))
+            (interval != Default::default() || next_diff != Default::default())
+                .then_some((interval.into(), next_diff.into()))
         };
         let counter = ts.counters.get_mut(index).ok_or(EINVAL)?;
         let (interval, next_diff) = counter.set(&ts.task.times, new);

@@ -2,7 +2,7 @@ use core::time::Duration;
 
 use ktime::{Instant, InstantExt};
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[repr(C, packed)]
 pub struct Tv {
     pub sec: u64,

@@ -232,6 +232,57 @@ pub async fn fstatat(
 }
 
 #[async_handler]
+pub async fn fchmod(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(i32, u32) -> Result<(), Error>>,
+) -> ScRet {
+    let (fd, perm) = cx.args();
+    let set = |fi: &mut FdInfo| fi.perm = Permissions::from_bits_truncate(perm);
+    let fut = ts.files.set_fi(fd, set);
+    cx.ret(fut.await);
+    ScRet::Continue(None)
+}
+
+#[async_handler]
+pub async fn fchmodat(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(i32, UserPtr<u8, In>, u32, i32) -> Result<(), Error>>,
+) -> ScRet {
+    let (fd, path, _perm, _flags) = cx.args();
+    let fut = async {
+        let mut buf = [0; MAX_PATH_LEN];
+        let (path, root) = path.read_path(ts.virt.as_ref(), &mut buf).await?;
+
+        let _ = if root {
+            crate::fs::open(
+                path,
+                OpenOptions::RDONLY,
+                Permissions::all_same(true, false, false),
+            )
+            .await?
+            .0
+        } else {
+            let base = ts.files.get(fd).await?;
+            if path == "" {
+                base
+            } else {
+                base.open(
+                    path,
+                    OpenOptions::RDONLY,
+                    Permissions::all_same(true, false, false),
+                )
+                .await?
+                .0
+            }
+        };
+        // TODO: Implement this.
+        Ok(())
+    };
+    cx.ret(fut.await);
+    ScRet::Continue(None)
+}
+
+#[async_handler]
 pub async fn utimensat(
     ts: &mut TaskState,
     cx: UserCx<'_, fn(i32, UserPtr<u8, In>, UserPtr<Ts, In>) -> Result<(), Error>>,
