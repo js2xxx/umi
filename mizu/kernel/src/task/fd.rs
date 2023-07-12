@@ -7,6 +7,7 @@ use core::{
 };
 
 use arsc_rs::Arsc;
+use devices::net::Socket;
 use futures_util::future::join_all;
 use hashbrown::HashMap;
 use ksc::Error::{self, EBADF, EMFILE};
@@ -18,8 +19,10 @@ use umifs::{
     traits::Entry,
     types::{DirEntry, OpenOptions, Permissions},
 };
+use umio::IntoAnyExt;
 
 pub use self::syscall::*;
+use crate::fs::socket::SocketFile;
 
 pub const MAX_FDS: usize = 65536;
 const CWD: i32 = -100;
@@ -204,8 +207,13 @@ impl Files {
 
     pub async fn close(&self, fd: i32) -> Result<(), Error> {
         match self.fds.map.write().await.remove(&fd) {
-            Some(_fi) => {
+            Some(fi) => {
                 ksync::critical(|| self.fds.id_alloc.lock().dealloc(fd));
+                if let Some(socket) = fi.entry.downcast::<SocketFile>() {
+                    if let Socket::Tcp(socket) = &**socket {
+                        socket.close().await;
+                    }
+                }
                 // match fi.entry.to_io() {
                 //     Some(io) => io.flush().await,
                 //     None => Ok(()),

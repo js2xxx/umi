@@ -528,7 +528,7 @@ pub async fn shutdown(
         let (socket, _) = sock(&ts.files, fd, &mut storage).await?;
         if cmd & SHUT_WR != 0 {
             if let Socket::Tcp(socket) = &**socket {
-                socket.close();
+                socket.close().await;
             }
         }
         Ok(())

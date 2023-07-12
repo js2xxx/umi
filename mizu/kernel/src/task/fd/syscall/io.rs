@@ -486,7 +486,7 @@ pub async fn pselect(
             return Ok(0);
         }
 
-        let len = (count + mem::size_of::<usize>() - 1) / mem::size_of::<usize>();
+        let len = (count + FD_SET_BITS - 1) / FD_SET_BITS;
         let mut buf = vec![0; len];
 
         let mut pfd = Vec::new();

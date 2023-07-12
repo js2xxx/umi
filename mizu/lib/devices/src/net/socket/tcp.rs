@@ -2,13 +2,18 @@ use alloc::vec;
 use core::{
     future::poll_fn,
     mem,
+    pin::pin,
     sync::atomic::{AtomicU8, AtomicUsize, Ordering::SeqCst},
     task::{Context, Poll},
+    time::Duration,
 };
 
 use arsc_rs::Arsc;
 use crossbeam_queue::SegQueue;
-use futures_util::Future;
+use futures_util::{
+    future::{select, Either},
+    Future,
+};
 use ksc::Error::{self, ECONNREFUSED, EEXIST, EINVAL, ENOTCONN};
 use ksync::{
     channel::{
@@ -17,6 +22,7 @@ use ksync::{
     },
     event::Event,
 };
+use ktime::TimeOutExt;
 use managed::ManagedSlice;
 use smoltcp::{
     iface::SocketHandle,
@@ -74,12 +80,42 @@ impl Inner {
         })
     }
 
+    fn poll_for_close(&self, cx: &mut Context) -> Poll<()> {
+        self.with_mut(|_, s| match s.state() {
+            State::Closed | State::TimeWait => Poll::Ready(()),
+            _ => {
+                s.register_send_waker(cx.waker());
+                s.register_recv_waker(cx.waker());
+                Poll::Pending
+            }
+        })
+    }
+
+    async fn close(&self) {
+        const FIN_TIMEOUT: Duration = Duration::from_millis(300);
+
+        self.with_mut(|_, socket| socket.close());
+        let close = poll_fn(|cx| self.poll_for_close(cx));
+        close.on_timeout(FIN_TIMEOUT, || {}).await;
+    }
+
+    async fn close_event(&self, tx: &Sender<SegQueue<Socket>>) {
+        let mut listener = None;
+        while !tx.is_closed() {
+            match listener.take() {
+                Some(listener) => listener.await,
+                None => listener = Some(self.accept_event.listen()),
+            }
+        }
+    }
+
     async fn accept_task(
         self: Arsc<Self>,
         endpoint: IpListenEndpoint,
         tx: Sender<SegQueue<Socket>>,
     ) {
-        loop {
+        log::trace!("Creating accept queue");
+        while !tx.is_closed() {
             let mut listener = None;
             while tx.len() >= self.backlog.load(SeqCst) {
                 match listener.take() {
@@ -88,7 +124,13 @@ impl Inner {
                 }
             }
 
-            let res = poll_fn(|cx| self.poll_for_establishment(cx)).await;
+            let establishment = poll_fn(|cx| self.poll_for_establishment(cx));
+            let closed = pin!(self.close_event(&tx));
+
+            let Either::Left((res, _)) = select(establishment, closed).await else { break };
+
+            log::trace!("Accepted new connection");
+
             if let Ok(handle) = res {
                 let buf = vec![0u8; BUFFER_CAP];
 
@@ -112,7 +154,7 @@ impl Inner {
                     Some(mem::replace(&mut *slot, next))
                 });
                 if let Some(conn) = conn {
-                    let fut = tx.send(Socket {
+                    let data = Socket {
                         inner: Arsc::new(Inner {
                             stack: self.stack.clone(),
                             handle: RwLock::new(conn),
@@ -123,13 +165,22 @@ impl Inner {
                             accept_event: Default::default(),
                         }),
                         accept: Default::default(),
-                    });
-                    if fut.await.is_err() {
+                    };
+                    if tx.send(data).await.is_err() {
                         break;
                     }
                 }
             }
         }
+        log::trace!("Accept queue destroyed");
+        self.close().await
+    }
+}
+
+impl Drop for Inner {
+    fn drop(&mut self) {
+        self.stack
+            .with_socket_mut(|s| s.sockets.remove(*self.handle.read()));
     }
 }
 
@@ -256,10 +307,17 @@ impl Socket {
 
     fn poll_wait_for_recv(&self, cx: &mut Context) -> Poll<()> {
         self.inner.with_mut(|_, s| {
-            if s.can_recv() {
+            log::trace!("Wake up for recv, polling: {} {}", s.state(), s.can_recv());
+            if s.can_recv()
+                || matches!(
+                    s.state(),
+                    State::FinWait1 | State::FinWait2 | State::CloseWait
+                )
+            {
                 return Poll::Ready(());
             }
             if let Some(accept) = &*self.accept.lock() {
+                log::trace!("Accept queue: {}", !accept.is_empty());
                 if !accept.is_empty() {
                     return Poll::Ready(());
                 }
@@ -275,10 +333,12 @@ impl Socket {
 
     fn poll_wait_for_send(&self, cx: &mut Context<'_>) -> Poll<()> {
         self.inner.with_mut(|_, s| {
+            log::trace!("Wake up for send, polling: {} {}", s.state(), s.can_send());
             if s.can_send() {
                 return Poll::Ready(());
             }
             if let Some(accept) = &*self.accept.lock() {
+                log::trace!("Accept queue: {}", !accept.is_empty());
                 if !accept.is_empty() {
                     return Poll::Ready(());
                 }
@@ -327,8 +387,15 @@ impl Socket {
         self.inner.with(|socket| socket.is_listening())
     }
 
-    pub fn close(&self) {
-        self.inner.with_mut(|_, socket| socket.close());
+    pub async fn close(&self) {
+        let ret = ksync::critical(|| self.accept.lock().take());
+        if ret.is_some() {
+            log::trace!("Closing a listening socket");
+            self.inner.accept_event.notify(1);
+        } else {
+            log::trace!("Closing a connection socket");
+            self.inner.close().await
+        }
     }
 
     pub fn abort(&self) {
@@ -366,8 +433,9 @@ impl Socket {
 
 impl Drop for Socket {
     fn drop(&mut self) {
-        self.inner
-            .stack
-            .with_socket_mut(|s| s.sockets.remove(*self.inner.handle.read()));
+        if self.accept.get_mut().is_some() {
+            log::trace!("Dropping a listening socket");
+            self.inner.accept_event.notify(1);
+        }
     }
 }
