@@ -7,7 +7,6 @@ use core::{
 };
 
 use arsc_rs::Arsc;
-use devices::net::Socket;
 use futures_util::future::join_all;
 use hashbrown::HashMap;
 use ksc::Error::{self, EBADF, EMFILE};
@@ -210,7 +209,7 @@ impl Files {
             Some(fi) => {
                 ksync::critical(|| self.fds.id_alloc.lock().dealloc(fd));
                 if let Some(socket) = fi.entry.downcast::<SocketFile>() {
-                    if let Socket::Tcp(socket) = &**socket {
+                    if let Ok(socket) = Arc::try_unwrap(socket) {
                         socket.close().await;
                     }
                 }
@@ -257,8 +256,13 @@ impl Files {
         let mut map = self.fds.map.write().await;
         for (fd, fi) in map.extract_if(|_, fi| fi.close_on_exec) {
             ksync::critical(|| self.fds.id_alloc.lock().dealloc(fd));
-            if let Some(io) = fi.entry.to_io() {
+            if let Some(io) = fi.entry.clone().to_io() {
                 let _ = io.flush().await;
+            }
+            if let Some(socket) = fi.entry.downcast::<SocketFile>() {
+                if let Ok(socket) = Arc::try_unwrap(socket) {
+                    socket.close().await;
+                }
             }
         }
     }

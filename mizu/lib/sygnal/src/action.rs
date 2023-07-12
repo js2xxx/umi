@@ -44,6 +44,18 @@ impl Action {
             mask: SigSet::EMPTY,
         }
     }
+
+    pub fn default_sig_mask() -> SigSet {
+        (0..NR_SIGNALS)
+            .filter_map(Sig::from_index)
+            .fold(Default::default(), |ss, sig| {
+                if ActionType::default(sig) == ActionType::Ignore {
+                    ss | sig
+                } else {
+                    ss
+                }
+            })
+    }
 }
 
 pub struct ActionSet {

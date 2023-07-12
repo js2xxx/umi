@@ -124,6 +124,15 @@ impl SocketFile {
         mut buffer: &mut [IoSliceMut<'_>],
         nonblock: bool,
     ) -> Result<(usize, Option<IpEndpoint>), Error> {
+        log::trace!("user recv buffer len = {}", umio::ioslice_len(&buffer));
+        log::trace!(
+            "socket is {}",
+            match &**self {
+                Socket::Tcp(_) => "TCP",
+                Socket::Udp(_) => "UDP",
+            }
+        );
+
         let timeout = if nonblock {
             Some(Duration::ZERO)
         } else {
@@ -137,8 +146,7 @@ impl SocketFile {
                     let Some(buf) = buffer.first_mut() else {
                         break Ok((received_len, None));
                     };
-                    let receive = poll_with(socket.receive(buf), timeout);
-                    match receive.await {
+                    match poll_with(socket.receive(buf), timeout).await {
                         Ok(len) => {
                             received_len += len;
                             if len == 0 {
@@ -153,7 +161,8 @@ impl SocketFile {
             }
             Socket::Udp(socket) => Ok(match buffer.first_mut() {
                 Some(buf) => {
-                    let (received_len, endpoint) = poll_with(socket.receive(buf), timeout).await?;
+                    let receive = poll_with(socket.receive(buf), timeout);
+                    let (received_len, endpoint) = receive.await?;
                     (received_len, Some(endpoint))
                 }
                 None => (0, None),

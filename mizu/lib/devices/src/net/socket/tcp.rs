@@ -250,9 +250,14 @@ impl Socket {
     }
 
     pub fn listen(&self, backlog: usize) -> Result<impl Future<Output = ()> + 'static, Error> {
-        let Some(endpoint) = ksync::critical(|| *self.inner.listen.lock()) else {
-            return Err(EINVAL);
-        };
+        let endpoint = ksync::critical(|| {
+            let mut slot = self.inner.listen.lock();
+            *slot.get_or_insert_with(|| IpListenEndpoint {
+                addr: None,
+                port: self.inner.stack.with_socket_mut(|s| s.next_local_port()),
+            })
+        });
+
         self.inner
             .with_mut(|_, socket| socket.listen(endpoint))
             .map_err(|_| EINVAL)?;

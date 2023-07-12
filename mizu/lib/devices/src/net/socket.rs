@@ -112,4 +112,10 @@ impl Socket {
             Socket::Udp(_) => false,
         }
     }
+
+    pub async fn close(&self) {
+        if let Socket::Tcp(socket) = self {
+            socket.close().await
+        }
+    }
 }

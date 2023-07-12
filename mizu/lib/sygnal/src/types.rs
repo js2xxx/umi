@@ -126,9 +126,15 @@ impl Sig {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(Clone, Copy, Default, Eq, PartialEq, Ord, PartialOrd, Hash)]
 #[repr(transparent)]
 pub struct SigSet(u64);
+
+impl fmt::Debug for SigSet {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "SigSet({:#b})", self.0)
+    }
+}
 
 impl const From<u64> for SigSet {
     fn from(value: u64) -> Self {

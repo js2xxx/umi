@@ -110,9 +110,15 @@ pub async fn sigaction(
             },
             mask: action.mask,
         };
-        let action = ts.sig_actions.replace(sig, action);
+        let old_action = ts.sig_actions.replace(sig, action);
+        if old_action.ty == ActionType::Ignore {
+            ts.sig_mask &= !sig;
+        }
+        if action.ty == ActionType::Ignore {
+            ts.sig_mask |= sig;
+        }
         if !old.is_null() {
-            old.write(ts.virt.as_ref(), action.into()).await?;
+            old.write(ts.virt.as_ref(), old_action.into()).await?;
         }
         Ok(())
     };
