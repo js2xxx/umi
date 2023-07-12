@@ -19,7 +19,7 @@ use ksync::channel::Broadcast;
 use rand_riscv::rand_core::RngCore;
 use riscv::register::sstatus;
 use rv39_paging::{Attr, LAddr, ID_OFFSET, PAGE_MASK, PAGE_SHIFT, PAGE_SIZE};
-use sygnal::{ActionSet, Sig, SigSet, Action};
+use sygnal::{Action, ActionSet, Sig, SigSet};
 use umifs::{
     path::Path,
     types::{OpenOptions, Permissions},
