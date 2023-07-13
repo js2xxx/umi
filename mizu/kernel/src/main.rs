@@ -38,5 +38,5 @@ async fn main(fdt: usize) {
     mem::test_phys().await;
     fs::test_file().await;
 
-    self::test::lmbench().await;
+    self::test::test_all().await;
 }

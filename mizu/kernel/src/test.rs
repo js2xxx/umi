@@ -231,3 +231,38 @@ pub async fn busybox_interact() {
     let exit = run_busybox(None).await;
     println!("<<< {:?}", exit);
 }
+
+#[allow(dead_code)]
+pub async fn test_all() {
+    // self::test::run_busybox(Some("./test_all.sh")).await;
+
+    println!("run time-test");
+    run("./time-test").await;
+
+    println!("run busybox_testcode.sh");
+    run_busybox(Some("./busybox_testcode.sh")).await;
+
+    println!("run iozone_testcode.sh");
+    run_busybox(Some("./iozone_testcode.sh")).await;
+
+    println!("run libctest_testcode.sh");
+    run_busybox(Some("./libctest_testcode.sh")).await;
+
+    println!("run lua_testcode.sh");
+    run_busybox(Some("./lua_testcode.sh")).await;
+
+    println!("run netperf_testcode.sh");
+    run_busybox(Some("./netperf_testcode.sh")).await;
+
+    println!("run iperf_testcode.sh");
+    run_busybox(Some("./iperf_testcode.sh")).await;
+
+    println!("run cyclic_testcode.sh");
+    run_busybox(Some("./cyclic_testcode.sh")).await;
+
+    println!("run lmbench_testcode.sh");
+    run_busybox(Some("./lmbench_testcode.sh")).await;
+
+    println!("run unixbench_testcode.sh");
+    run_busybox(Some("./unixbench_testcode.sh")).await;
+}
