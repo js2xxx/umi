@@ -19,6 +19,16 @@ git = "https://github.com/js2xxx/scoped-tls"
 branch = "no_std"
 replace-with = "vendored-sources"
 
+[source."git+https://github.com/js2xxx/smoltcp?branch=reuse_endpoints"]
+git = "https://github.com/js2xxx/smoltcp"
+branch = "reuse_endpoints"
+replace-with = "vendored-sources"
+
+[source."git+https://github.com/rcore-os/virtio-drivers?branch=new-netdev"]
+git = "https://github.com/rcore-os/virtio-drivers"
+branch = "new-netdev"
+replace-with = "vendored-sources"
+
 [source.vendored-sources]
 directory = "third-party/vendor"
 [profile.dev]
