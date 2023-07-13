@@ -139,7 +139,7 @@ pub async fn open_file<E: Entry>(
     if !path.as_str().is_empty() || options.contains(OpenOptions::DIRECTORY) {
         return Err(ENOTDIR);
     }
-    if options.contains(OpenOptions::CREAT) {
+    if options.contains(OpenOptions::CREAT | OpenOptions::EXCL) {
         return Err(EEXIST);
     }
     if !self_perm.contains(perm) {

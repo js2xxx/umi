@@ -1,12 +1,36 @@
-use core::sync::atomic::{AtomicU8, Ordering::Relaxed};
+use core::{
+    sync::atomic::{AtomicU8, Ordering::Relaxed},
+    time::Duration,
+};
 
 use co_trap::{fast_func, FastResult, TrapFrame, Tx};
+use futures_util::Future;
+use ksc::Error::{self, EAGAIN, ETIMEDOUT};
+use ktime::TimeOutExt;
 use riscv::register::{
     scause::{self, Exception, Interrupt, Scause, Trap},
     sepc, sstatus, stval,
 };
 
 pub type KTrapFrame = Tx;
+
+pub fn poll_once<T>(fut: impl Future<Output = Result<T, Error>>) -> Result<T, Error> {
+    match ksync::poll_once(fut) {
+        Some(res) => res,
+        None => Err(EAGAIN),
+    }
+}
+
+pub async fn poll_with<T>(
+    fut: impl Future<Output = Result<T, Error>>,
+    timeout: Option<Duration>,
+) -> Result<T, Error> {
+    match timeout {
+        None => fut.await,
+        Some(Duration::ZERO) => poll_once(fut),
+        Some(dur) => fut.on_timeout(dur, || Err(ETIMEDOUT)).await,
+    }
+}
 
 #[cfg(target_arch = "riscv64")]
 core::arch::global_asm!(include_str!("trap.S"));

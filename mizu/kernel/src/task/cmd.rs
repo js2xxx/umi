@@ -19,7 +19,7 @@ use ksync::channel::Broadcast;
 use rand_riscv::rand_core::RngCore;
 use riscv::register::sstatus;
 use rv39_paging::{Attr, LAddr, ID_OFFSET, PAGE_MASK, PAGE_SHIFT, PAGE_SIZE};
-use sygnal::{ActionSet, Sig, SigSet};
+use sygnal::{Action, ActionSet, Sig, SigSet};
 use umifs::{
     path::Path,
     types::{OpenOptions, Permissions},
@@ -372,7 +372,7 @@ impl InitTask {
             task: task.clone(),
             tgroup: Arsc::new((tid, spin::RwLock::new(vec![task.clone()]))),
             counters: super::time::counters(),
-            sig_mask: SigSet::EMPTY,
+            sig_mask: Action::default_sig_mask(),
             sig_stack: None,
             brk: 0,
             virt: self.virt,

@@ -4,6 +4,7 @@ use core::{
     num::NonZeroUsize,
     ops::ControlFlow::{Break, Continue},
     sync::atomic::Ordering::SeqCst,
+    time::Duration,
 };
 
 use arsc_rs::Arsc;
@@ -11,13 +12,13 @@ use cmd::Command;
 use co_trap::{TrapFrame, UserCx};
 use ksc::{
     async_handler,
-    Error::{self, EINVAL, EPERM},
+    Error::{self, EAGAIN, EINVAL, EPERM},
     RawReg,
 };
 use ksync::{channel::Broadcast, AtomicArsc};
 use riscv::register::time;
 use rv39_paging::Attr;
-use sygnal::{Sig, SigCode, SigFields, SigInfo, SigSet};
+use sygnal::{Action, Sig, SigCode, SigFields, SigInfo};
 
 use crate::{
     executor,
@@ -33,6 +34,7 @@ use crate::{
         time::Times,
         yield_now, Child, Task, TaskEvent, TaskState,
     },
+    trap::poll_with,
 };
 
 #[async_handler]
@@ -86,7 +88,8 @@ pub async fn setitimer(
                 interval,
                 next_diff,
             } = new.read(ts.virt.as_ref()).await?;
-            Some((interval.into(), next_diff.into()))
+            (interval != Default::default() || next_diff != Default::default())
+                .then_some((interval.into(), next_diff.into()))
         };
         let counter = ts.counters.get_mut(index).ok_or(EINVAL)?;
         let (interval, next_diff) = counter.set(&ts.task.times, new);
@@ -359,7 +362,7 @@ async fn clone_task(
             Arsc::new((new_tid, spin::RwLock::new(vec![task.clone()])))
         },
         counters: super::time::counters(),
-        sig_mask: SigSet::EMPTY,
+        sig_mask: Action::default_sig_mask(),
         sig_stack: None,
         brk: ts.brk,
         virt,
@@ -439,9 +442,15 @@ pub async fn waitpid(
     ts: &mut TaskState,
     cx: UserCx<'_, fn(isize, UserPtr<i32, Out>, i32) -> Result<usize, Error>>,
 ) -> ScRet {
-    let (pid, mut wstatus, _options) = cx.args();
+    const WNOHANG: i32 = 1;
+
+    let (pid, mut wstatus, options) = cx.args();
     let inner = async move {
-        let (event, tid) = ts.wait(pid.into()).await?;
+        let timeout = (options & WNOHANG != 0).then_some(Duration::ZERO);
+        let (event, tid) = match poll_with(ts.wait(pid.into()), timeout).await {
+            Err(EAGAIN) => return Ok(0),
+            res => res?,
+        };
         if !wstatus.is_null() {
             let ws = match event {
                 TaskEvent::Exited(code, sig) => ((code & 0xff) << 8) | sig.map_or(0, Sig::raw),

@@ -14,7 +14,7 @@ test = [
 ]
 
 [dependencies]
-# Local crates
+# Local libs
 afat32 = {path = "../lib/afat32"}
 art = {path = "../lib/art"}
 co-trap = {path = "../lib/co-trap"}
@@ -31,6 +31,10 @@ rv39-paging = {path = "../lib/paging"}
 sygnal = {path = "../lib/sygnal"}
 umifs = {path = "../lib/umifs"}
 umio = {path = "../lib/umio"}
+# Local drivers
+plic = {path = "../dev/plic"}
+uart = {path = "../dev/uart"}
+virtio = {path = "../dev/virtio"}
 # External crates
 arsc-rs = {git = "https://github.com/js2xxx/arsc"}
 async-trait = "0"
@@ -40,6 +44,7 @@ fdt = "0"
 futures-util = {version = "0", default-features = false, features = ["alloc"]}
 goblin = {version = "0", default-features = false, features = ["elf32", "elf64", "endian_fd"]}
 hashbrown = {version = "0", default-features = false, features = ["inline-more"]}
+heapless = "0"
 log = "0"
 pin-project = "1"
 r0 = "1"
@@ -48,7 +53,18 @@ sbi-rt = {git = "https://github.com/js2xxx/sbi-rt", branch = "multitarget"}
 scoped-tls = {git = "https://github.com/js2xxx/scoped-tls", branch = "no_std"}
 spin = "0"
 static_assertions = "1"
-virtio-drivers = "0"
+virtio-drivers = {git = "https://github.com/rcore-os/virtio-drivers", branch = "new-netdev"}
+zerocopy = "0"
+
+[dependencies.smoltcp]
+branch = "reuse_endpoints"
+default-features = false
+features = [
+  "log",
+  "proto-ipv4",
+  "proto-ipv6",
+]
+git = "https://github.com/js2xxx/smoltcp"
 
 [build-dependencies]
 config = {path = "../lib/config", default-features = false}

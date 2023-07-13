@@ -1,3 +1,5 @@
+#![no_std]
+
 use core::{
     fmt,
     sync::atomic::{AtomicPtr, Ordering::Relaxed},
@@ -34,7 +36,7 @@ macro_rules! wait_for {
     };
 }
 
-pub struct MmioSerialPort {
+pub struct Uart {
     data: AtomicPtr<u8>,
     int_en: AtomicPtr<u8>,
     fifo_ctrl: AtomicPtr<u8>,
@@ -43,7 +45,7 @@ pub struct MmioSerialPort {
     line_sts: AtomicPtr<u8>,
 }
 
-impl MmioSerialPort {
+impl Uart {
     /// Creates a new UART interface on the given memory mapped address.
     ///
     /// # Safety
@@ -142,7 +144,7 @@ impl MmioSerialPort {
     }
 }
 
-impl fmt::Write for MmioSerialPort {
+impl fmt::Write for Uart {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         for byte in s.bytes() {
             self.send(byte);

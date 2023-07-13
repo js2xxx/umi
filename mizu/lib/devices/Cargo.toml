@@ -9,24 +9,41 @@ test = []
 
 [dependencies]
 # Local crates
-hart-id = {path = "../hart-id"}
-kmem = {path = "../kmem"}
 ksc = {path = "../ksc"}
 ksync = {path = "../ksync"}
 ktime = {path = "../ktime"}
 rand-riscv = {path = "../rand-riscv"}
-rv39-paging = {path = "../paging"}
 umio = {path = "../umio"}
 # External crates
 arsc-rs = {git = "https://github.com/js2xxx/arsc"}
 async-trait = "0"
-bitflags = "2"
 crossbeam-queue = {version = "0", default-features = false, features = ["alloc", "nightly"]}
-futures-lite = {version = "1", default-features = false, features = ["alloc"]}
 futures-util = {version = "0", default-features = false, features = ["alloc"]}
 hashbrown = {version = "0", default-features = false, features = ["inline-more"]}
+heapless = "0"
 log = "0"
+managed = {version = "0", default-features = false, features = ["alloc"]}
 spin = "0"
-static_assertions = "1"
-virtio-drivers = "0"
 volatile = "0"
+
+[dependencies.smoltcp]
+branch = "reuse_endpoints"
+default-features = false
+features = [
+  "log",
+  "medium-ethernet",
+  "medium-ip",
+  "proto-ipv4",
+  "proto-igmp",
+  "proto-dhcpv4",
+  "proto-ipv6",
+  "proto-dns",
+  "socket-raw",
+  "socket-udp",
+  "socket-tcp",
+  "socket-dhcpv4",
+  "socket-dns",
+  "async",
+  "alloc",
+]
+git = "https://github.com/js2xxx/smoltcp"

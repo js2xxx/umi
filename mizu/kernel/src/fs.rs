@@ -3,6 +3,7 @@ mod dev;
 mod pipe;
 mod proc;
 mod serial;
+pub mod socket;
 mod tmp;
 
 use alloc::{borrow::Cow, collections::BTreeMap, format, sync::Arc};
@@ -148,6 +149,7 @@ pub async fn fs_init() {
             break;
         }
     }
+    self::socket::init_stack();
 }
 
 #[allow(dead_code)]

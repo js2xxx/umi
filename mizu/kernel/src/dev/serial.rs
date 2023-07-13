@@ -8,7 +8,7 @@ use core::{
 };
 
 use crossbeam_queue::SegQueue;
-use devices::{dev::MmioSerialPort, Interrupt};
+use devices::intr::Interrupt;
 use fdt::node::FdtNode;
 use futures_util::{FutureExt, Stream};
 use ksync::event::{Event, EventListener};
@@ -16,19 +16,20 @@ use ktime::Instant;
 use log::Level;
 use rv39_paging::{PAddr, ID_OFFSET};
 use spin::{Mutex, MutexGuard, Once};
+use uart::Uart;
 
 use super::intr::intr_man;
 use crate::someb;
 
 struct Serial {
-    device: Mutex<MmioSerialPort>,
+    device: Mutex<Uart>,
     input: SegQueue<u8>,
     input_ready: Event,
 }
 
 static SERIAL: Once<Serial> = Once::new();
 
-pub struct Stdout<'a>(Option<MutexGuard<'a, MmioSerialPort>>);
+pub struct Stdout<'a>(Option<MutexGuard<'a, Uart>>);
 
 pub struct Stdin(Option<EventListener>);
 
@@ -153,6 +154,7 @@ impl log::Log for Logger {
                 println!("[{time:?}] {}#{id}: {}", record.level(), record.args())
             } else {
                 let file = record.file().unwrap_or("<NULL>");
+                let (_, file) = file.split_at(file.len().saturating_sub(32));
                 let line = OptionU32Display(record.line());
                 println!(
                     "[{time:?}] {}#{id}: [{file}:{line}] {}",
@@ -199,7 +201,7 @@ pub fn init(node: &FdtNode) -> bool {
         let paddr = PAddr::new(reg.starting_address as usize);
         let base = paddr.to_laddr(ID_OFFSET);
 
-        let mut dev = unsafe { MmioSerialPort::new(base.val()) };
+        let mut dev = unsafe { Uart::new(base.val()) };
         dev.init();
         atomic::fence(atomic::Ordering::SeqCst);
 

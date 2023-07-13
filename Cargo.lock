@@ -8,7 +8,7 @@ version = "0.1.0"
 dependencies = [
  "arsc-rs",
  "async-trait",
- "bitflags",
+ "bitflags 2.3.3",
  "concat-arrays",
  "futures-util",
  "ksc-core",
@@ -66,13 +66,13 @@ checksum = "ecc7ab41815b3c653ccd2978ec3255c81349336702dfdf62ee6f7069b12a3aae"
 
 [[package]]
 name = "async-trait"
-version = "0.1.69"
+version = "0.1.71"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b2d0f03b3640e3a630367e40c468cb7f309529c708ed1d88597047b0e7c6ef7"
+checksum = "a564d521dd56509c4c47480d00b80ee55f7e385ae48db5744c67ad50c92d2ebf"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.23",
+ "syn 2.0.25",
 ]
 
 [[package]]
@@ -98,13 +98,13 @@ checksum = "d468802bab17cbc0cc575e9b053f41e72aa36bfa6b7f55e3529ffa43161b97fa"
 
 [[package]]
 name = "bevy_utils_proc_macros"
-version = "0.10.1"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "630b92e32fa5cd7917c7d4fdbf63a90af958b01e096239f71bc4f8f3cf40c0d2"
+checksum = "9e37f2e885b0e8af59dc19871c313d3cf2a2495db35bb4d4ae0a61b3f87d5401"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 1.0.109",
+ "syn 2.0.25",
 ]
 
 [[package]]
@@ -112,6 +112,12 @@ name = "bit_field"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc827186963e592360843fb5ba4b973e145841266c1357f7180c43526f2e5b61"
+
+[[package]]
+name = "bitflags"
+version = "1.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bef38d45163c2f1dde094a7dfd33ccf595c92905c8f8f4fdc18d06fb1037718a"
 
 [[package]]
 name = "bitflags"
@@ -208,28 +214,56 @@ dependencies = [
 ]
 
 [[package]]
+name = "defmt"
+version = "0.3.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a8a2d011b2fee29fb7d659b83c43fce9a2cb4df453e16d441a51448e448f3f98"
+dependencies = [
+ "bitflags 1.3.2",
+ "defmt-macros",
+]
+
+[[package]]
+name = "defmt-macros"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "54f0216f6c5acb5ae1a47050a6645024e6edafc2ee32d421955eccfef12ef92e"
+dependencies = [
+ "defmt-parser",
+ "proc-macro-error",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.25",
+]
+
+[[package]]
+name = "defmt-parser"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "269924c02afd7f94bc4cecbfa5c379f6ffcf9766b3408fe63d22c728654eccd0"
+dependencies = [
+ "thiserror",
+]
+
+[[package]]
 name = "devices"
 version = "0.1.0"
 dependencies = [
  "arsc-rs",
  "async-trait",
- "bitflags",
  "crossbeam-queue",
- "futures-lite",
  "futures-util",
- "hart-id",
  "hashbrown",
- "kmem",
+ "heapless",
  "ksc",
  "ksync",
  "ktime",
  "log",
+ "managed",
  "rand-riscv",
- "rv39-paging",
+ "smoltcp",
  "spin",
- "static_assertions",
  "umio",
- "virtio-drivers",
  "volatile",
 ]
 
@@ -425,7 +459,7 @@ version = "0.1.0"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.23",
+ "syn 2.0.25",
 ]
 
 [[package]]
@@ -499,6 +533,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b06a4cde4c0f271a446782e3eff8de789548ce57dbc8eca9292c27f4a42004b4"
 
 [[package]]
+name = "managed"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ca88d725a0a943b096803bd34e73a4437208b6077654cc4ecb2947a5f91618d"
+
+[[package]]
 name = "memchr"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -536,7 +576,7 @@ dependencies = [
  "arsc-rs",
  "art",
  "async-trait",
- "bitflags",
+ "bitflags 2.3.3",
  "co-trap",
  "config",
  "crossbeam-queue",
@@ -546,6 +586,7 @@ dependencies = [
  "goblin",
  "hart-id",
  "hashbrown",
+ "heapless",
  "kalloc",
  "kmem",
  "ksc",
@@ -553,18 +594,23 @@ dependencies = [
  "ktime",
  "log",
  "pin-project",
+ "plic",
  "r0",
  "rand-riscv",
  "riscv",
  "rv39-paging",
  "sbi-rt",
  "scoped-tls",
+ "smoltcp",
  "spin",
  "static_assertions",
  "sygnal",
+ "uart",
  "umifs",
  "umio",
+ "virtio",
  "virtio-drivers",
+ "zerocopy",
 ]
 
 [[package]]
@@ -645,7 +691,7 @@ checksum = "ec2e072ecce94ec471b13398d5402c188e76ac03cf74dd1a975161b23a3f6d9c"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.23",
+ "syn 2.0.25",
 ]
 
 [[package]]
@@ -667,16 +713,56 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
+name = "plic"
+version = "0.1.0"
+dependencies = [
+ "crossbeam-queue",
+ "devices",
+ "hart-id",
+ "hashbrown",
+ "ksync",
+ "log",
+ "rand-riscv",
+ "spin",
+ "static_assertions",
+ "volatile",
+]
+
+[[package]]
 name = "ppv-lite86"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5b40af805b3121feab8a3c29f04d8ad262fa8e0561883e7653e024ae4479e6de"
 
 [[package]]
-name = "proc-macro2"
-version = "1.0.63"
+name = "proc-macro-error"
+version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b368fba921b0dce7e60f5e04ec15e565b3303972b42bcfde1d0713b881959eb"
+checksum = "da25490ff9892aab3fcf7c36f08cfb902dd3e71ca0f9f9517bea02a73a5ce38c"
+dependencies = [
+ "proc-macro-error-attr",
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
+ "version_check",
+]
+
+[[package]]
+name = "proc-macro-error-attr"
+version = "1.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a1be40180e52ecc98ad80b184934baf3d0d29f979574e439af5a55274b35f869"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "version_check",
+]
+
+[[package]]
+name = "proc-macro2"
+version = "1.0.64"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "78803b62cbf1f46fde80d7c0e803111524b9877184cfe7c3033659490ac7a7da"
 dependencies = [
  "unicode-ident",
 ]
@@ -767,7 +853,7 @@ dependencies = [
 name = "rv39-paging"
 version = "0.1.0"
 dependencies = [
- "bitflags",
+ "bitflags 2.3.3",
  "static_assertions",
 ]
 
@@ -822,7 +908,7 @@ checksum = "1db149f81d46d2deba7cd3c50772474707729550221e69588478ebf9ada425ae"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.23",
+ "syn 2.0.25",
 ]
 
 [[package]]
@@ -838,6 +924,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6528351c9bc8ab22353f9d776db39a20288e8d6c37ef8cfe3317cf875eecfc2d"
 dependencies = [
  "autocfg",
+]
+
+[[package]]
+name = "smoltcp"
+version = "0.10.0"
+source = "git+https://github.com/js2xxx/smoltcp?branch=reuse_endpoints#2eb3593f8f1767a57b90b33b57c3815dd333cd9a"
+dependencies = [
+ "bitflags 1.3.2",
+ "byteorder",
+ "cfg-if",
+ "defmt",
+ "heapless",
+ "log",
+ "managed",
 ]
 
 [[package]]
@@ -897,13 +997,40 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "2.0.23"
+version = "2.0.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "59fb7d6d8281a51045d62b8eb3a7d1ce347b76f312af50cd3dc0af39c87c1737"
+checksum = "15e3fc8c0c74267e2df136e5e5fb656a464158aa57624053375eb9c8c6e25ae2"
 dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "thiserror"
+version = "1.0.43"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a35fc5b8971143ca348fa6df4f024d4d55264f3468c71ad1c2f365b0a4d58c42"
+dependencies = [
+ "thiserror-impl",
+]
+
+[[package]]
+name = "thiserror-impl"
+version = "1.0.43"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "463fe12d7993d3b327787537ce8dd4dfa058de32fc2b195ef3cde03dc4771e8f"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.25",
+]
+
+[[package]]
+name = "uart"
+version = "0.1.0"
+dependencies = [
+ "bitflags 2.3.3",
 ]
 
 [[package]]
@@ -912,7 +1039,7 @@ version = "0.1.0"
 dependencies = [
  "arsc-rs",
  "async-trait",
- "bitflags",
+ "bitflags 2.3.3",
  "ksc-core",
  "ktime-core",
  "log",
@@ -926,7 +1053,7 @@ version = "0.1.0"
 dependencies = [
  "arsc-rs",
  "async-trait",
- "bitflags",
+ "bitflags 2.3.3",
  "futures-util",
  "ksc-core",
  "log",
@@ -945,12 +1072,31 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "49874b5167b65d7193b8aba1567f5c7d93d001cafc34600cee003eda787e483f"
 
 [[package]]
-name = "virtio-drivers"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6c1b8da1e59e77cdae29b32fb936614dc849352d7f58da199072067fe402bbcf"
+name = "virtio"
+version = "0.1.0"
 dependencies = [
- "bitflags",
+ "arsc-rs",
+ "async-trait",
+ "atomic_refcell",
+ "crossbeam-queue",
+ "devices",
+ "futures-util",
+ "kmem",
+ "ksc",
+ "ksync",
+ "log",
+ "spin",
+ "static_assertions",
+ "umio",
+ "virtio-drivers",
+]
+
+[[package]]
+name = "virtio-drivers"
+version = "0.4.0"
+source = "git+https://github.com/rcore-os/virtio-drivers?branch=new-netdev#409ee723c92adf309e825a7b87f53049707ed306"
+dependencies = [
+ "bitflags 1.3.2",
  "log",
  "zerocopy",
 ]

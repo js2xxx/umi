@@ -1,5 +1,6 @@
 mod block;
 mod intr;
+mod net;
 mod serial;
 mod virtio;
 
@@ -12,6 +13,7 @@ use spin::{Lazy, Once};
 pub use self::{
     block::{block, blocks},
     intr::INTR,
+    net::{net, nets},
     serial::{Stdin, Stdout},
 };
 
