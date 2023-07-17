@@ -11,7 +11,7 @@ use core::{
 use arsc_rs::Arsc;
 use futures_util::{task::AtomicWaker, Future, FutureExt};
 use hashbrown::HashMap;
-use ktime::{Instant, Timer};
+use ktime::{Instant, InstantExt, Timer};
 use rand_riscv::RandomState;
 use smoltcp::{
     iface::{self, Interface, SocketHandle, SocketSet},
@@ -301,6 +301,13 @@ impl Stack {
             state.dns_waker.wake();
         })
     }
+
+    fn poll(&self, cx: &mut Context) -> Option<Instant> {
+        ksync::critical(|| {
+            let mut write = self.state.write();
+            write.poll(cx, &mut *self.device.write(), &mut self.socket.write())
+        })
+    }
 }
 
 impl State {
@@ -465,12 +472,14 @@ impl Future for StackBackground {
                 self.timer = None;
             }
             // log::trace!("Start polling net stack");
-            let ddl = self
-                .stack
-                .with_mut(|device, state, s| state.poll(cx, device, s));
+            let ddl = self.stack.poll(cx);
             // log::trace!("End polling net stack with deadline {ddl:?}");
             match ddl {
-                Some(ddl) => self.timer = Some(Timer::deadline(ddl)),
+                Some(ddl) if ddl.to_su() == (0, 0) => {
+                    cx.waker().wake_by_ref();
+                    break Poll::Pending;
+                }
+                Some(ddl) => self.timer = Some(ddl.into()),
                 None => break Poll::Pending,
             }
         }

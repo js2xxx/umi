@@ -242,9 +242,6 @@ pub async fn test_all() {
     println!("run busybox_testcode.sh");
     run_busybox(Some("./busybox_testcode.sh")).await;
 
-    println!("run iozone_testcode.sh");
-    run_busybox(Some("./iozone_testcode.sh")).await;
-
     println!("run libctest_testcode.sh");
     run_busybox(Some("./libctest_testcode.sh")).await;
 
@@ -256,6 +253,9 @@ pub async fn test_all() {
 
     println!("run iperf_testcode.sh");
     run_busybox(Some("./iperf_testcode.sh")).await;
+
+    println!("run iozone_testcode.sh");
+    run_busybox(Some("./iozone_testcode.sh")).await;
 
     println!("run cyclic_testcode.sh");
     run_busybox(Some("./cyclic_testcode.sh")).await;
