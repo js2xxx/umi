@@ -1,4 +1,3 @@
-use alloc::vec::Vec;
 use core::{
     ffi::CStr,
     fmt,
@@ -9,12 +8,12 @@ use core::{
 };
 
 use futures_util::Future;
-use kmem::Virt;
+use kmem::{Virt, VirtCommitGuard};
 use ksc::{
     Error::{self, EFAULT, EINVAL, ERANGE},
     RawReg,
 };
-use rv39_paging::{Attr, LAddr, PAddr, ID_OFFSET, PAGE_MASK, PAGE_SIZE};
+use rv39_paging::{Attr, LAddr, PAGE_MASK, PAGE_SIZE};
 use scoped_tls::scoped_thread_local;
 use umifs::path::Path;
 
@@ -325,28 +324,8 @@ impl UserBuffer {
         self.addr
     }
 
-    pub async fn as_slice(&self, virt: Pin<&Virt>, len: usize) -> Result<Vec<&[u8]>, Error> {
-        let paddrs = virt
-            .commit_range(self.addr..(self.addr + len), Attr::READABLE)
-            .await?;
-        Ok(paddrs
-            .into_iter()
-            .map(|range| unsafe { LAddr::as_slice(PAddr::range_to_laddr(range, ID_OFFSET)) })
-            .collect::<Vec<_>>())
-    }
-
-    pub async fn as_mut_slice(
-        &mut self,
-        virt: Pin<&Virt>,
-        len: usize,
-    ) -> Result<Vec<&mut [u8]>, Error> {
-        let paddrs = virt
-            .commit_range(self.addr..(self.addr + len), Attr::WRITABLE)
-            .await?;
-        Ok(paddrs
-            .into_iter()
-            .map(|range| unsafe { LAddr::as_mut_slice(PAddr::range_to_laddr(range, ID_OFFSET)) })
-            .collect::<Vec<_>>())
+    pub async fn commit(&self, guard: &mut VirtCommitGuard<'_>, len: usize) -> Result<(), Error> {
+        guard.push(self.addr..(self.addr + len)).await
     }
 }
 

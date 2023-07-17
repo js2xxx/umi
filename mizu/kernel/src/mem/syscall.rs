@@ -198,9 +198,7 @@ pub async fn mmap(
         let addr = ts.virt.map(addr, phys, offset, count, attr).await?;
 
         if flags.contains(Flags::POPULATE) {
-            ts.virt
-                .commit_range(addr..(addr + len), Default::default())
-                .await?;
+            ts.virt.commit(addr, Default::default()).await?;
         }
 
         Ok(addr.val())

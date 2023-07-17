@@ -36,7 +36,7 @@ pub async fn libc() {
     let oo = OpenOptions::RDONLY;
     let perm = Default::default();
 
-    let scripts = ["run-dynamic.sh", "run-static.sh"];
+    let scripts = ["run-static.sh", "run-dynamic.sh"];
 
     let stream = stream::iter(scripts)
         .then(|sh| crate::fs::open(sh.as_ref(), oo, perm))

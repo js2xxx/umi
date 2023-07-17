@@ -13,12 +13,12 @@ use core::{
 
 use arsc_rs::Arsc;
 use co_trap::TrapFrame;
-use kmem::{Phys, Virt};
+use kmem::{Frame, Phys, Virt};
 use ksc::Error::{self, EISDIR, ENOSYS};
 use ksync::channel::Broadcast;
 use rand_riscv::rand_core::RngCore;
 use riscv::register::sstatus;
-use rv39_paging::{Attr, LAddr, ID_OFFSET, PAGE_MASK, PAGE_SHIFT, PAGE_SIZE};
+use rv39_paging::{Attr, LAddr, PAGE_MASK, PAGE_SHIFT, PAGE_SIZE};
 use sygnal::{Action, ActionSet, Sig, SigSet};
 use umifs::{
     path::Path,
@@ -154,7 +154,7 @@ struct InitTask {
 impl InitTask {
     async unsafe fn populate_args(
         stack: LAddr,
-        virt: Pin<&Virt>,
+        frame: &Arsc<Frame>,
         args: &[String],
         envs: &[String],
         auxv: &[(u8, usize)],
@@ -168,11 +168,13 @@ impl InitTask {
         let envs_len = envs.iter().map(|s| s.len() + 1).sum::<usize>();
 
         let len = argc_len + argv_len + envp_len + auxv_len + rand_len + args_len + envs_len;
+        if len >= PAGE_SIZE {
+            return Err(ENOSYS);
+        }
+        let kernel_end = LAddr::from(frame.as_ptr_range().end);
         let ret = LAddr::from((stack - len).val() & !7);
 
-        let paddr = virt.commit(ret, Default::default()).await?;
-
-        let argc_ptr = paddr.to_laddr(ID_OFFSET);
+        let argc_ptr = LAddr::from((kernel_end - len).val() & !7);
         let mut argv_ptr = argc_ptr + argc_len;
         let argv_addr = ret + argc_len;
 
@@ -243,19 +245,28 @@ impl InitTask {
         let stack_size = (stack_size + PAGE_MASK) & !PAGE_MASK;
 
         let addr = virt
-            .map(
-                None,
-                Phys::new(true),
-                0,
-                (stack_size >> PAGE_SHIFT) + 1,
-                stack_attr,
-            )
-            .await?;
-        virt.reprotect(addr..(addr + PAGE_SIZE), stack_attr - Attr::WRITABLE)
+            .find_free(None, (stack_size >> PAGE_SHIFT) + 1)
+            .await?
+            .start;
+
+        let phys = Phys::new(true);
+        let (frame, _) = phys
+            .commit(stack_size >> PAGE_SHIFT, Some(PAGE_SIZE))
             .await?;
 
         let end = addr + PAGE_SIZE + stack_size;
-        let sp = unsafe { Self::populate_args(end, virt, args, envs, auxv) }.await?;
+        let sp = unsafe { Self::populate_args(end, &frame, args, envs, auxv) }.await?;
+
+        virt.map(
+            Some(addr),
+            phys,
+            0,
+            (stack_size >> PAGE_SHIFT) + 1,
+            stack_attr,
+        )
+        .await?;
+        virt.reprotect(addr..(addr + PAGE_SIZE), stack_attr - Attr::WRITABLE)
+            .await?;
 
         log::trace!("InitTask::load_stack finish {sp:?}");
         Ok(sp)

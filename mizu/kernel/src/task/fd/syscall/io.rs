@@ -11,6 +11,7 @@ use ksc::{
     Error::{self, *},
 };
 use ktime::TimeOutExt;
+use rv39_paging::Attr;
 use sygnal::SigSet;
 use umio::SeekFrom;
 
@@ -26,18 +27,19 @@ pub async fn read(
     ts: &mut TaskState,
     cx: UserCx<'_, fn(i32, UserBuffer, usize) -> Result<usize, Error>>,
 ) -> ScRet {
-    let (fd, mut buffer, len) = cx.args();
+    let (fd, buffer, len) = cx.args();
     let fut = async move {
         if len == 0 {
             return Ok(0);
         }
         // log::trace!("user read fd = {fd}, buffer len = {len}");
-        let mut bufs = buffer.as_mut_slice(ts.virt.as_ref(), len).await?;
+        let mut guard = ts.virt.start_commit(Attr::WRITABLE).await;
+        buffer.commit(&mut guard, len).await?;
 
         let entry = ts.files.get(fd).await?;
         let io = entry.to_io().ok_or(EBADF)?;
 
-        io.read(&mut bufs).await
+        io.read(guard.as_mut_slice()).await
     };
     cx.ret(fut.await);
     ScRet::Continue(None)
@@ -54,12 +56,13 @@ pub async fn write(
             return Ok(0);
         }
         // log::trace!("user write fd = {fd}, buffer len = {len}");
-        let mut bufs = buffer.as_slice(ts.virt.as_ref(), len).await?;
+        let mut guard = ts.virt.start_commit(Attr::READABLE).await;
+        buffer.commit(&mut guard, len).await?;
 
         let entry = ts.files.get(fd).await?;
         let io = entry.to_io().ok_or(EBADF)?;
 
-        io.write(&mut bufs).await
+        io.write(guard.as_slice()).await
     };
     cx.ret(fut.await);
     ScRet::Continue(None)
@@ -70,17 +73,18 @@ pub async fn pread(
     ts: &mut TaskState,
     cx: UserCx<'_, fn(i32, UserBuffer, usize, usize) -> Result<usize, Error>>,
 ) -> ScRet {
-    let (fd, mut buffer, len, offset) = cx.args();
+    let (fd, buffer, len, offset) = cx.args();
     let fut = async move {
         if len == 0 {
             return Ok(0);
         }
-        let mut bufs = buffer.as_mut_slice(ts.virt.as_ref(), len).await?;
+        let mut guard = ts.virt.start_commit(Attr::WRITABLE).await;
+        buffer.commit(&mut guard, len).await?;
 
         let entry = ts.files.get(fd).await?;
         let io = entry.to_io().ok_or(EBADF)?;
 
-        io.read_at(offset, &mut bufs).await
+        io.read_at(offset, guard.as_mut_slice()).await
     };
     cx.ret(fut.await);
     ScRet::Continue(None)
@@ -96,12 +100,13 @@ pub async fn pwrite(
         if len == 0 {
             return Ok(0);
         }
-        let mut bufs = buffer.as_slice(ts.virt.as_ref(), len).await?;
+        let mut guard = ts.virt.start_commit(Attr::READABLE).await;
+        buffer.commit(&mut guard, len).await?;
 
         let entry = ts.files.get(fd).await?;
         let io = entry.to_io().ok_or(EBADF)?;
 
-        io.write_at(offset, &mut bufs).await
+        io.write_at(offset, guard.as_slice()).await
     };
     cx.ret(fut.await);
     ScRet::Continue(None)
@@ -132,16 +137,13 @@ pub async fn readv(
         let mut iov_buf = [Default::default(); MAX_IOV_LEN];
         iov.read_slice(ts.virt.as_ref(), &mut iov_buf[..vlen])
             .await?;
-        let virt = ts.virt.as_ref();
-        let mut bufs = stream::iter(iov_buf[..vlen].iter_mut())
-            .then(|iov| iov.buffer.as_mut_slice(virt, iov.len))
-            .try_fold(Vec::new(), |mut acc, mut iov| async move {
-                acc.append(&mut iov);
-                Ok(acc)
-            })
-            .await?;
 
-        io.read(&mut bufs).await
+        let mut guard = ts.virt.start_commit(Attr::WRITABLE).await;
+        for iov in iov_buf[..vlen].iter() {
+            iov.buffer.commit(&mut guard, iov.len).await?;
+        }
+
+        io.read(guard.as_mut_slice()).await
     };
     cx.ret(fut.await);
     ScRet::Continue(None)
@@ -164,16 +166,13 @@ pub async fn writev(
         let mut iov_buf = [Default::default(); MAX_IOV_LEN];
         iov.read_slice(ts.virt.as_ref(), &mut iov_buf[..vlen])
             .await?;
-        let virt = ts.virt.as_ref();
-        let mut bufs = stream::iter(iov_buf[..vlen].iter())
-            .then(|iov| iov.buffer.as_slice(virt, iov.len))
-            .try_fold(Vec::new(), |mut acc, mut iov| async move {
-                acc.append(&mut iov);
-                Ok(acc)
-            })
-            .await?;
 
-        io.write(&mut bufs).await
+        let mut guard = ts.virt.start_commit(Attr::READABLE).await;
+        for iov in iov_buf[..vlen].iter() {
+            iov.buffer.commit(&mut guard, iov.len).await?;
+        }
+
+        io.write(guard.as_slice()).await
     };
     cx.ret(fut.await);
     ScRet::Continue(None)
@@ -196,16 +195,13 @@ pub async fn preadv(
         let mut iov_buf = [Default::default(); MAX_IOV_LEN];
         iov.read_slice(ts.virt.as_ref(), &mut iov_buf[..vlen])
             .await?;
-        let virt = ts.virt.as_ref();
-        let mut bufs = stream::iter(iov_buf[..vlen].iter_mut())
-            .then(|iov| iov.buffer.as_mut_slice(virt, iov.len))
-            .try_fold(Vec::new(), |mut acc, mut iov| async move {
-                acc.append(&mut iov);
-                Ok(acc)
-            })
-            .await?;
 
-        io.read_at(offset, &mut bufs).await
+        let mut guard = ts.virt.start_commit(Attr::WRITABLE).await;
+        for iov in iov_buf[..vlen].iter() {
+            iov.buffer.commit(&mut guard, iov.len).await?;
+        }
+
+        io.read_at(offset, guard.as_mut_slice()).await
     };
     cx.ret(fut.await);
     ScRet::Continue(None)
@@ -228,16 +224,13 @@ pub async fn pwritev(
         let mut iov_buf = [Default::default(); MAX_IOV_LEN];
         iov.read_slice(ts.virt.as_ref(), &mut iov_buf[..vlen])
             .await?;
-        let virt = ts.virt.as_ref();
-        let mut bufs = stream::iter(iov_buf[..vlen].iter())
-            .then(|iov| iov.buffer.as_slice(virt, iov.len))
-            .try_fold(Vec::new(), |mut acc, mut iov| async move {
-                acc.append(&mut iov);
-                Ok(acc)
-            })
-            .await?;
 
-        io.write_at(offset, &mut bufs).await
+        let mut guard = ts.virt.start_commit(Attr::READABLE).await;
+        for iov in iov_buf[..vlen].iter() {
+            iov.buffer.commit(&mut guard, iov.len).await?;
+        }
+
+        io.write_at(offset, guard.as_slice()).await
     };
     cx.ret(fut.await);
     ScRet::Continue(None)

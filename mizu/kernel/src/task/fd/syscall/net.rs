@@ -8,6 +8,7 @@ use ksc::{
     async_handler,
     Error::{self, EAFNOSUPPORT, EAGAIN, EINVAL, ENOPROTOOPT, ENOTCONN, ENOTSOCK},
 };
+use rv39_paging::Attr;
 use smoltcp::wire::{IpAddress, IpEndpoint, IpListenEndpoint, Ipv4Address, Ipv6Address};
 use umifs::types::{OpenOptions, Permissions};
 use umio::IntoAnyExt;
@@ -368,13 +369,15 @@ pub async fn sendto(
 ) -> ScRet {
     let (fd, buf, len, _flags, addr, addr_len) = cx.args();
     let fut = async {
-        let mut buf = buf.as_slice(ts.virt.as_ref(), len).await?;
+        let mut guard = ts.virt.start_commit(Attr::READABLE).await;
+        buf.commit(&mut guard, len).await?;
+
         let endpoint = ipaddr(ts.virt.as_ref(), addr, addr_len).await?;
 
         let mut storage = None;
         let (socket, nonblock) = sock(&ts.files, fd, &mut storage).await?;
 
-        socket.send(&mut buf, endpoint, nonblock).await
+        socket.send(guard.as_slice(), endpoint, nonblock).await
     };
     cx.ret(fut.await);
     ScRet::Continue(None)
@@ -395,14 +398,15 @@ pub async fn recvfrom(
         ) -> Result<usize, Error>,
     >,
 ) -> ScRet {
-    let (fd, mut buf, len, _flags, ptr, addr_len) = cx.args();
+    let (fd, buf, len, _flags, ptr, addr_len) = cx.args();
     let fut = async {
-        let mut buf = buf.as_mut_slice(ts.virt.as_ref(), len).await?;
+        let mut guard = ts.virt.start_commit(Attr::WRITABLE).await;
+        buf.commit(&mut guard, len).await?;
 
         let mut storage = None;
         let (socket, nonblock) = sock(&ts.files, fd, &mut storage).await?;
 
-        let (len, endpoint) = socket.receive(&mut buf, nonblock).await?;
+        let (len, endpoint) = socket.receive(guard.as_mut_slice(), nonblock).await?;
         if let Some(IpEndpoint { addr, port }) = endpoint {
             write_ipaddr(ts.virt.as_ref(), (Some(addr), port), ptr, addr_len).await?;
         }
