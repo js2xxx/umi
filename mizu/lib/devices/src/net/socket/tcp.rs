@@ -434,7 +434,7 @@ impl Socket {
             }) => ip_mtu - IPV6_HEADER_LEN,
             None => ip_mtu - IPV4_HEADER_LEN.max(IPV6_HEADER_LEN),
         };
-        tcp_mtu.min(BUFFER_CAP) - TCP_HEADER_LEN
+        (tcp_mtu - TCP_HEADER_LEN).min(BUFFER_CAP)
     }
 }
 

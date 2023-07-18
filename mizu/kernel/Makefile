@@ -26,3 +26,7 @@ build:
 		$(KERNEL_RAW) -o $(ROOT)/kernel-qemu
 	rust-objdump $(ROOT)/kernel-qemu -CxR > $(KERNEL_META)
 	rust-objdump $(ROOT)/kernel-qemu -Cd > $(KERNEL_ASM)
+ifeq ($(BOARD),cv1811h)
+	rust-objcopy --binary-architecture=riscv64 $(ROOT)/kernel-qemu \
+		--strip-all -O binary $(ROOT)/os.bin
+endif

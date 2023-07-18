@@ -5,8 +5,6 @@ name = "ktime-core"
 version = "0.1.0"
 
 [features]
-default = ["qemu-virt"]
-qemu-virt = ["config/qemu-virt"]
 test = []
 
 [dependencies]

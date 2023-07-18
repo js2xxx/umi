@@ -24,6 +24,11 @@ bitflags! {
         const ACCESSED = 1 << 6;
         const DIRTY = 1 << 7;
 
+        #[cfg(feature = "cv1811h")]
+        const CACHABLE = 1 << 62;
+        #[cfg(feature = "cv1811h")]
+        const STRONG_ORDER = 1 << 63;
+
         const KERNEL_R = Self::VALID.bits() | Self::READABLE.bits() | Self::GLOBAL.bits();
         const KERNEL_RW = Self::KERNEL_R.bits() | Self::WRITABLE.bits();
         const KERNEL_RWX = Self::KERNEL_RW.bits() | Self::EXECUTABLE.bits();
@@ -37,6 +42,21 @@ bitflags! {
 
 /// attribute of page based on
 impl Attr {
+    cfg_if::cfg_if! {
+        if #[cfg(feature = "cv1811h")] {
+            pub const KERNEL_MEM: Self = Self::KERNEL_RWX
+                .union(Self::CACHABLE)
+                .union(Self::ACCESSED)
+                .union(Self::DIRTY);
+            pub const KERNEL_DEV: Self = Self::KERNEL_RWX.union(Self::STRONG_ORDER)
+                .union(Self::ACCESSED)
+                .union(Self::DIRTY);
+        } else {
+            pub const KERNEL_MEM: Self = Self::KERNEL_RWX;
+            pub const KERNEL_DEV: Self = Self::KERNEL_RWX;
+        }
+    }
+
     #[inline]
     pub const fn builder() -> AttrBuilder {
         AttrBuilder::new()
@@ -59,8 +79,16 @@ pub struct AttrBuilder {
 
 impl AttrBuilder {
     pub const fn new() -> AttrBuilder {
-        AttrBuilder {
-            attr: Attr::empty(),
+        cfg_if::cfg_if! {
+            if #[cfg(feature = "cv1811h")] {
+                AttrBuilder {
+                    attr: Attr::CACHABLE.union(Attr::ACCESSED).union(Attr::DIRTY),
+                }
+            } else {
+                AttrBuilder {
+                    attr: Attr::empty(),
+                }
+            }
         }
     }
 

@@ -37,6 +37,11 @@ impl fmt::Write for Stdout<'_> {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         if let Some(serial) = &mut self.0 {
             serial.write_str(s)?;
+        } else {
+            s.bytes().for_each(|b| {
+                #[allow(deprecated)]
+                sbi_rt::legacy::console_putchar(b.into());
+            })
         }
         Ok(())
     }
@@ -187,7 +192,23 @@ async fn dispatcher(intr: Interrupt) {
     }
 }
 
-pub fn init(node: &FdtNode) -> bool {
+pub unsafe fn init_logger() {
+    let level = match option_env!("RUST_LOG") {
+        Some("error") => Level::Error,
+        Some("warn") => Level::Warn,
+        Some("info") => Level::Info,
+        Some("debug") => Level::Debug,
+        Some("trace") => Level::Trace,
+        _ => Level::Warn,
+    };
+    unsafe {
+        let logger = LOGGER.write(Logger(level, Mutex::new(())));
+        log::set_logger(logger).unwrap();
+        log::set_max_level(level.to_level_filter());
+    }
+}
+
+fn init(node: &FdtNode, stride: usize) -> bool {
     let mut regs = someb!(node.reg());
     let reg = someb!(regs.next());
 
@@ -201,25 +222,13 @@ pub fn init(node: &FdtNode) -> bool {
         let paddr = PAddr::new(reg.starting_address as usize);
         let base = paddr.to_laddr(ID_OFFSET);
 
-        let mut dev = unsafe { Uart::new(base.val()) };
+        let mut dev = unsafe { Uart::new(base.cast(), stride) };
+        log::trace!("Initializing debug UART, base = {base:?}");
         dev.init();
+        log::trace!("Done");
         atomic::fence(atomic::Ordering::SeqCst);
 
         crate::executor().spawn(dispatcher(intr)).detach();
-
-        let level = match option_env!("RUST_LOG") {
-            Some("error") => Level::Error,
-            Some("warn") => Level::Warn,
-            Some("info") => Level::Info,
-            Some("debug") => Level::Debug,
-            Some("trace") => Level::Trace,
-            _ => Level::Warn,
-        };
-        unsafe {
-            let logger = LOGGER.write(Logger(level, Mutex::new(())));
-            log::set_logger(logger).unwrap();
-            log::set_max_level(level.to_level_filter());
-        }
 
         Serial {
             device: Mutex::new(dev),
@@ -228,4 +237,12 @@ pub fn init(node: &FdtNode) -> bool {
         }
     });
     true
+}
+
+pub fn init_ns16550a(node: &FdtNode) -> bool {
+    init(node, 1)
+}
+
+pub fn init_dw_apb_uart(node: &FdtNode) -> bool {
+    init(node, 4)
 }

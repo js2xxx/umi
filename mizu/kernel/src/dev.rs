@@ -14,12 +14,13 @@ pub use self::{
     block::{block, blocks},
     intr::INTR,
     net::{net, nets},
-    serial::{Stdin, Stdout},
+    serial::{init_logger, Stdin, Stdout},
 };
 
 static DEV_INIT: Lazy<Handlers<&str, &FdtNode, bool>> = Lazy::new(|| {
     Handlers::new()
-        .map("ns16550a", serial::init)
+        .map("ns16550a", serial::init_ns16550a)
+        .map("snps,dw-apb-uart", serial::init_dw_apb_uart)
         .map("riscv,plic0", intr::init_plic)
         .map("virtio,mmio", virtio::init_mmio)
 });

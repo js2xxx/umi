@@ -172,6 +172,7 @@ dependencies = [
 name = "config"
 version = "0.1.0"
 dependencies = [
+ "cfg-if",
  "num-rational",
 ]
 
@@ -854,6 +855,7 @@ name = "rv39-paging"
 version = "0.1.0"
 dependencies = [
  "bitflags 2.3.3",
+ "cfg-if",
  "static_assertions",
 ]
 
@@ -1031,6 +1033,7 @@ name = "uart"
 version = "0.1.0"
 dependencies = [
  "bitflags 2.3.3",
+ "volatile",
 ]
 
 [[package]]

@@ -11,11 +11,10 @@ use ksc::{
     Error::{self, *},
 };
 use ktime::TimeOutExt;
-use rv39_paging::Attr;
+use rv39_paging::{Attr, PAGE_SIZE};
 use sygnal::SigSet;
 use umio::SeekFrom;
 
-use super::MAX_PATH_LEN;
 use crate::{
     mem::{In, InOut, UserBuffer, UserPtr},
     syscall::{ffi::Ts, ScRet},
@@ -272,11 +271,11 @@ pub async fn sendfile(
         let output = ts.files.get(output).await?.to_io().ok_or(EISDIR)?;
         let input = ts.files.get(input).await?.to_io().ok_or(EISDIR)?;
 
-        let mut buf = vec![0; count.min(MAX_PATH_LEN)];
+        let mut buf = kmem::Frame::new()?;
         if offset_ptr.is_null() {
             let mut ret = 0;
             while count > 0 {
-                let len = count.min(MAX_PATH_LEN);
+                let len = count.min(PAGE_SIZE);
                 let read_len = input.read(&mut [&mut buf[..len]]).await?;
                 let written_len = output.write(&mut [&buf[..read_len]]).await?;
                 ret += written_len;
@@ -291,7 +290,7 @@ pub async fn sendfile(
             let mut offset = offset_ptr.read(ts.virt.as_ref()).await?;
             let mut ret = 0;
             while count > 0 {
-                let len = count.min(MAX_PATH_LEN);
+                let len = count.min(PAGE_SIZE);
                 let read_len = input.read_at(offset, &mut [&mut buf[..len]]).await?;
                 let written_len = output.write(&mut [&buf[..read_len]]).await?;
 

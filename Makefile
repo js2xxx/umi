@@ -18,6 +18,7 @@ build:
 	cp -rf cargo-config/* .cargo
 	mkdir -p debug
 	cd mizu/kernel && make build
+ifeq ($(BOARD), qemu-virt)
 	cp $(SBI) $(ROOT)/sbi-qemu
 
 QEMU_ARGS := -monitor stdio \
@@ -28,18 +29,23 @@ QEMU_ARGS := -monitor stdio \
 	-drive file=$(ROOTFS),if=none,format=raw,id=x0 \
 	-device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0 \
 	-device virtio-net-device,netdev=net \
-	-netdev user,id=net
-
-ifeq ($(BOARD), qemu-virt)
-	QEMU_ARGS += -machine virt \
-		-bios $(SBI)
+	-netdev user,id=net \
+	-machine virt \
+	-bios $(SBI)
 endif
 
 run: build
+ifeq ($(BOARD), qemu-virt)
 	qemu-system-riscv64 $(QEMU_ARGS)
+endif
+ifeq ($(BOARD), cv1811h)
+	cp -f os.bin /srv/tftp
+endif
 
 debug: build
+ifeq ($(BOARD), qemu-virt)
 	qemu-system-riscv64 $(QEMU_ARGS) -s -S
+endif
 
 test:
 ifeq ($(MODE),debug)

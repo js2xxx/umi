@@ -67,6 +67,10 @@ macro_rules! impl_primitives {
 }
 impl_primitives!(bool, char, u8, u16, u32, u64, usize, i8, i16, i32, i64, isize);
 
+impl Param for &'_ str {
+    type Item<'a> = &'a str;
+}
+
 impl<T: Param, E: Param> Param for Result<T, E> {
     type Item<'a> = Result<<T as Param>::Item<'a>, <E as Param>::Item<'a>>;
 }

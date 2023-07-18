@@ -5,8 +5,9 @@ name = "config"
 version = "0.1.0"
 
 [features]
-default = ["qemu-virt"]
+cv1811h = []
 qemu-virt = []
 
 [dependencies]
+cfg-if = "1"
 num-rational = {version = "0", default-features = false}

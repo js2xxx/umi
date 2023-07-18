@@ -5,8 +5,8 @@ name = "mizu"
 version = "0.1.0"
 
 [features]
-default = ["qemu-virt"]
-qemu-virt = ["config/qemu-virt"]
+cv1811h = ["config/cv1811h", "rv39-paging/cv1811h", "uart/uart-status"]
+qemu-virt = ["config/qemu-virt", "rv39-paging/qemu-virt"]
 test = [
   "art/test",
   "kalloc/test",
@@ -18,7 +18,7 @@ test = [
 afat32 = {path = "../lib/afat32"}
 art = {path = "../lib/art"}
 co-trap = {path = "../lib/co-trap"}
-config = {path = "../lib/config", default-features = false}
+config = {path = "../lib/config"}
 devices = {path = "../lib/devices"}
 hart-id = {path = "../lib/hart-id"}
 kalloc = {path = "../lib/kalloc"}
@@ -49,7 +49,7 @@ log = "0"
 pin-project = "1"
 r0 = "1"
 riscv = "0"
-sbi-rt = {git = "https://github.com/js2xxx/sbi-rt", branch = "multitarget"}
+sbi-rt = {git = "https://github.com/js2xxx/sbi-rt", branch = "multitarget", features = ["legacy"]}
 scoped-tls = {git = "https://github.com/js2xxx/scoped-tls", branch = "no_std"}
 spin = "0"
 static_assertions = "1"

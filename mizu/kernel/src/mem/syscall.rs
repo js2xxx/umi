@@ -35,8 +35,13 @@ pub async fn brk(ts: &mut TaskState, cx: UserCx<'_, fn(usize) -> Result<usize, E
             let count = (new_page - old_page) >> PAGE_SHIFT;
             if count > 0 {
                 let phys = Phys::new(true);
+                let attr = Attr::builder()
+                    .user_access(true)
+                    .readable(true)
+                    .writable(true)
+                    .build();
                 ts.virt
-                    .map(Some(old_page.into()), phys, 0, count, Attr::USER_RW)
+                    .map(Some(old_page.into()), phys, 0, count, attr)
                     .await?;
             }
         }
