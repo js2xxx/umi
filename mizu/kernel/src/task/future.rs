@@ -29,14 +29,14 @@ use crate::{
 
 #[pin_project]
 pub struct TaskFut<F> {
-    virt: Pin<Arsc<Virt>>,
+    virt: Arsc<Virt>,
     fp: Fp,
     #[pin]
     fut: F,
 }
 
 impl<F> TaskFut<F> {
-    pub fn new(virt: Pin<Arsc<Virt>>, fut: F) -> Self {
+    pub fn new(virt: Arsc<Virt>, fut: F) -> Self {
         TaskFut {
             virt,
             fp: FP.try_with(Fp::copy).unwrap_or_default(),

@@ -5,6 +5,7 @@ mod net;
 use alloc::boxed::Box;
 
 use co_trap::UserCx;
+use kmem::Virt;
 use ksc::{
     async_handler,
     Error::{self, *},
@@ -12,6 +13,7 @@ use ksc::{
 use umifs::types::{OpenOptions, Permissions};
 
 pub use self::{fs::*, io::*, net::*};
+use super::Files;
 use crate::{
     mem::{In, Out, UserPtr},
     syscall::ScRet,
@@ -26,7 +28,7 @@ pub async fn readlinkat(
     let (fd, path, mut out, len) = cx.args();
     let fut = async move {
         let mut buf = [0; MAX_PATH_LEN];
-        let (path, root) = path.read_path(ts.virt.as_ref(), &mut buf).await?;
+        let (path, root) = path.read_path(&ts.virt, &mut buf).await?;
 
         let options = OpenOptions::RDONLY;
         let perm = Default::default();
@@ -38,7 +40,7 @@ pub async fn readlinkat(
             if executable.len() + 1 >= len {
                 return Err(ENAMETOOLONG);
             }
-            out.write_slice(ts.virt.as_ref(), executable.as_bytes(), true)
+            out.write_slice(&ts.virt, executable.as_bytes(), true)
                 .await?;
             return Ok(executable.len());
         }
@@ -71,7 +73,7 @@ pub async fn chdir(
     let path = cx.args();
     let fut = async {
         let mut buf = [0; MAX_PATH_LEN];
-        let (path, root) = path.read_path(ts.virt.as_ref(), &mut buf).await?;
+        let (path, root) = path.read_path(&ts.virt, &mut buf).await?;
 
         log::trace!("user chdir path = {path:?}");
         if root {
@@ -103,7 +105,7 @@ pub async fn getcwd(
         if path.len() >= len {
             Err(ERANGE)
         } else {
-            buf.write_slice(ts.virt.as_ref(), path, true).await?;
+            buf.write_slice(&ts.virt, path, true).await?;
             Ok(buf)
         }
     };
@@ -186,35 +188,46 @@ pub async fn close(ts: &mut TaskState, cx: UserCx<'_, fn(i32) -> Result<(), Erro
     ScRet::Continue(None)
 }
 
+async fn pipe_inner(files: &Files, virt: &Virt, mut fd: UserPtr<i32, Out>) -> Result<(), Error> {
+    let (tx, rx) = crate::fs::pipe();
+
+    let tx = crate::task::fd::FdInfo {
+        entry: tx,
+        close_on_exec: false,
+        nonblock: false,
+        perm: Permissions::SELF_W,
+        saved_next_dirent: Default::default(),
+    };
+    let tx = files.open(tx).await?;
+
+    let rx = crate::task::fd::FdInfo {
+        entry: rx,
+        close_on_exec: false,
+        nonblock: false,
+        perm: Permissions::SELF_R,
+        saved_next_dirent: Default::default(),
+    };
+    let rx = files.open(rx).await?;
+
+    fd.write_slice(virt, &[rx, tx], false).await
+}
+
 #[async_handler]
 pub async fn pipe(
     ts: &mut TaskState,
     cx: UserCx<'_, fn(UserPtr<i32, Out>) -> Result<(), Error>>,
 ) -> ScRet {
-    let mut fd = cx.args();
-    let fut = async {
-        let (tx, rx) = crate::fs::pipe();
+    let fut = pipe_inner(&ts.files, &ts.virt, cx.args());
+    cx.ret(fut.await);
+    ScRet::Continue(None)
+}
 
-        let tx = crate::task::fd::FdInfo {
-            entry: tx,
-            close_on_exec: false,
-            nonblock: false,
-            perm: Permissions::SELF_W,
-            saved_next_dirent: Default::default(),
-        };
-        let tx = ts.files.open(tx).await?;
-
-        let rx = crate::task::fd::FdInfo {
-            entry: rx,
-            close_on_exec: false,
-            nonblock: false,
-            perm: Permissions::SELF_R,
-            saved_next_dirent: Default::default(),
-        };
-        let rx = ts.files.open(rx).await?;
-
-        fd.write_slice(ts.virt.as_ref(), &[rx, tx], false).await
-    };
+#[async_handler]
+pub async fn socket_pair(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(usize, usize, usize, UserPtr<i32, Out>) -> Result<(), Error>>,
+) -> ScRet {
+    let fut = pipe_inner(&ts.files, &ts.virt, cx.args().3);
     cx.ret(fut.await);
     ScRet::Continue(None)
 }

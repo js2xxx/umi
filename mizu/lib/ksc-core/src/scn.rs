@@ -102,6 +102,7 @@ pub enum Scn {
     SHMAT = 196,
     SHMDT = 197,
     SOCKET = 198,
+    SOCKETPAIR = 199,
     BIND = 200,
     LISTEN = 201,
     ACCEPT = 202,

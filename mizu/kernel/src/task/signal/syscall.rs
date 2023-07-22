@@ -97,7 +97,7 @@ pub async fn sigaction(
         let sig = NonZeroI32::new(sig)
             .and_then(|s| Sig::new(s.get()))
             .ok_or(EINVAL)?;
-        let action = action.read(ts.virt.as_ref()).await?;
+        let action = action.read(&ts.virt).await?;
         let action = Action {
             ty: match action.handler {
                 SIG_DFL => ActionType::default(sig),
@@ -118,7 +118,7 @@ pub async fn sigaction(
             ts.sig_mask |= sig;
         }
         if !old.is_null() {
-            old.write(ts.virt.as_ref(), old_action.into()).await?;
+            old.write(&ts.virt, old_action.into()).await?;
         }
         Ok(())
     };
@@ -155,11 +155,11 @@ pub async fn sigaltstack(
     let (stack, mut old) = cx.args();
     let fut = async move {
         if !old.is_null() {
-            old.write(ts.virt.as_ref(), ts.sig_stack.unwrap_or_default())
+            old.write(&ts.virt, ts.sig_stack.unwrap_or_default())
                 .await?;
         }
         if !stack.is_null() {
-            let stack = stack.read(ts.virt.as_ref()).await?;
+            let stack = stack.read(&ts.virt).await?;
             if stack.len < PAGE_SIZE * 2 {
                 return Err(EINVAL);
             }
@@ -187,14 +187,14 @@ pub async fn sigprocmask(
             return Err(EINVAL);
         }
         let set = if !set.is_null() {
-            Some(set.read(ts.virt.as_ref()).await?)
+            Some(set.read(&ts.virt).await?)
         } else {
             None
         };
         let current = ts.sig_mask;
 
         if !old.is_null() {
-            old.write(ts.virt.as_ref(), current).await?;
+            old.write(&ts.virt, current).await?;
         }
         if let Some(set) = set {
             ts.sig_mask = match how {
@@ -229,8 +229,8 @@ pub async fn sigtimedwait(
         if size != mem::size_of::<SigSet>() {
             return Err(EINVAL);
         }
-        let set = set.read(ts.virt.as_ref()).await?;
-        let dur = tv.read(ts.virt.as_ref()).await?.into();
+        let set = set.read(&ts.virt).await?;
+        let dur = tv.read(&ts.virt).await?.into();
         if set.is_empty() {
             ktime::sleep(dur).await;
             return Ok(0);
@@ -253,7 +253,7 @@ pub async fn sigtimedwait(
                 errno: 0,
                 code: si.code,
             };
-            usi_ptr.write(ts.virt.as_ref(), usi).await?;
+            usi_ptr.write(&ts.virt, usi).await?;
         }
 
         Ok(si.sig.raw())

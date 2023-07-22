@@ -134,8 +134,7 @@ pub async fn readv(
         let io = entry.to_io().ok_or(EBADF)?;
 
         let mut iov_buf = [Default::default(); MAX_IOV_LEN];
-        iov.read_slice(ts.virt.as_ref(), &mut iov_buf[..vlen])
-            .await?;
+        iov.read_slice(&ts.virt, &mut iov_buf[..vlen]).await?;
 
         let mut guard = ts.virt.start_commit(Attr::WRITABLE).await;
         for iov in iov_buf[..vlen].iter() {
@@ -163,8 +162,7 @@ pub async fn writev(
         let io = entry.to_io().ok_or(EBADF)?;
 
         let mut iov_buf = [Default::default(); MAX_IOV_LEN];
-        iov.read_slice(ts.virt.as_ref(), &mut iov_buf[..vlen])
-            .await?;
+        iov.read_slice(&ts.virt, &mut iov_buf[..vlen]).await?;
 
         let mut guard = ts.virt.start_commit(Attr::READABLE).await;
         for iov in iov_buf[..vlen].iter() {
@@ -192,8 +190,7 @@ pub async fn preadv(
         let io = entry.to_io().ok_or(EBADF)?;
 
         let mut iov_buf = [Default::default(); MAX_IOV_LEN];
-        iov.read_slice(ts.virt.as_ref(), &mut iov_buf[..vlen])
-            .await?;
+        iov.read_slice(&ts.virt, &mut iov_buf[..vlen]).await?;
 
         let mut guard = ts.virt.start_commit(Attr::WRITABLE).await;
         for iov in iov_buf[..vlen].iter() {
@@ -221,8 +218,7 @@ pub async fn pwritev(
         let io = entry.to_io().ok_or(EBADF)?;
 
         let mut iov_buf = [Default::default(); MAX_IOV_LEN];
-        iov.read_slice(ts.virt.as_ref(), &mut iov_buf[..vlen])
-            .await?;
+        iov.read_slice(&ts.virt, &mut iov_buf[..vlen]).await?;
 
         let mut guard = ts.virt.start_commit(Attr::READABLE).await;
         for iov in iov_buf[..vlen].iter() {
@@ -287,7 +283,7 @@ pub async fn sendfile(
             }
             Ok(ret)
         } else {
-            let mut offset = offset_ptr.read(ts.virt.as_ref()).await?;
+            let mut offset = offset_ptr.read(&ts.virt).await?;
             let mut ret = 0;
             while count > 0 {
                 let len = count.min(PAGE_SIZE);
@@ -301,7 +297,7 @@ pub async fn sendfile(
                     break;
                 }
             }
-            offset_ptr.write(ts.virt.as_ref(), offset).await?;
+            offset_ptr.write(&ts.virt, offset).await?;
             Ok(ret)
         }
     };
@@ -403,15 +399,15 @@ pub async fn ppoll(
         let timeout = if timeout.is_null() {
             None
         } else {
-            Some(timeout.read(ts.virt.as_ref()).await?.into())
+            Some(timeout.read(&ts.virt).await?.into())
         };
 
         let mut pfd = vec![PollFd::default(); len];
-        poll_fd.read_slice(ts.virt.as_ref(), &mut pfd).await?;
+        poll_fd.read_slice(&ts.virt, &mut pfd).await?;
 
         let count = poll_fds(&mut pfd, &ts.files, timeout).await?;
 
-        poll_fd.write_slice(ts.virt.as_ref(), &pfd, false).await?;
+        poll_fd.write_slice(&ts.virt, &pfd, false).await?;
         Ok(count)
     };
     cx.ret(fut.await);
@@ -467,7 +463,7 @@ pub async fn pselect(
         let timeout = if timeout.is_null() {
             None
         } else {
-            Some(timeout.read(ts.virt.as_ref()).await?.into())
+            Some(timeout.read(&ts.virt).await?.into())
         };
         if count == 0 {
             match timeout {
@@ -483,15 +479,15 @@ pub async fn pselect(
 
         let mut pfd = Vec::new();
         if !rd.is_null() {
-            rd.read_slice(ts.virt.as_ref(), &mut buf).await?;
+            rd.read_slice(&ts.virt, &mut buf).await?;
             push_pfd(&mut pfd, &buf, umio::Event::READABLE);
         }
         if !wr.is_null() {
-            wr.read_slice(ts.virt.as_ref(), &mut buf).await?;
+            wr.read_slice(&ts.virt, &mut buf).await?;
             push_pfd(&mut pfd, &buf, umio::Event::WRITABLE);
         }
         if !ex.is_null() {
-            ex.read_slice(ts.virt.as_ref(), &mut buf).await?;
+            ex.read_slice(&ts.virt, &mut buf).await?;
             push_pfd(&mut pfd, &buf, umio::Event::EXCEPTION);
         }
 
@@ -499,15 +495,15 @@ pub async fn pselect(
 
         if !rd.is_null() {
             write_fd_set(&pfd, &mut buf, umio::Event::READABLE);
-            rd.write_slice(ts.virt.as_ref(), &buf, false).await?;
+            rd.write_slice(&ts.virt, &buf, false).await?;
         }
         if !wr.is_null() {
             write_fd_set(&pfd, &mut buf, umio::Event::WRITABLE);
-            wr.write_slice(ts.virt.as_ref(), &buf, false).await?;
+            wr.write_slice(&ts.virt, &buf, false).await?;
         }
         if !ex.is_null() {
             write_fd_set(&pfd, &mut buf, umio::Event::EXCEPTION);
-            ex.write_slice(ts.virt.as_ref(), &buf, false).await?;
+            ex.write_slice(&ts.virt, &buf, false).await?;
         }
 
         Ok(count)

@@ -7,7 +7,6 @@ use alloc::{
 use core::{
     ffi::CStr,
     mem,
-    pin::Pin,
     sync::atomic::{AtomicUsize, Ordering::SeqCst},
 };
 
@@ -40,7 +39,7 @@ use crate::{
 pub struct Command {
     image: Option<Arc<Phys>>,
     executable: String,
-    virt: Option<Pin<Arsc<Virt>>>,
+    virt: Option<Arsc<Virt>>,
     parent: Weak<Task>,
     args: Vec<String>,
     envs: Vec<String>,
@@ -88,7 +87,7 @@ impl Command {
         self
     }
 
-    pub fn virt(&mut self, virt: Pin<Arsc<Virt>>) -> &mut Self {
+    pub fn virt(&mut self, virt: Arsc<Virt>) -> &mut Self {
         self.virt = Some(virt);
         self
     }
@@ -146,7 +145,7 @@ impl Command {
 struct InitTask {
     executable: String,
     parent: Weak<Task>,
-    virt: Pin<Arsc<Virt>>,
+    virt: Arsc<Virt>,
     tf: TrapFrame,
     files: Files,
 }
@@ -231,7 +230,7 @@ impl InitTask {
     }
 
     pub(super) async fn load_stack(
-        virt: Pin<&Virt>,
+        virt: &Virt,
         stack: Option<(usize, Attr)>,
         args: &[String],
         envs: &[String],
@@ -297,7 +296,7 @@ impl InitTask {
         executable: String,
         parent: Weak<Task>,
         phys: &Arc<Phys>,
-        virt: Pin<Arsc<Virt>>,
+        virt: Arsc<Virt>,
         args: Vec<String>,
         envs: Vec<String>,
     ) -> Result<Self, Error> {
@@ -320,13 +319,13 @@ impl InitTask {
                 )
                 .await?;
                 let phys = crate::mem::new_phys(entry.to_io().ok_or(EISDIR)?, true);
-                let loaded = elf::load(&Arc::new(phys), None, virt.as_ref()).await?;
+                let loaded = elf::load(&Arc::new(phys), None, &virt).await?;
 
                 let args = [interp, "--library-path=/".into()].into_iter().chain(args);
                 (loaded, args.collect())
             }
             None => {
-                let loaded = elf::load(phys, None, virt.as_ref()).await?;
+                let loaded = elf::load(phys, None, &virt).await?;
                 if loaded.is_dyn {
                     return Err(ENOSYS);
                 }
@@ -338,7 +337,7 @@ impl InitTask {
         let base = loaded.range.start;
 
         let stack = Self::load_stack(
-            virt.as_ref(),
+            &virt,
             loaded.stack,
             &args,
             &envs,

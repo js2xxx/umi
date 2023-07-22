@@ -4,7 +4,6 @@ use core::{
     marker::PhantomData,
     mem::{self, MaybeUninit},
     ops::Range,
-    pin::Pin,
 };
 
 use futures_util::Future;
@@ -84,13 +83,13 @@ impl<T: Copy, D> UserPtr<T, D> {
 
     async fn paged_op<'a, U, G, F>(
         &self,
-        virt: Pin<&'a Virt>,
+        virt: &'a Virt,
         mut f: G,
         mut len: usize,
         mut arg: U,
     ) -> Result<U, Error>
     where
-        G: FnMut(Pin<&'a Virt>, Range<LAddr>, U) -> F,
+        G: FnMut(&'a Virt, Range<LAddr>, U) -> F,
         F: Future<Output = Result<(U, bool), Error>> + Send + 'a,
         U: 'a,
     {
@@ -141,7 +140,7 @@ impl<T: Copy, D> RawReg for UserPtr<T, D> {
 }
 
 impl<T: Copy, D: InPtr> UserPtr<T, D> {
-    pub async fn read(&self, virt: Pin<&Virt>) -> Result<T, Error> {
+    pub async fn read(&self, virt: &Virt) -> Result<T, Error> {
         if !self.addr.is_aligned() || self.addr.is_null() {
             return Err(EFAULT);
         }
@@ -160,7 +159,7 @@ impl<T: Copy, D: InPtr> UserPtr<T, D> {
         }
     }
 
-    pub async fn read_slice(&self, virt: Pin<&Virt>, data: &mut [T]) -> Result<(), Error> {
+    pub async fn read_slice(&self, virt: &Virt, data: &mut [T]) -> Result<(), Error> {
         log::trace!(
             "UserPtr::read_slice: self = {:?}, len = {}",
             self,
@@ -178,14 +177,14 @@ impl<T: Copy, D: InPtr> UserPtr<T, D> {
 
     pub async fn read_slice_with_zero<'a>(
         &self,
-        virt: Pin<&Virt>,
+        virt: &Virt,
         buf: &'a mut [T],
     ) -> Result<&'a [T], Error>
     where
         T: Default + PartialEq + Send + fmt::Debug,
     {
         async fn inner<'a, T: Copy + Default + PartialEq + fmt::Debug>(
-            virt: Pin<&'a Virt>,
+            virt: &'a Virt,
             range: Range<LAddr>,
             buf: &'a mut [T],
         ) -> Result<(&'a mut [T], bool), Error> {
@@ -215,13 +214,9 @@ impl<T: Copy, D: InPtr> UserPtr<T, D> {
 }
 
 impl<D: InPtr> UserPtr<u8, D> {
-    pub async fn read_str<'a>(
-        &self,
-        virt: Pin<&Virt>,
-        buf: &'a mut [u8],
-    ) -> Result<&'a str, Error> {
+    pub async fn read_str<'a>(&self, virt: &Virt, buf: &'a mut [u8]) -> Result<&'a str, Error> {
         async fn inner<'a>(
-            virt: Pin<&'a Virt>,
+            virt: &'a Virt,
             range: Range<LAddr>,
             buf: &'a mut [u8],
         ) -> Result<(&'a mut [u8], bool), Error> {
@@ -242,7 +237,7 @@ impl<D: InPtr> UserPtr<u8, D> {
 
     pub async fn read_path<'a>(
         &self,
-        virt: Pin<&Virt>,
+        virt: &Virt,
         buf: &'a mut [u8],
     ) -> Result<(&'a Path, bool), Error> {
         let path = self.read_str(virt, buf).await?;
@@ -255,7 +250,7 @@ impl<D: InPtr> UserPtr<u8, D> {
 }
 
 impl<T: Copy, D: OutPtr> UserPtr<T, D> {
-    pub async fn write(&mut self, virt: Pin<&Virt>, data: T) -> Result<(), Error> {
+    pub async fn write(&mut self, virt: &Virt, data: T) -> Result<(), Error> {
         if !self.addr.is_aligned() || self.addr.is_null() {
             return Err(EFAULT);
         }
@@ -267,7 +262,7 @@ impl<T: Copy, D: OutPtr> UserPtr<T, D> {
 
     pub async fn write_slice(
         &mut self,
-        virt: Pin<&Virt>,
+        virt: &Virt,
         data: &[T],
         add_tail_zero: bool,
     ) -> Result<(), Error> {
@@ -345,7 +340,7 @@ impl RawReg for FutexKey {
 }
 
 impl FutexKey {
-    pub async fn load(&self, virt: Pin<&Virt>) -> Result<u32, Error> {
+    pub async fn load(&self, virt: &Virt) -> Result<u32, Error> {
         if !self.addr.is_aligned() || self.addr.is_null() {
             return Err(EFAULT);
         }
@@ -355,7 +350,7 @@ impl FutexKey {
 
 #[inline]
 async unsafe fn checked_copy(
-    virt: Pin<&Virt>,
+    virt: &Virt,
     src: LAddr,
     dst: LAddr,
     count: usize,
@@ -369,12 +364,7 @@ async unsafe fn checked_copy(
 }
 
 #[inline]
-async unsafe fn checked_zero(
-    virt: Pin<&Virt>,
-    src: u8,
-    dst: LAddr,
-    count: usize,
-) -> Result<(), Error> {
+async unsafe fn checked_zero(virt: &Virt, src: u8, dst: LAddr, count: usize) -> Result<(), Error> {
     extern "C" {
         fn _checked_zero(src: u8, dst: LAddr, count: usize) -> usize;
     }
@@ -382,7 +372,7 @@ async unsafe fn checked_zero(
     checked_op(virt, op, Attr::WRITABLE).await
 }
 
-async unsafe fn checked_load_u32(virt: Pin<&Virt>, src: LAddr) -> Result<u32, Error> {
+async unsafe fn checked_load_u32(virt: &Virt, src: LAddr) -> Result<u32, Error> {
     extern "C" {
         fn _checked_load_u32(src: LAddr, dst: &mut u32) -> usize;
     }
@@ -393,7 +383,7 @@ async unsafe fn checked_load_u32(virt: Pin<&Virt>, src: LAddr) -> Result<u32, Er
 }
 
 async fn checked_op<F: FnMut() -> usize>(
-    virt: Pin<&Virt>,
+    virt: &Virt,
     mut op: F,
     expect_attr: Attr,
 ) -> Result<(), Error> {
