@@ -7,7 +7,7 @@ use core::{
 
 use async_trait::async_trait;
 use crossbeam_queue::ArrayQueue;
-use devices::{block::Block, impl_io_for_block};
+use devices::{block::Block, impl_io_for_block, intr::Completion};
 use futures_util::{stream, Future, FutureExt, StreamExt, TryStreamExt};
 use ksc::Error::{self, EINVAL, EIO, ENOBUFS, ENOMEM, EPERM};
 use ksync::{
@@ -62,8 +62,9 @@ impl VirtioBlock {
         })
     }
 
-    pub fn ack_interrupt(&self) {
-        Token::ack_interrupt(self)
+    pub fn ack_interrupt(&self, completion: &Completion) -> bool {
+        Token::ack_interrupt(self, completion);
+        true
     }
 
     pub fn capacity_blocks(&self) -> usize {
@@ -122,8 +123,8 @@ impl Block for VirtioBlock {
         self.capacity_blocks()
     }
 
-    fn ack_interrupt(&self) {
-        self.ack_interrupt()
+    fn ack_interrupt(&self, completion: &Completion) -> bool {
+        self.ack_interrupt(completion)
     }
 
     async fn read(&self, block: usize, buf: &mut [u8]) -> Result<usize, Error> {
@@ -213,17 +214,32 @@ impl Future for ChunkOp<'_> {
                 } => {
                     let res = ksync::critical(|| {
                         let mut blk = this.device.device.lock();
-                        match dir {
+                        let token = match dir {
                             Direction::Read => unsafe {
                                 blk.read_block_nb(this.block, req, buf, resp)
                             },
                             Direction::Write => unsafe {
                                 blk.write_block_nb(this.block, req, buf, resp)
                             },
-                        }
+                        }?;
+
+                        // log::trace!("VirtioBlock::poll: submitted {dir:?}, token
+                        // = {token:?}");
+
+                        let (tx, rx) = oneshot();
+                        let request = Request {
+                            buf: mem::take(buf),
+                            dir: this.dir,
+                            req: mem::take(req),
+                            resp: mem::take(resp),
+                            ret: tx,
+                        };
+                        this.device.token[token as usize].0.push(request).unwrap();
+                        Ok(rx)
                     });
-                    let token = match res {
-                        Ok(token) => token,
+
+                    match res {
+                        Ok(rx) => this.state = ChunkState::Waiting { ret: rx },
                         Err(virtio_drivers::Error::QueueFull) => {
                             match listener {
                                 Some(l) => {
@@ -237,18 +253,6 @@ impl Future for ChunkOp<'_> {
                         }
                         Err(err) => break Poll::Ready(Err(err)),
                     };
-                    // log::trace!("VirtioBlock::poll: submitted {dir:?}, token = {token:?}");
-
-                    let (tx, rx) = oneshot();
-                    let request = Request {
-                        buf: mem::take(buf),
-                        dir: this.dir,
-                        req: mem::take(req),
-                        resp: mem::take(resp),
-                        ret: tx,
-                    };
-                    this.device.token[token as usize].0.push(request).unwrap();
-                    this.state = ChunkState::Waiting { ret: rx }
                 }
                 ChunkState::Waiting { ret } => {
                     let buf = ready!(ret.poll_unpin(cx));
@@ -267,10 +271,11 @@ impl Token {
         Token(ArrayQueue::new(1))
     }
 
-    fn ack_interrupt(device: &VirtioBlock) {
+    fn ack_interrupt(device: &VirtioBlock, completion: &Completion) {
         ksync::critical(|| {
             let mut blk = device.device.lock();
             blk.ack_interrupt();
+            completion();
 
             while let Some(used) = blk.peek_used() {
                 if let Some(request) = device.token[used as usize].0.pop() {

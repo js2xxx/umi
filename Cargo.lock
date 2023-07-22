@@ -108,6 +108,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "bit-struct"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "270fbbb014407467f7a2c9b1fa0b74057d5cbc452f18bac3bb5aad601e590521"
+dependencies = [
+ "num-traits",
+]
+
+[[package]]
 name = "bit_field"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -602,6 +611,7 @@ dependencies = [
  "rv39-paging",
  "sbi-rt",
  "scoped-tls",
+ "sdmmc",
  "smoltcp",
  "spin",
  "static_assertions",
@@ -717,13 +727,11 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 name = "plic"
 version = "0.1.0"
 dependencies = [
- "crossbeam-queue",
  "devices",
  "hart-id",
- "hashbrown",
+ "ksc",
  "ksync",
  "log",
- "rand-riscv",
  "spin",
  "static_assertions",
  "volatile",
@@ -911,6 +919,34 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.26",
+]
+
+[[package]]
+name = "sdio-host"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b328e2cb950eeccd55b7f55c3a963691455dcd044cfb5354f0c5e68d2c2d6ee2"
+
+[[package]]
+name = "sdmmc"
+version = "0.1.0"
+dependencies = [
+ "array-macro",
+ "async-trait",
+ "bit-struct",
+ "bitflags 2.3.3",
+ "devices",
+ "futures-util",
+ "kmem",
+ "ksc",
+ "ksync",
+ "ktime",
+ "log",
+ "sdio-host",
+ "spin",
+ "static_assertions",
+ "umio",
+ "volatile",
 ]
 
 [[package]]

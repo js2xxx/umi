@@ -33,6 +33,7 @@ umifs = {path = "../lib/umifs"}
 umio = {path = "../lib/umio"}
 # Local drivers
 plic = {path = "../dev/plic"}
+sdmmc = {path = "../dev/sdmmc"}
 uart = {path = "../dev/uart"}
 virtio = {path = "../dev/virtio"}
 # External crates

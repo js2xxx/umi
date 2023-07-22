@@ -8,7 +8,7 @@ use core::{
 };
 
 use crossbeam_queue::SegQueue;
-use devices::intr::Interrupt;
+use devices::intr::Completion;
 use fdt::node::FdtNode;
 use futures_util::{FutureExt, Stream};
 use ksync::event::{Event, EventListener};
@@ -18,8 +18,8 @@ use rv39_paging::{PAddr, ID_OFFSET};
 use spin::{Mutex, MutexGuard, Once};
 use uart::Uart;
 
-use super::intr::intr_man;
-use crate::someb;
+use super::{interrupts, intr::intr_man};
+use crate::{someb, tryb};
 
 struct Serial {
     device: Mutex<Uart>,
@@ -175,21 +175,19 @@ impl log::Log for Logger {
 
 static mut LOGGER: MaybeUninit<Logger> = MaybeUninit::uninit();
 
-async fn dispatcher(intr: Interrupt) {
-    loop {
-        if !intr.wait().await {
-            break;
-        }
-        if let Some(serial) = SERIAL.get() {
-            ksync::critical(|| {
-                let mut device = serial.device.lock();
-                while let Some(b) = device.try_recv() {
-                    serial.input.push(b);
-                    serial.input_ready.notify(1);
-                }
-            })
-        }
+fn ack_interrupt(completion: &Completion) -> bool {
+    completion();
+    if let Some(serial) = SERIAL.get() {
+        ksync::critical(|| {
+            let mut device = serial.device.lock();
+            while let Some(b) = device.try_recv() {
+                serial.input.push(b);
+                serial.input_ready.notify(1);
+            }
+        });
+        return true;
     }
+    false
 }
 
 pub unsafe fn init_logger() {
@@ -209,33 +207,31 @@ pub unsafe fn init_logger() {
 }
 
 fn init(node: &FdtNode, stride: usize) -> bool {
+    if SERIAL.is_completed() {
+        return false;
+    }
     let mut regs = someb!(node.reg());
     let reg = someb!(regs.next());
 
-    let mut intrs = someb!(node.interrupts());
-    let pin = someb!(intrs.next().and_then(|i| NonZeroU32::new(i as u32)));
-
+    let pin = someb!(interrupts(node).next().and_then(NonZeroU32::new));
     let intr_man = someb!(intr_man());
-    let intr = someb!(intr_man.insert(pin));
 
-    SERIAL.call_once(|| {
+    tryb!(SERIAL.try_call_once(|| {
         let paddr = PAddr::new(reg.starting_address as usize);
         let base = paddr.to_laddr(ID_OFFSET);
 
         let mut dev = unsafe { Uart::new(base.cast(), stride) };
-        log::trace!("Initializing debug UART, base = {base:?}");
         dev.init();
-        log::trace!("Done");
         atomic::fence(atomic::Ordering::SeqCst);
 
-        crate::executor().spawn(dispatcher(intr)).detach();
+        assert!(intr_man.insert(pin, ack_interrupt));
 
-        Serial {
+        Ok::<_, ()>(Serial {
             device: Mutex::new(dev),
             input: SegQueue::new(),
             input_ready: Default::default(),
-        }
-    });
+        })
+    }));
     true
 }
 

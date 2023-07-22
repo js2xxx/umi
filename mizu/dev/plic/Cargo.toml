@@ -7,11 +7,9 @@ version = "0.1.0"
 # Local crates
 devices = {path = "../../lib/devices"}
 hart-id = {path = "../../lib/hart-id"}
-rand-riscv = {path = "../../lib/rand-riscv"}
+ksc = {path = "../../lib/ksc"}
 ksync = {path = "../../lib/ksync"}
 # External crates
-crossbeam-queue = {version = "0", default-features = false, features = ["alloc", "nightly"]}
-hashbrown = {version = "0", default-features = false, features = ["inline-more"]}
 log = "0"
 spin = "0"
 static_assertions = "1"

@@ -9,21 +9,21 @@ pub trait Param {
     type Item<'a>: Param + 'a;
 }
 
-impl<T: 'static> Param for &'_ mut T {
+impl<T: ?Sized + 'static> Param for &'_ mut T {
     type Item<'a> = &'a mut T;
 }
 
-impl<T: 'static> Param for &T {
+impl<T: ?Sized + 'static> Param for &T {
     type Item<'a> = &'a T;
 }
 
-impl<T: 'static> FromParam<&'_ mut T> for &'_ mut T {
+impl<T: ?Sized + 'static> FromParam<&'_ mut T> for &'_ mut T {
     fn from_param<'a>(item: <&'_ mut T as Param>::Item<'a>) -> Self::Item<'a> {
         item
     }
 }
 
-impl<T: 'static> FromParam<&'_ T> for &'_ T {
+impl<T: ?Sized + 'static> FromParam<&'_ T> for &'_ T {
     fn from_param<'a>(item: <&'_ T as Param>::Item<'a>) -> Self::Item<'a> {
         item
     }
@@ -66,10 +66,6 @@ macro_rules! impl_primitives {
     };
 }
 impl_primitives!(bool, char, u8, u16, u32, u64, usize, i8, i16, i32, i64, isize);
-
-impl Param for &'_ str {
-    type Item<'a> = &'a str;
-}
 
 impl<T: Param, E: Param> Param for Result<T, E> {
     type Item<'a> = Result<<T as Param>::Item<'a>, <E as Param>::Item<'a>>;

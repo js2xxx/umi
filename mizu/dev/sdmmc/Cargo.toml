@@ -1,0 +1,24 @@
+[package]
+edition = "2021"
+name = "sdmmc"
+version = "0.1.0"
+
+[dependencies]
+# Local crates
+devices = {path = "../../lib/devices"}
+kmem = {path = "../../lib/kmem"}
+ksc = {path = "../../lib/ksc"}
+ksync = {path = "../../lib/ksync"}
+ktime = {path = "../../lib/ktime"}
+umio = {path = "../../lib/umio"}
+# External crates
+array-macro = "2"
+async-trait = "0"
+bit-struct = {version = "0", default-features = false}
+bitflags = "2"
+futures-util = {version = "0", default-features = false, features = ["alloc"]}
+log = "0"
+sdio-host = "0"
+spin = "0"
+static_assertions = "1"
+volatile = "0"
