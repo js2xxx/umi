@@ -28,7 +28,7 @@ use ksync::{
     event::Event,
 };
 use rand_riscv::RandomState;
-use rv39_paging::{PAddr, ID_OFFSET, PAGE_SHIFT, PAGE_SIZE};
+use rv39_paging::{PAddr, Table, ID_OFFSET, PAGE_SHIFT, PAGE_SIZE};
 use spin::{Lazy, Mutex};
 use umio::{advance_slices, ioslice_len, Io, IoExt, IoSlice, IoSliceMut, SeekFrom};
 
@@ -47,6 +47,15 @@ impl fmt::Debug for Frame {
 
 unsafe impl Send for Frame {}
 unsafe impl Sync for Frame {}
+
+impl From<Table> for Frame {
+    fn from(table: Table) -> Self {
+        let mut ret = Self::new().unwrap();
+        let ptr = table.as_ptr().cast();
+        unsafe { ret.as_mut_ptr().copy_from_nonoverlapping(ptr, PAGE_SIZE) };
+        ret
+    }
+}
 
 impl Frame {
     pub fn new() -> Result<Self, Error> {
@@ -74,6 +83,10 @@ impl Frame {
 
     pub fn as_mut_slice(&mut self) -> &mut [u8] {
         unsafe { self.as_ptr().as_mut() }
+    }
+
+    pub fn as_table(&mut self) -> &mut Table {
+        unsafe { self.as_ptr().cast().as_mut() }
     }
 
     pub fn copy(&self, len: usize) -> Result<Frame, Error> {

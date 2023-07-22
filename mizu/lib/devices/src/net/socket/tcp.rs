@@ -22,7 +22,7 @@ use ksync::{
     },
     event::Event,
 };
-use ktime::TimeOutExt;
+use ktime::Timer;
 use managed::ManagedSlice;
 use smoltcp::{
     iface::SocketHandle,
@@ -96,7 +96,9 @@ impl Inner {
 
         self.with_mut(|_, socket| socket.close());
         let close = poll_fn(|cx| self.poll_for_close(cx));
-        close.on_timeout(FIN_TIMEOUT, || {}).await;
+        if let Either::Right((_, fut)) = select(close, Timer::after(FIN_TIMEOUT)).await {
+            ksync::poll_once(fut);
+        }
     }
 
     async fn close_event(&self, tx: &Sender<SegQueue<Socket>>) {
@@ -432,7 +434,7 @@ impl Socket {
             }) => ip_mtu - IPV6_HEADER_LEN,
             None => ip_mtu - IPV4_HEADER_LEN.max(IPV6_HEADER_LEN),
         };
-        tcp_mtu.min(BUFFER_CAP * 2 / 3) - TCP_HEADER_LEN
+        (tcp_mtu - TCP_HEADER_LEN).min(BUFFER_CAP)
     }
 }
 

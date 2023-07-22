@@ -7,6 +7,9 @@ version = "0.1.0"
 [dependencies]
 bitflags = "2"
 static_assertions = "1"
+cfg-if = "1"
 
 [features]
+cv1811h = []
+qemu-virt = []
 test = []

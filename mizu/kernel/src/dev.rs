@@ -1,10 +1,12 @@
 mod block;
 mod intr;
 mod net;
+mod sdmmc;
 mod serial;
 mod virtio;
 
 use alloc::vec::Vec;
+use core::mem;
 
 use fdt::{node::FdtNode, Fdt, FdtError};
 use ksc::Handlers;
@@ -14,15 +16,28 @@ pub use self::{
     block::{block, blocks},
     intr::INTR,
     net::{net, nets},
-    serial::{Stdin, Stdout},
+    serial::{init_logger, Stdin, Stdout},
 };
 
 static DEV_INIT: Lazy<Handlers<&str, &FdtNode, bool>> = Lazy::new(|| {
     Handlers::new()
-        .map("ns16550a", serial::init)
+        .map("ns16550a", serial::init_ns16550a)
+        .map("snps,dw-apb-uart", serial::init_dw_apb_uart)
         .map("riscv,plic0", intr::init_plic)
         .map("virtio,mmio", virtio::init_mmio)
+        .map("cvitek,mars-sd", sdmmc::init)
 });
+
+fn interrupts<'a>(node: &'a FdtNode) -> impl Iterator<Item = u32> + 'a {
+    let size = node
+        .interrupt_parent()
+        .and_then(|ip| ip.interrupt_cells())
+        .unwrap_or(1);
+    let value = node.property("interrupts").map_or(&[] as _, |p| p.value);
+    value
+        .chunks(size * mem::size_of::<u32>())
+        .map(|v| u32::from_be_bytes(v[..4].try_into().unwrap()))
+}
 
 /// Initialize all the possible devices in this crate using FDT.
 ///

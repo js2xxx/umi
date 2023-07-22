@@ -1,7 +1,7 @@
 pub mod ffi;
 
 use alloc::boxed::Box;
-use core::{ops::ControlFlow, pin::Pin, time::Duration};
+use core::{ops::ControlFlow, time::Duration};
 
 use co_trap::{TrapFrame, UserCx};
 use kmem::Virt;
@@ -41,6 +41,11 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         .map(SHMDT, crate::mem::shmdt)
         // Tasks
         .map(SCHED_YIELD, task::uyield)
+        .map(SCHED_SETSCHEDULER, dummy_zero)
+        .map(SCHED_GETSCHEDULER, dummy_zero)
+        .map(SCHED_GETPARAM, dummy_zero)
+        .map(SCHED_SETAFFINITY, dummy_zero)
+        .map(SCHED_GETAFFINITY, task::affinity)
         .map(GETTID, task::tid)
         .map(GETPID, task::pid)
         .map(GETPPID, task::ppid)
@@ -105,6 +110,7 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         .map(TRUNCATE, fd::truncate)
         // Network
         .map(SOCKET, fd::socket)
+        .map(SOCKETPAIR, dummy_zero)
         .map(GETSOCKNAME, fd::getsockname)
         .map(GETSOCKOPT, fd::getsockopt)
         .map(SETSOCKOPT, fd::setsockopt)
@@ -119,6 +125,8 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         // Time
         .map(GETTIMEOFDAY, gettimeofday)
         .map(CLOCK_GETTIME, clock_gettime)
+        .map(CLOCK_GETRES, clock_getres)
+        .map(CLOCK_NANOSLEEP, clock_nanosleep)
         .map(NANOSLEEP, sleep)
         // Miscellaneous
         .map(UNAME, uname)
@@ -152,7 +160,7 @@ async fn gettimeofday(
     let (mut out, _) = cx.args();
 
     let t = Instant::now().into();
-    let ret = out.write(ts.virt.as_ref(), t).await;
+    let ret = out.write(&ts.virt, t).await;
     cx.ret(ret);
 
     ScRet::Continue(None)
@@ -166,9 +174,54 @@ async fn clock_gettime(
     let (_, mut out) = cx.args();
 
     let t = Instant::now().into();
-    let ret = out.write(ts.virt.as_ref(), t).await;
+    let ret = out.write(&ts.virt, t).await;
     cx.ret(ret);
 
+    ScRet::Continue(None)
+}
+
+#[async_handler]
+async fn clock_getres(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(usize, UserPtr<Ts, Out>) -> Result<(), Error>>,
+) -> ScRet {
+    let (_, mut out) = cx.args();
+    cx.ret(out.write(&ts.virt, Duration::from_nanos(1).into()).await);
+    ScRet::Continue(None)
+}
+
+#[async_handler]
+async fn clock_nanosleep(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(usize, usize, UserPtr<Ts, In>, UserPtr<Ts, Out>) -> Result<(), Error>>,
+) -> ScRet {
+    let (_, flags, input, mut output) = cx.args();
+    let fut = async {
+        let t = input.read(&ts.virt).await?;
+        if t.sec >= isize::MAX as _ || t.nsec >= 1_000_000_000 {
+            return Err(EINVAL);
+        }
+
+        if flags == 0 {
+            let dur: Duration = t.into();
+            if dur.is_zero() {
+                crate::task::yield_now().await
+            } else {
+                ktime::sleep(dur).await;
+            }
+        } else {
+            let inst: Instant = t.into();
+            if Instant::now() < inst {
+                ktime::sleep_until(inst).await;
+            }
+        }
+
+        if !output.is_null() {
+            output.write(&ts.virt, Default::default()).await?;
+        }
+        Ok(())
+    };
+    cx.ret(fut.await);
     ScRet::Continue(None)
 }
 
@@ -178,7 +231,7 @@ async fn sleep(
     cx: UserCx<'_, fn(UserPtr<Ts, In>, UserPtr<Ts, Out>) -> Result<(), Error>>,
 ) -> ScRet {
     async fn sleep_inner(
-        virt: Pin<&Virt>,
+        virt: &Virt,
         input: UserPtr<Ts, In>,
         mut output: UserPtr<Ts, Out>,
     ) -> Result<(), Error> {
@@ -201,7 +254,7 @@ async fn sleep(
         Ok(())
     }
     let (input, output) = cx.args();
-    cx.ret(sleep_inner(ts.virt.as_ref(), input, output).await);
+    cx.ret(sleep_inner(&ts.virt, input, output).await);
 
     ScRet::Continue(None)
 }
@@ -211,7 +264,7 @@ async fn uname(
     ts: &mut TaskState,
     cx: UserCx<'_, fn(UserPtr<u8, Out>) -> Result<(), Error>>,
 ) -> ScRet {
-    async fn inner(virt: Pin<&Virt>, mut out: UserPtr<u8, Out>) -> Result<(), Error> {
+    async fn inner(virt: &Virt, mut out: UserPtr<u8, Out>) -> Result<(), Error> {
         let names: [&str; 6] = ["mizu", "umi", "5.0.0", "23.05", "riscv", ""];
         for name in names {
             out.write_slice(virt, name.as_bytes(), true).await?;
@@ -219,7 +272,7 @@ async fn uname(
         }
         Ok(())
     }
-    let ret = inner(ts.virt.as_ref(), cx.args());
+    let ret = inner(&ts.virt, cx.args());
     cx.ret(ret.await);
     ScRet::Continue(None)
 }

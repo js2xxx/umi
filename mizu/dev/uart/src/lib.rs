@@ -1,8 +1,11 @@
 #![no_std]
+#![feature(pointer_byte_offsets)]
 
-use core::{
-    fmt,
-    sync::atomic::{AtomicPtr, Ordering::Relaxed},
+use core::{fmt, ptr::NonNull};
+
+use volatile::{
+    access::{ReadOnly, Readable, Writable},
+    VolatilePtr,
 };
 
 bitflags::bitflags! {
@@ -37,13 +40,18 @@ macro_rules! wait_for {
 }
 
 pub struct Uart {
-    data: AtomicPtr<u8>,
-    int_en: AtomicPtr<u8>,
-    fifo_ctrl: AtomicPtr<u8>,
-    line_ctrl: AtomicPtr<u8>,
-    modem_ctrl: AtomicPtr<u8>,
-    line_sts: AtomicPtr<u8>,
+    data: VolatilePtr<'static, ()>,
+    int_en: VolatilePtr<'static, ()>,
+    fifo_ctrl: VolatilePtr<'static, ()>,
+    // line_ctrl: VolatilePtr<'static, ()>,
+    modem_ctrl: VolatilePtr<'static, ()>,
+    line_sts: VolatilePtr<'static, (), ReadOnly>,
+    #[cfg(feature = "uart-status")]
+    usr: VolatilePtr<'static, ()>,
+    stride: usize,
 }
+
+unsafe impl Send for Uart {}
 
 impl Uart {
     /// Creates a new UART interface on the given memory mapped address.
@@ -52,15 +60,41 @@ impl Uart {
     ///
     /// The caller must ensure that the given base address really points to a
     /// serial port device.
-    pub unsafe fn new(base: usize) -> Self {
-        let base_pointer = base as *mut u8;
+    pub unsafe fn new(base: *mut (), stride: usize) -> Self {
         Self {
-            data: AtomicPtr::new(base_pointer),
-            int_en: AtomicPtr::new(base_pointer.add(1)),
-            fifo_ctrl: AtomicPtr::new(base_pointer.add(2)),
-            line_ctrl: AtomicPtr::new(base_pointer.add(3)),
-            modem_ctrl: AtomicPtr::new(base_pointer.add(4)),
-            line_sts: AtomicPtr::new(base_pointer.add(5)),
+            data: VolatilePtr::new(NonNull::new_unchecked(base)),
+            int_en: VolatilePtr::new(NonNull::new_unchecked(base.byte_add(stride))),
+            fifo_ctrl: VolatilePtr::new(NonNull::new_unchecked(base.byte_add(2 * stride))),
+            // line_ctrl: VolatilePtr::new(NonNull::new_unchecked(base.byte_add(3 * stride))),
+            modem_ctrl: VolatilePtr::new(NonNull::new_unchecked(base.byte_add(4 * stride))),
+            line_sts: VolatilePtr::new_read_only(NonNull::new_unchecked(base.byte_add(5 * stride))),
+            #[cfg(feature = "uart-status")]
+            usr: VolatilePtr::new(NonNull::new_unchecked(base.byte_add(31 * stride))),
+            stride,
+        }
+    }
+
+    unsafe fn read_reg<A: Readable>(reg: &VolatilePtr<'static, (), A>, stride: usize) -> u8 {
+        match stride {
+            1 => reg.map(|ptr| ptr.cast::<u8>()).read(),
+            2 => reg.map(|ptr| ptr.cast::<u16>()).read() as u8,
+            4 => reg.map(|ptr| ptr.cast::<u32>()).read() as u8,
+            8 => reg.map(|ptr| ptr.cast::<u64>()).read() as u8,
+            _ => unreachable!("invalid stride"),
+        }
+    }
+
+    unsafe fn write_reg<A: Writable>(
+        reg: &mut VolatilePtr<'static, (), A>,
+        stride: usize,
+        value: u8,
+    ) {
+        match stride {
+            1 => reg.map(|ptr| ptr.cast::<u8>()).write(value),
+            2 => reg.map(|ptr| ptr.cast::<u16>()).write(value.into()),
+            4 => reg.map(|ptr| ptr.cast::<u32>()).write(value.into()),
+            8 => reg.map(|ptr| ptr.cast::<u64>()).write(value.into()),
+            _ => unreachable!("invalid stride"),
         }
     }
 
@@ -68,40 +102,39 @@ impl Uart {
     ///
     /// The default configuration of [38400/8-N-1](https://en.wikipedia.org/wiki/8-N-1) is used.
     pub fn init(&mut self) {
-        let self_int_en = self.int_en.load(Relaxed);
-        let self_line_ctrl = self.line_ctrl.load(Relaxed);
-        let self_data = self.data.load(Relaxed);
-        let self_fifo_ctrl = self.fifo_ctrl.load(Relaxed);
-        let self_modem_ctrl = self.modem_ctrl.load(Relaxed);
+        let stride = self.stride;
         unsafe {
+            #[cfg(feature = "uart-status")]
+            wait_for!(Self::read_reg(&self.usr, stride) & 0x1 == 0);
+
             // Disable interrupts
-            self_int_en.write(0x00);
+            Self::write_reg(&mut self.int_en, stride, 0x00);
 
-            // Enable DLAB
-            self_line_ctrl.write(0x80);
+            // // Enable DLAB
+            // Self::write_reg(&mut self.line_ctrl, stride, 0x80);
 
-            // Set maximum speed to 38400 bps by configuring DLL and DLM
-            self_data.write(0x03);
-            self_int_en.write(0x00);
+            // // Set maximum speed to 38400 bps by configuring DLL and DLM
+            // Self::write_reg(&mut self.data, stride, 0x03);
+            // Self::write_reg(&mut self.int_en, stride, 0x00);
 
-            // Disable DLAB and set data word length to 8 bits
-            self_line_ctrl.write(0x03);
+            // // Disable DLAB and set data word length to 8 bits
+            // Self::write_reg(&mut self.line_ctrl, stride, 0x03);
 
             // Enable FIFO, clear TX/RX queues and
             // set interrupt watermark at 14 bytes
-            self_fifo_ctrl.write(0xC7);
+            Self::write_reg(&mut self.fifo_ctrl, stride, 0xC7);
 
             // Mark data terminal ready, signal request to send
             // and enable auxilliary output #2 (used as interrupt line for CPU)
-            self_modem_ctrl.write(0x0B);
+            Self::write_reg(&mut self.modem_ctrl, stride, 0x0B);
 
             // Enable interrupts
-            self_int_en.write(0x01);
+            Self::write_reg(&mut self.int_en, stride, 0x01);
         }
     }
 
     fn line_sts(&mut self) -> LineStsFlags {
-        unsafe { LineStsFlags::from_bits_truncate(*self.line_sts.load(Relaxed)) }
+        unsafe { LineStsFlags::from_bits_truncate(Self::read_reg(&self.line_sts, self.stride)) }
     }
 
     pub fn can_send(&mut self) -> bool {
@@ -110,20 +143,20 @@ impl Uart {
 
     /// Sends a byte on the serial port.
     pub fn send(&mut self, data: u8) {
-        let self_data = self.data.load(Relaxed);
+        let stride = self.stride;
         unsafe {
             match data {
                 8 | 0x7F => {
                     wait_for!(self.line_sts().contains(LineStsFlags::OUTPUT_EMPTY));
-                    self_data.write(8);
+                    Self::write_reg(&mut self.data, stride, 8);
                     wait_for!(self.line_sts().contains(LineStsFlags::OUTPUT_EMPTY));
-                    self_data.write(b' ');
+                    Self::write_reg(&mut self.data, stride, b' ');
                     wait_for!(self.line_sts().contains(LineStsFlags::OUTPUT_EMPTY));
-                    self_data.write(8)
+                    Self::write_reg(&mut self.data, stride, 8)
                 }
                 _ => {
                     wait_for!(self.line_sts().contains(LineStsFlags::OUTPUT_EMPTY));
-                    self_data.write(data);
+                    Self::write_reg(&mut self.data, stride, data);
                 }
             }
         }
@@ -135,11 +168,10 @@ impl Uart {
 
     /// Tries to receive a byte on the serial port.
     pub fn try_recv(&mut self) -> Option<u8> {
-        let self_data = self.data.load(Relaxed);
         unsafe {
             self.line_sts()
                 .contains(LineStsFlags::INPUT_READY)
-                .then(|| self_data.read())
+                .then(|| Self::read_reg(&self.data, self.stride))
         }
     }
 }

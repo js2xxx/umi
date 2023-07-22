@@ -1,7 +1,11 @@
 [package]
+edition = "2021"
 name = "uart"
 version = "0.1.0"
-edition = "2021"
+
+[features]
+uart-status = []
 
 [dependencies]
 bitflags = "2"
+volatile = "0"

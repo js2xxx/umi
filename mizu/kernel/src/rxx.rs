@@ -17,13 +17,13 @@ static BOOT_PAGES: Table = const {
 
     table_1g![
         // The temporary identity mappings.
-        low_start => low_start, Attr::KERNEL_RWX;
+        low_start => low_start, Attr::KERNEL_MEM;
 
         // The temporary higher half mappings.
-        ID_OFFSET + addrs[0] => addrs[0], Attr::KERNEL_RWX;
-        ID_OFFSET + addrs[1] => addrs[1], Attr::KERNEL_RWX;
-        ID_OFFSET + addrs[2] => addrs[2], Attr::KERNEL_RWX;
-        ID_OFFSET + addrs[3] => addrs[3], Attr::KERNEL_RWX;
+        ID_OFFSET + addrs[0] => addrs[0], Attr::KERNEL_DEV;
+        ID_OFFSET + addrs[1] => addrs[1], Attr::KERNEL_DEV;
+        ID_OFFSET + addrs[2] => addrs[2], Attr::KERNEL_MEM;
+        ID_OFFSET + addrs[3] => addrs[3], Attr::KERNEL_MEM;
     ]
 };
 
@@ -31,10 +31,10 @@ pub const KERNEL_PAGES: Table = const {
     let delta = Level::max().page_size();
     let addrs = [0, delta, delta * 2, delta * 3];
     table_1g![
-        ID_OFFSET + addrs[0] => addrs[0], Attr::KERNEL_RWX;
-        ID_OFFSET + addrs[1] => addrs[1], Attr::KERNEL_RWX;
-        ID_OFFSET + addrs[2] => addrs[2], Attr::KERNEL_RWX;
-        ID_OFFSET + addrs[3] => addrs[3], Attr::KERNEL_RWX;
+        ID_OFFSET + addrs[0] => addrs[0], Attr::KERNEL_DEV;
+        ID_OFFSET + addrs[1] => addrs[1], Attr::KERNEL_DEV;
+        ID_OFFSET + addrs[2] => addrs[2], Attr::KERNEL_MEM;
+        ID_OFFSET + addrs[3] => addrs[3], Attr::KERNEL_MEM;
     ]
 };
 
@@ -86,20 +86,12 @@ fn run_art(payload: usize) {
 #[cfg(not(feature = "test"))]
 #[no_mangle]
 unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
-    use core::{
-        mem,
-        sync::atomic::{
-            AtomicBool,
-            Ordering::{Relaxed, Release},
-        },
-    };
+    use core::mem;
 
     use config::VIRT_END;
     use riscv::register::{sie, sstatus};
     use sbi_rt::{NoReason, Shutdown};
     use spin::Lazy;
-
-    static GLOBAL_INIT: AtomicBool = AtomicBool::new(false);
 
     extern "C" {
         static mut _sbss: u32;
@@ -114,7 +106,9 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
         static _end: u8;
     }
 
-    if !GLOBAL_INIT.load(Relaxed) {
+    let boot_hart = payload & (1 << 63) == 0;
+
+    if boot_hart {
         r0::zero_bss(&mut _sbss, &mut _ebss);
     }
 
@@ -134,12 +128,10 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
     // Init default kernel trap handler.
     unsafe { crate::trap::init() };
 
-    if !GLOBAL_INIT.load(Relaxed) {
+    if boot_hart {
         // Init the kernel heap.
         unsafe { kalloc::init(&mut _sheap, &mut _eheap) };
 
-        // Can't use cmpxchg here, because `zero_bss` will reinitialize it to zero.
-        GLOBAL_INIT.store(true, Release);
         hart_id::init_bsp_id(hartid);
 
         // Init the frame allocator.
@@ -151,6 +143,8 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
         // Init lazies.
         Lazy::force(&crate::syscall::SYSCALL);
         Lazy::force(&kmem::ZERO);
+
+        unsafe { crate::dev::init_logger() };
     }
     hart_id::init_hart_id(hartid);
 
@@ -183,8 +177,9 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
 #[link_section = ".init"]
 unsafe extern "C" fn _start() -> ! {
     asm!("
-        csrw sie, 0
-        csrw sip, 0
+        csrw sie, zero
+        csrw sip, zero
+        csrw satp, zero
 
         // Load ID offset to jump to higher half
         li t3, {ID_OFFSET}
@@ -193,10 +188,10 @@ unsafe extern "C" fn _start() -> ! {
         la t0, {BOOT_PAGES}
         sub t0, t0, t3
         srli t0, t0, 12
-        li t1, 0x8000000000000000
+        li t1, 8 << 60
         add t0, t0, t1
-        csrw satp, t0
         sfence.vma
+        csrw satp, t0
     
         // Set global pointer
         .option push

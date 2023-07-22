@@ -79,7 +79,7 @@ pub async fn openat(
     let (fd, path, options, perm) = cx.args();
     let fut = async {
         let mut buf = [0; MAX_PATH_LEN];
-        let (path, root) = path.read_path(ts.virt.as_ref(), &mut buf).await?;
+        let (path, root) = path.read_path(&ts.virt, &mut buf).await?;
 
         let options = OpenOptions::from_bits_truncate(options);
         let perm = Permissions::from_bits_truncate(perm);
@@ -122,7 +122,7 @@ pub async fn faccessat(
     let (fd, path, options, perm) = cx.args();
     let fut = async {
         let mut buf = [0; MAX_PATH_LEN];
-        let (path, root) = path.read_path(ts.virt.as_ref(), &mut buf).await?;
+        let (path, root) = path.read_path(&ts.virt, &mut buf).await?;
 
         let options = OpenOptions::from_bits_truncate(options);
         let perm = Permissions::from_bits(perm).ok_or(EPERM)?;
@@ -154,7 +154,7 @@ pub async fn mkdirat(
     let (fd, path, perm) = cx.args();
     let fut = async {
         let mut buf = [0; MAX_PATH_LEN];
-        let (path, root) = path.read_path(ts.virt.as_ref(), &mut buf).await?;
+        let (path, root) = path.read_path(&ts.virt, &mut buf).await?;
         let perm = Permissions::from_bits(perm).ok_or(EPERM)?;
 
         log::trace!("user mkdir fd = {fd}, path = {path:?}, perm = {perm:?}");
@@ -184,7 +184,7 @@ pub async fn fstat(
     let ret = async {
         let file = ts.files.get(fd).await?;
         let metadata = file.metadata().await;
-        out.write(ts.virt.as_ref(), metadata.into()).await
+        out.write(&ts.virt, metadata.into()).await
     };
     cx.ret(ret.await);
     ScRet::Continue(None)
@@ -198,7 +198,7 @@ pub async fn fstatat(
     let (fd, path, mut out) = cx.args();
     let ret = async {
         let mut buf = [0; MAX_PATH_LEN];
-        let (path, root) = path.read_path(ts.virt.as_ref(), &mut buf).await?;
+        let (path, root) = path.read_path(&ts.virt, &mut buf).await?;
 
         log::trace!("user fstatat fd = {fd}, path = {path:?}");
 
@@ -225,7 +225,7 @@ pub async fn fstatat(
             }
         };
         let metadata = file.metadata().await;
-        out.write(ts.virt.as_ref(), metadata.into()).await
+        out.write(&ts.virt, metadata.into()).await
     };
     cx.ret(ret.await);
     ScRet::Continue(None)
@@ -251,7 +251,7 @@ pub async fn fchmodat(
     let (fd, path, _perm, _flags) = cx.args();
     let fut = async {
         let mut buf = [0; MAX_PATH_LEN];
-        let (path, root) = path.read_path(ts.virt.as_ref(), &mut buf).await?;
+        let (path, root) = path.read_path(&ts.virt, &mut buf).await?;
 
         let _ = if root {
             crate::fs::open(
@@ -293,7 +293,7 @@ pub async fn utimensat(
         const UTIME_OMIT: u64 = 0x3ffffffe;
 
         let mut buf = [0; MAX_PATH_LEN];
-        let (path, root) = path.read_path(ts.virt.as_ref(), &mut buf).await?;
+        let (path, root) = path.read_path(&ts.virt, &mut buf).await?;
 
         let file = if root {
             crate::fs::open(
@@ -323,7 +323,7 @@ pub async fn utimensat(
             (Some(now), Some(now))
         } else {
             let mut buf = [Ts::default(); 2];
-            times.read_slice(ts.virt.as_ref(), &mut buf).await?;
+            times.read_slice(&ts.virt, &mut buf).await?;
             let [a, m] = buf;
             let a = match a.nsec {
                 UTIME_NOW => Some(now),
@@ -356,7 +356,7 @@ pub async fn getdents64(
     ts: &mut TaskState,
     cx: UserCx<'_, fn(i32, UserPtr<u8, Out>, usize) -> Result<usize, Error>>,
 ) -> ScRet {
-    let virt = ts.virt.as_ref();
+    let virt = &ts.virt;
     let files = &ts.files;
     let (fd, mut ptr, mut len) = cx.args();
 
@@ -436,8 +436,8 @@ pub async fn renameat(
     let (src, src_path, dst, dst_path) = cx.args();
     let ret = async {
         let [mut src_buf, mut dst_buf] = [[0; MAX_PATH_LEN]; 2];
-        let (src_path, _) = src_path.read_path(ts.virt.as_ref(), &mut src_buf).await?;
-        let (dst_path, _) = dst_path.read_path(ts.virt.as_ref(), &mut dst_buf).await?;
+        let (src_path, _) = src_path.read_path(&ts.virt, &mut src_buf).await?;
+        let (dst_path, _) = dst_path.read_path(&ts.virt, &mut dst_buf).await?;
 
         log::trace!("user renameat src = {src}/{src_path:?}, dst = {dst}/{dst_path:?}");
 
@@ -459,7 +459,7 @@ pub async fn unlinkat(
     let (fd, path, flags) = cx.args();
     let fut = async {
         let mut buf = [0; MAX_PATH_LEN];
-        let (path, root) = path.read_path(ts.virt.as_ref(), &mut buf).await?;
+        let (path, root) = path.read_path(&ts.virt, &mut buf).await?;
 
         log::trace!("user unlinkat fd = {fd}, path = {path:?}, flags = {flags}");
 
@@ -498,9 +498,9 @@ pub async fn mount(
         let mut src_buf = [0; MAX_PATH_LEN];
         let mut dst_buf = [0; MAX_PATH_LEN];
         let mut ty_buf = [0; 64];
-        let (src, root_src) = src.read_path(ts.virt.as_ref(), &mut src_buf).await?;
-        let (dst, root_dst) = dst.read_path(ts.virt.as_ref(), &mut dst_buf).await?;
-        let ty = ty.read_str(ts.virt.as_ref(), &mut ty_buf).await?;
+        let (src, root_src) = src.read_path(&ts.virt, &mut src_buf).await?;
+        let (dst, root_dst) = dst.read_path(&ts.virt, &mut dst_buf).await?;
+        let ty = ty.read_str(&ts.virt, &mut ty_buf).await?;
 
         let (src, _) = if root_src {
             crate::fs::open(
@@ -558,7 +558,7 @@ pub async fn umount(
     let target = cx.args();
     let fut = async {
         let mut buf = [9; MAX_PATH_LEN];
-        let (target, root) = target.read_path(ts.virt.as_ref(), &mut buf).await?;
+        let (target, root) = target.read_path(&ts.virt, &mut buf).await?;
         if root {
             crate::fs::unmount(target);
         } else {
@@ -578,7 +578,7 @@ pub async fn statfs(
     let (path, mut out) = cx.args();
     let fut = async {
         let mut buf = [0; MAX_PATH_LEN];
-        let (path, root) = path.read_path(ts.virt.as_ref(), &mut buf).await?;
+        let (path, root) = path.read_path(&ts.virt, &mut buf).await?;
         let fs = if root {
             crate::fs::get(path).ok_or(EINVAL)?.0
         } else {
@@ -588,7 +588,7 @@ pub async fn statfs(
         let stat = fs.stat().await;
         let fsid = Arsc::as_ptr(&fs) as *const () as _;
         out.write_slice(
-            ts.virt.as_ref(),
+            &ts.virt,
             &[
                 hasher.hash_one(stat.ty),
                 stat.block_size as u64,
@@ -640,7 +640,7 @@ pub async fn truncate(
     let (path, len) = cx.args();
     let mut buf = [0; MAX_PATH_LEN];
     let fut = async {
-        let (path, _) = path.read_path(ts.virt.as_ref(), &mut buf).await?;
+        let (path, _) = path.read_path(&ts.virt, &mut buf).await?;
         let (file, _) = crate::fs::open(
             path,
             OpenOptions::RDONLY,

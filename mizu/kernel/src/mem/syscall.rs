@@ -35,8 +35,13 @@ pub async fn brk(ts: &mut TaskState, cx: UserCx<'_, fn(usize) -> Result<usize, E
             let count = (new_page - old_page) >> PAGE_SHIFT;
             if count > 0 {
                 let phys = Phys::new(true);
+                let attr = Attr::builder()
+                    .user_access(true)
+                    .readable(true)
+                    .writable(true)
+                    .build();
                 ts.virt
-                    .map(Some(old_page.into()), phys, 0, count, Attr::USER_RW)
+                    .map(Some(old_page.into()), phys, 0, count, attr)
                     .await?;
             }
         }
@@ -67,7 +72,7 @@ pub async fn futex(
         }
         Ok(match op & !FUTEX_PRIVATE_FLAG {
             FUTEX_WAIT => {
-                let c = key.load(ts.virt.as_ref()).await?;
+                let c = key.load(&ts.virt).await?;
                 if c != val {
                     return Err(EAGAIN);
                 }
@@ -75,7 +80,7 @@ pub async fn futex(
                 if t.is_null() {
                     ts.futex.wait(key).await
                 } else {
-                    let timeout: Duration = t.read(ts.virt.as_ref()).await?.into();
+                    let timeout: Duration = t.read(&ts.virt).await?.into();
                     let wait = ts.futex.wait(key);
                     wait.ok_or_timeout(timeout, || ETIMEDOUT).await?;
                 }
@@ -84,7 +89,7 @@ pub async fn futex(
             FUTEX_WAKE => ts.futex.notify(key, val as usize),
             FUTEX_REQUEUE => ts.futex.requeue(key, key2, val as usize, spec),
             FUTEX_CMP_REQUEUE => {
-                let c = key.load(ts.virt.as_ref()).await?;
+                let c = key.load(&ts.virt).await?;
                 if c != val3 {
                     return Err(EAGAIN);
                 }
@@ -123,7 +128,7 @@ pub async fn get_robust_list(
             return Err(EPERM);
         }
         let rl = ts.futex.robust_list();
-        let virt = ts.virt.as_ref();
+        let virt = &ts.virt;
 
         len.write(virt, mem::size_of::<RobustListHead>()).await?;
         ptr.write(virt, rl.addr()).await
@@ -198,9 +203,7 @@ pub async fn mmap(
         let addr = ts.virt.map(addr, phys, offset, count, attr).await?;
 
         if flags.contains(Flags::POPULATE) {
-            ts.virt
-                .commit_range(addr..(addr + len), Default::default())
-                .await?;
+            ts.virt.commit(addr, Default::default()).await?;
         }
 
         Ok(addr.val())

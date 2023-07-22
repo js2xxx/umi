@@ -1,17 +1,14 @@
 use core::{num::NonZeroU32, ptr::NonNull};
 
-use crossbeam_queue::SegQueue;
-use devices::intr::Interrupt;
-use hashbrown::{hash_map::Entry, HashMap};
-use ksync::channel::{mpmc::Sender, unbounded};
-use rand_riscv::RandomState;
-use spin::RwLock;
+use devices::intr::{Completion, IntrHandler};
+use ksc::Handlers;
+use spin::{RwLock, RwLockUpgradableGuard};
 
 use crate::dev::Plic;
 
 pub struct IntrManager {
     plic: Plic,
-    map: RwLock<HashMap<u32, Sender<SegQueue<()>>, RandomState>>,
+    map: RwLock<Handlers<u32, &'static Completion, bool>>,
 }
 
 impl IntrManager {
@@ -19,7 +16,7 @@ impl IntrManager {
         hart_id::for_each_hart(|hid| plic.set_priority_threshold(Self::hid_to_cx(hid), 0));
         IntrManager {
             plic,
-            map: RwLock::new(HashMap::with_hasher(RandomState::new())),
+            map: RwLock::new(Default::default()),
         }
     }
 
@@ -34,44 +31,43 @@ impl IntrManager {
         hid * 2 + 1
     }
 
-    pub fn insert(&self, pin: NonZeroU32) -> Option<Interrupt> {
+    pub fn insert(&self, pin: NonZeroU32, handler: impl IntrHandler) -> bool {
         let pin = pin.get();
-        let rx = ksync::critical(|| match self.map.write().entry(pin) {
-            Entry::Occupied(entry) if entry.get().is_closed() => {
-                let (tx, rx) = unbounded();
-                entry.replace_entry(tx);
-                Some(rx)
-            }
-            Entry::Vacant(entry) => {
-                let (tx, rx) = unbounded();
-                entry.insert(tx);
-                Some(rx)
-            }
-            _ => None,
-        })?;
+        if !ksync::critical(|| self.map.write().try_insert(pin, handler)) {
+            return false;
+        }
         hart_id::for_each_hart(|hid| self.plic.enable(pin, Self::hid_to_cx(hid), true));
         self.plic.set_priority(pin, 1);
-        Some(Interrupt(rx))
+        true
     }
 
     pub fn check_pending(&self, pin: NonZeroU32) -> bool {
         self.plic.pending(pin.get())
     }
 
-    pub fn notify(&self, hid: usize) {
+    pub fn notify(&'static self, hid: usize) {
         let cx = Self::hid_to_cx(hid);
         let pin = self.plic.claim(cx);
+        if pin == 0 {
+            return;
+        }
         // log::trace!("Intr::notify cx = {cx}, pin = {pin}");
-        if pin > 0 {
-            let exist = ksync::critical(|| {
-                let map = self.map.read();
-                map.get(&pin).and_then(|sender| sender.try_send(()).ok())
-            });
-            if exist.is_none() {
-                self.plic.enable(pin, cx, false);
-                self.plic.set_priority(pin, 0);
+        let exist = ksync::critical(move || {
+            let map = self.map.upgradeable_read();
+            let ret = map.handle(pin, &move || self.plic.complete(cx, pin));
+            match ret {
+                Some(false) => {
+                    let mut map = RwLockUpgradableGuard::upgrade(map);
+                    map.remove(pin);
+                    false
+                }
+                Some(true) => true,
+                None => false,
             }
-            self.plic.complete(cx, pin);
+        });
+        if !exist {
+            self.plic.enable(pin, cx, false);
+            self.plic.set_priority(pin, 0);
         }
     }
 }

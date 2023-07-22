@@ -4,7 +4,7 @@ mod syscall;
 mod user;
 
 use alloc::sync::Arc;
-use core::{ops::Range, pin::Pin};
+use core::ops::Range;
 
 use arsc_rs::Arsc;
 use kmem::{Phys, Virt};
@@ -22,7 +22,7 @@ use crate::rxx::KERNEL_PAGES;
 
 pub const USER_RANGE: Range<usize> = 0x1000..((!CANONICAL_PREFIX) + 1);
 
-pub fn new_virt() -> Pin<Arsc<Virt>> {
+pub fn new_virt() -> Arsc<Virt> {
     Virt::new(USER_RANGE.start.into()..USER_RANGE.end.into(), KERNEL_PAGES)
 }
 
@@ -35,8 +35,8 @@ pub fn new_phys(from: Arc<dyn Io>, cow: bool) -> Phys {
     phys
 }
 
-pub async fn deep_fork(virt: &Pin<Arsc<Virt>>) -> Result<Pin<Arsc<Virt>>, Error> {
-    virt.as_ref().deep_fork(KERNEL_PAGES).await
+pub async fn deep_fork(virt: &Arsc<Virt>) -> Result<Arsc<Virt>, Error> {
+    virt.deep_fork(KERNEL_PAGES).await
 }
 
 #[allow(dead_code)]

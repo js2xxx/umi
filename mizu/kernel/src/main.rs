@@ -27,13 +27,16 @@ extern crate alloc;
 
 pub use self::rxx::executor;
 
-async fn main(fdt: usize) {
+async fn main(payload: usize) {
+    println!("Hello from UMI ^_^");
+
     // Init devices.
-    unsafe { crate::dev::init(fdt as _).expect("failed to initialize devices") };
+    unsafe {
+        let device_tree = config::device_tree(payload);
+        crate::dev::init(device_tree).expect("failed to initialize devices")
+    }
     // Init FS.
     fs::fs_init().await;
-
-    println!("Hello from UMI ^_^");
 
     mem::test_phys().await;
     fs::test_file().await;

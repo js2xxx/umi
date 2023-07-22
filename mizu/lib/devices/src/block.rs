@@ -4,6 +4,8 @@ use async_trait::async_trait;
 use ksc::Error;
 use umio::Io;
 
+use crate::intr::Completion;
+
 #[async_trait]
 pub trait Block: Io {
     fn block_shift(&self) -> u32;
@@ -15,7 +17,7 @@ pub trait Block: Io {
 
     fn capacity_blocks(&self) -> usize;
 
-    fn ack_interrupt(&self);
+    fn ack_interrupt(&self, completion: &Completion) -> bool;
 
     async fn read(&self, block: usize, buf: &mut [u8]) -> Result<usize, Error>;
 
@@ -25,7 +27,7 @@ pub trait Block: Io {
 #[macro_export]
 macro_rules! impl_io_for_block {
     ($type:ident) => {
-        #[async_trait]
+        #[async_trait::async_trait]
         impl umio::Io for $type {
             async fn seek(&self, whence: umio::SeekFrom) -> Result<usize, Error> {
                 match whence {

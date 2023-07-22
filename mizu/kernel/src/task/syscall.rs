@@ -41,7 +41,24 @@ use crate::{
 pub async fn uyield(_: &mut TaskState, cx: UserCx<'_, fn()>) -> ScRet {
     yield_now().await;
     cx.ret(());
-    ScRet::Continue(None)
+    Continue(None)
+}
+
+#[async_handler]
+pub async fn affinity(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(usize, usize, UserPtr<usize, Out>) -> Result<(), Error>>,
+) -> ScRet {
+    let (_tid, len, mut out) = cx.args();
+    let fut = async {
+        let mask = hart_id::hart_ids();
+        if len < mem::size_of::<usize>() {
+            return Err(EINVAL);
+        }
+        out.write(&ts.virt, mask).await
+    };
+    cx.ret(fut.await);
+    Continue(None)
 }
 
 #[async_handler]
@@ -70,7 +87,7 @@ pub async fn times(
 ) -> ScRet {
     let mut out = cx.args();
     let data = ts.task.times.get(true);
-    cx.ret(out.write_slice(ts.virt.as_ref(), &data, false).await);
+    cx.ret(out.write_slice(&ts.virt, &data, false).await);
     Continue(None)
 }
 
@@ -87,7 +104,7 @@ pub async fn setitimer(
             let Itv {
                 interval,
                 next_diff,
-            } = new.read(ts.virt.as_ref()).await?;
+            } = new.read(&ts.virt).await?;
             (interval != Default::default() || next_diff != Default::default())
                 .then_some((interval.into(), next_diff.into()))
         };
@@ -98,7 +115,7 @@ pub async fn setitimer(
                 interval: interval.into(),
                 next_diff: next_diff.into(),
             };
-            old_ptr.write(ts.virt.as_ref(), data).await?;
+            old_ptr.write(&ts.virt, data).await?;
         }
 
         Ok(())
@@ -143,14 +160,14 @@ pub async fn prlimit(
                 let limit = if new.is_null() {
                     ts.files.get_limit()
                 } else {
-                    ts.files.set_limit(new.read(ts.virt.as_ref()).await?.cur)
+                    ts.files.set_limit(new.read(&ts.virt).await?.cur)
                 };
                 (limit, limit)
             }
             _ => (usize::MAX, usize::MAX),
         };
         if !old.is_null() {
-            old.write(ts.virt.as_ref(), Rlimit { cur, max }).await?;
+            old.write(&ts.virt, Rlimit { cur, max }).await?;
         }
         Ok(())
     };
@@ -207,7 +224,7 @@ pub async fn getrusage(
             },
             ..Default::default()
         };
-        out.write(ts.virt.as_ref(), rusage).await?;
+        out.write(&ts.virt, rusage).await?;
         Ok(())
     };
     cx.ret(fut.await);
@@ -323,10 +340,10 @@ async fn clone_task(
         event: Broadcast::new(),
     });
     if flags.contains(Flags::PARENT_SETTID) {
-        ptid.write(ts.virt.as_ref(), new_tid).await?;
+        ptid.write(&ts.virt, new_tid).await?;
     }
     if flags.contains(Flags::CHILD_SETTID) {
-        ctid.write(ts.virt.as_ref(), new_tid).await?;
+        ctid.write(&ts.virt, new_tid).await?;
     }
 
     log::trace!("clone_task: cloning virt");
@@ -458,7 +475,7 @@ pub async fn waitpid(
                 TaskEvent::Continued => 0xffff,
             };
             log::trace!("Generated ws = {ws:#x}");
-            wstatus.write(ts.virt.as_ref(), ws).await?;
+            wstatus.write(&ts.virt, ws).await?;
         }
         Ok(tid)
     };
@@ -484,30 +501,26 @@ pub async fn execve(
         let mut ptrs = [0; 64];
         let mut data = [0; MAX_PATH_LEN];
 
-        let (name, root) = name.read_path(ts.virt.as_ref(), &mut data).await?;
+        let (name, root) = name.read_path(&ts.virt, &mut data).await?;
         let mut name = if root {
             name.to_path_buf()
         } else {
             ts.files.cwd().join(name)
         };
 
-        let argc = args
-            .read_slice_with_zero(ts.virt.as_ref(), &mut ptrs)
-            .await?;
+        let argc = args.read_slice_with_zero(&ts.virt, &mut ptrs).await?;
         let mut args = Vec::new();
         for &ptr in argc {
             let arg = UserPtr::<_, In>::from_raw(ptr);
-            let arg = arg.read_str(ts.virt.as_ref(), &mut data).await?;
+            let arg = arg.read_str(&ts.virt, &mut data).await?;
             args.push(arg.to_string());
         }
 
-        let envc = envs
-            .read_slice_with_zero(ts.virt.as_ref(), &mut ptrs)
-            .await?;
+        let envc = envs.read_slice_with_zero(&ts.virt, &mut ptrs).await?;
         let mut envs = Vec::new();
         for &ptr in envc {
             let env = UserPtr::<_, In>::from_raw(ptr);
-            let env = env.read_str(ts.virt.as_ref(), &mut data).await?;
+            let env = env.read_str(&ts.virt, &mut data).await?;
             envs.push(env.to_string());
         }
 

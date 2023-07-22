@@ -1,9 +1,5 @@
 use alloc::{vec, vec::Vec};
-use core::{
-    mem,
-    ops::Range,
-    pin::{pin, Pin},
-};
+use core::{mem, ops::Range, pin::pin};
 
 use futures_util::{stream, stream::StreamExt};
 use goblin::elf64::{header::*, program_header::*, section_header::*};
@@ -143,7 +139,7 @@ fn get_addr_range_info(segments: &[ProgramHeader]) -> (usize, usize) {
 async fn map_segment(
     segment: &ProgramHeader,
     phys: &Phys,
-    virt: Pin<&Virt>,
+    virt: &Virt,
     base: LAddr,
 ) -> Result<(), Error> {
     let memory_size = segment.p_memsz as usize;
@@ -220,11 +216,7 @@ pub async fn get_interp(phys: &Phys) -> Result<Option<Vec<u8>>, Error> {
     pin!(iter).next().await.transpose()
 }
 
-pub async fn load(
-    phys: &Phys,
-    force_dyn: Option<bool>,
-    virt: Pin<&Virt>,
-) -> Result<LoadedElf, Error> {
+pub async fn load(phys: &Phys, force_dyn: Option<bool>, virt: &Virt) -> Result<LoadedElf, Error> {
     log::trace!("elf::load");
     if !phys.is_cow() {
         return Err(Error::NotSupported("the Phys should be COW"));

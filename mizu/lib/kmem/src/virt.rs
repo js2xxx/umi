@@ -5,21 +5,19 @@ use core::{
     marker::PhantomPinned,
     mem,
     num::NonZeroUsize,
-    ops::Range,
-    pin::Pin,
+    ops::{Deref, DerefMut, Range},
     sync::atomic::{AtomicUsize, Ordering::SeqCst},
 };
 
 use arsc_rs::Arsc;
 use ksc_core::Error::{self, EFAULT, EINVAL, ENOSPC, EPERM};
-use ksync::Mutex;
+use ksync::{Mutex, RwLock, RwLockUpgradableReadGuard, RwLockWriteGuard};
 use range_map::{AslrKey, RangeMap};
-use rv39_paging::{
-    Attr, LAddr, PAddr, Table, ID_OFFSET, PAGE_LAYOUT, PAGE_MASK, PAGE_SHIFT, PAGE_SIZE,
-};
+use rv39_paging::{Attr, LAddr, Table, ID_OFFSET, PAGE_LAYOUT, PAGE_MASK, PAGE_SHIFT, PAGE_SIZE};
+use static_assertions::const_assert_eq;
 
 pub use self::tlb::unset_virt;
-use crate::{frame::frames, Phys};
+use crate::{frame::frames, Frame, Phys};
 
 const ASLR_BIT: u32 = 30;
 
@@ -29,9 +27,131 @@ struct Mapping {
     attr: Attr,
 }
 
+#[derive(Debug)]
+#[repr(C)]
+struct SliceRepr {
+    _ptr: *mut u8,
+    _len: usize,
+}
+const_assert_eq!(mem::size_of::<SliceRepr>(), mem::size_of::<&'static [u8]>());
+const_assert_eq!(
+    mem::size_of::<SliceRepr>(),
+    mem::size_of::<&'static mut [u8]>()
+);
+
+pub struct VirtCommitGuard<'a> {
+    map: Option<RwLockUpgradableReadGuard<'a, RangeMap<LAddr, Mapping>>>,
+    virt: &'a Virt,
+    attr: Attr,
+    range: Vec<SliceRepr>,
+}
+unsafe impl Send for VirtCommitGuard<'_> {}
+
+impl<'a> VirtCommitGuard<'a> {
+    pub async fn push(&mut self, range: Range<LAddr>) -> Result<(), Error> {
+        struct Guard<'a, 'b>(
+            &'b mut VirtCommitGuard<'a>,
+            Option<RwLockWriteGuard<'a, RangeMap<LAddr, Mapping>>>,
+        );
+        impl Drop for Guard<'_, '_> {
+            fn drop(&mut self) {
+                self.0.map = Some(RwLockWriteGuard::downgrade_to_upgradable(
+                    self.1.take().unwrap(),
+                ))
+            }
+        }
+        impl Deref for Guard<'_, '_> {
+            type Target = RangeMap<LAddr, Mapping>;
+
+            fn deref(&self) -> &Self::Target {
+                self.1.as_deref().unwrap()
+            }
+        }
+        impl DerefMut for Guard<'_, '_> {
+            fn deref_mut(&mut self) -> &mut Self::Target {
+                self.1.as_deref_mut().unwrap()
+            }
+        }
+
+        let aligned_range = LAddr::from(range.start.val() & !PAGE_MASK)
+            ..LAddr::from((range.end.val() + PAGE_MASK) & !PAGE_MASK);
+        log::trace!("Virt::commit_range {range:?} => {aligned_range:?}");
+
+        let map = self.map.take().unwrap();
+        let mut table = self.virt.root.lock().await;
+
+        let is_committed =
+            map.intersection(aligned_range.clone())
+                .try_fold(true, |acc, (addr, mapping)| {
+                    let start = aligned_range.start.max(*addr.start);
+                    let end = aligned_range.end.min(*addr.end);
+                    let len = end.val() - start.val();
+                    let count = len >> PAGE_SHIFT;
+
+                    let is_committed =
+                        mapping.is_committed(start, count, table.as_table(), self.attr)?;
+                    Ok::<_, Error>(acc && is_committed)
+                })?;
+
+        log::trace!(
+            "Virt::commit_range: {}",
+            if is_committed {
+                "pages are all committed"
+            } else {
+                "has uncommitted pages"
+            }
+        );
+
+        if is_committed {
+            self.map = Some(map);
+            self.range.push(SliceRepr {
+                _ptr: *range.start,
+                _len: range.end.val() - range.start.val(),
+            });
+            return Ok(());
+        }
+
+        let mut guard = Guard(self, Some(RwLockUpgradableReadGuard::upgrade(map).await));
+        let map = guard.1.as_mut().unwrap();
+        let this = &mut guard.0;
+
+        for (addr, mapping) in map.intersection_mut(aligned_range.clone()) {
+            log::trace!("Virt::commit_range found {addr:?}");
+            let start = aligned_range.start.max(*addr.start);
+            let end = aligned_range.end.min(*addr.end);
+            let offset = (start.val() - addr.start.val()) >> PAGE_SHIFT;
+            let len = end.val() - start.val();
+            let count = len >> PAGE_SHIFT;
+
+            if let Some(count) = NonZeroUsize::new(count) {
+                let cpu_mask = this.virt.cpu_mask.load(SeqCst);
+                mapping
+                    .commit(start, offset, count, table.as_table(), cpu_mask, this.attr)
+                    .await?;
+            }
+        }
+
+        this.range.push(SliceRepr {
+            _ptr: *range.start,
+            _len: range.end.val() - range.start.val(),
+        });
+        Ok(())
+    }
+
+    pub fn as_slice(&mut self) -> &mut [&'a [u8]] {
+        assert!(self.attr.contains(Attr::READABLE));
+        unsafe { mem::transmute(self.range.as_mut_slice()) }
+    }
+
+    pub fn as_mut_slice(&mut self) -> &mut [&'a mut [u8]] {
+        assert!(self.attr.contains(Attr::WRITABLE));
+        unsafe { mem::transmute(self.range.as_mut_slice()) }
+    }
+}
+
 pub struct Virt {
-    root: Mutex<Table>,
-    map: Mutex<RangeMap<LAddr, Mapping>>,
+    root: Mutex<Frame>,
+    map: RwLock<RangeMap<LAddr, Mapping>>,
     cpu_mask: AtomicUsize,
 
     _marker: PhantomPinned,
@@ -63,6 +183,25 @@ impl Drop for TlbFlushOnDrop {
 }
 
 impl Mapping {
+    fn is_committed(
+        &self,
+        addr: LAddr,
+        count: usize,
+        table: &mut Table,
+        expect_attr: Attr,
+    ) -> Result<bool, Error> {
+        for addr in (0..count).map(|c| addr + (c << PAGE_SHIFT)) {
+            if !self.attr.contains(expect_attr | Attr::USER_ACCESS) {
+                return Err(EPERM);
+            }
+
+            if !table.la2pte(addr, ID_OFFSET).map_or(false, |e| e.is_set()) {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     async fn commit(
         &mut self,
         addr: LAddr,
@@ -71,9 +210,8 @@ impl Mapping {
         table: &mut Table,
         cpu_mask: usize,
         expect_attr: Attr,
-    ) -> Result<Vec<Range<PAddr>>, Error> {
+    ) -> Result<(), Error> {
         let writable = self.attr.contains(Attr::WRITABLE);
-        let mut p = Vec::new();
 
         let mut flush = TlbFlushOnDrop::new(cpu_mask, addr);
 
@@ -85,19 +223,15 @@ impl Mapping {
             }
 
             let entry = table.la2pte_alloc(addr, frames(), ID_OFFSET)?;
-            let base = if !entry.is_set() {
+            if !entry.is_set() {
                 let writable = writable.then_some(PAGE_SIZE);
                 let (frame, _) = self.phys.commit(index, writable).await?;
                 let base = frame.base();
                 *entry = rv39_paging::Entry::new(base, self.attr, rv39_paging::Level::pt());
                 flush.count += 1;
-                base
-            } else {
-                entry.addr(rv39_paging::Level::pt())
-            };
-            p.push(base..base + PAGE_SIZE);
+            }
         }
-        Ok(p)
+        Ok(())
     }
 
     async fn decommit(
@@ -125,7 +259,7 @@ impl Mapping {
         Ok(())
     }
 
-    fn deep_fork(&mut self) -> Mapping {
+    fn deep_fork(&self) -> Mapping {
         Mapping {
             phys: Arsc::new(self.phys.clone_as(self.phys.is_cow(), 0, None)),
             start_index: self.start_index,
@@ -135,10 +269,10 @@ impl Mapping {
 }
 
 impl Virt {
-    pub fn new(range: Range<LAddr>, init_root: Table) -> Pin<Arsc<Self>> {
-        Arsc::pin(Virt {
-            root: Mutex::new(init_root),
-            map: Mutex::new(RangeMap::new(range)),
+    pub fn new(range: Range<LAddr>, init_root: Table) -> Arsc<Self> {
+        Arsc::new(Virt {
+            root: Mutex::new(init_root.into()),
+            map: RwLock::new(RangeMap::new(range)),
             cpu_mask: AtomicUsize::new(0),
             _marker: PhantomPinned,
         })
@@ -149,7 +283,7 @@ impl Virt {
     /// The caller must ensure that the current executing address is mapped
     /// correctly.
     #[inline]
-    pub unsafe fn load(self: Pin<Arsc<Self>>) {
+    pub unsafe fn load(self: Arsc<Self>) {
         tlb::set_virt(self)
     }
 
@@ -165,7 +299,7 @@ impl Virt {
             "Virt::map at {addr:?}, start_index = {start_index}, count = {count}, attr = {attr:?}"
         );
 
-        let mut map = self.map.lock().await;
+        let mut map = self.map.write().await;
         match addr {
             Some(start) => {
                 if start.val() & PAGE_MASK != 0 {
@@ -210,7 +344,7 @@ impl Virt {
         let layout = PAGE_LAYOUT.repeat(count)?.0;
         let aslr_key = AslrKey::new(ASLR_BIT, rand_riscv::rng(), layout);
 
-        let map = self.map.lock().await;
+        let map = self.map.read().await;
         match start {
             None => map.find_free_with_aslr(aslr_key, LAddr::val),
             Some(start) => {
@@ -221,21 +355,25 @@ impl Virt {
         .ok_or(ENOSPC)
     }
 
-    pub async fn commit_range(
-        &self,
-        range: Range<LAddr>,
-        expect_attr: Attr,
-    ) -> Result<Vec<Range<PAddr>>, Error> {
-        let aligned_range = LAddr::from(range.start.val() & !PAGE_MASK)
-            ..LAddr::from((range.end.val() + PAGE_MASK) & !PAGE_MASK);
+    pub async fn start_commit(&self, expect_attr: Attr) -> VirtCommitGuard {
+        VirtCommitGuard {
+            map: Some(self.map.upgradable_read().await),
+            virt: self,
+            attr: expect_attr,
+            range: Vec::new(),
+        }
+    }
 
-        log::trace!("Virt::commit_range {range:?} => {aligned_range:?}");
+    pub async fn commit(&self, addr: LAddr, expect_attr: Attr) -> Result<(), Error> {
+        let aligned_range = LAddr::from(addr.val() & !PAGE_MASK)
+            ..LAddr::from((addr.val() + PAGE_SIZE) & !PAGE_MASK);
 
-        let mut map = self.map.lock().await;
+        log::trace!("Virt::commit {addr:?} => {aligned_range:?}");
+
+        let mut map = self.map.write().await;
         let mut table = self.root.lock().await;
 
-        let mut paddr = Vec::new();
-        for (addr, mapping) in map.intersection_mut(aligned_range.clone()) {
+        if let Some((addr, mapping)) = map.intersection_mut(aligned_range.clone()).next() {
             log::trace!("Virt::commit found {addr:?}");
             let start = aligned_range.start.max(*addr.start);
             let end = aligned_range.end.min(*addr.end);
@@ -245,33 +383,27 @@ impl Virt {
 
             if let Some(count) = NonZeroUsize::new(count) {
                 let cpu_mask = self.cpu_mask.load(SeqCst);
-                let mut p = mapping
-                    .commit(start, offset, count, &mut table, cpu_mask, expect_attr)
+                mapping
+                    .commit(
+                        start,
+                        offset,
+                        count,
+                        table.as_table(),
+                        cpu_mask,
+                        expect_attr,
+                    )
                     .await?;
-                if let Some(first) = p.first_mut() {
-                    first.start += range.start.val().saturating_sub(start.val())
-                }
-                if let Some(last) = p.last_mut() {
-                    last.end -= end.val().saturating_sub(range.end.val())
-                }
-                paddr.extend(p.into_iter().rev())
             }
+            return Ok(());
         }
-        paddr.reverse();
-        log::trace!("Virt::commit_range result: {paddr:?}");
-        Ok(paddr)
-    }
-
-    pub async fn commit(&self, addr: LAddr, expect_attr: Attr) -> Result<PAddr, Error> {
-        let paddr = self.commit_range(addr..(addr + 1), expect_attr).await?;
-        paddr.first().map(|r| r.start).ok_or(EFAULT)
+        Err(EFAULT)
     }
 
     pub async fn decommit_range(&self, range: Range<LAddr>) -> Result<(), Error> {
         if range.start.val() & PAGE_MASK != 0 || range.end.val() & PAGE_MASK != 0 {
             return Err(EINVAL);
         }
-        let mut map = self.map.lock().await;
+        let mut map = self.map.write().await;
         let mut table = self.root.lock().await;
 
         for (addr, mapping) in map.intersection_mut(range.clone()) {
@@ -283,7 +415,7 @@ impl Virt {
             if let Some(count) = NonZeroUsize::new(count) {
                 let cpu_mask = self.cpu_mask.load(SeqCst);
                 mapping
-                    .decommit(start, offset, count, &mut table, cpu_mask)
+                    .decommit(start, offset, count, table.as_table(), cpu_mask)
                     .await?;
             }
         }
@@ -298,7 +430,7 @@ impl Virt {
         }
         let attr = attr | Attr::VALID;
 
-        let mut map = self.map.lock().await;
+        let mut map = self.map.write().await;
         let mut table = self.root.lock().await;
 
         for (addr, mapping) in map.range_mut(range.clone()) {
@@ -307,7 +439,7 @@ impl Virt {
             if let Some(count) = NonZeroUsize::new(count) {
                 let cpu_mask = self.cpu_mask.load(SeqCst);
                 mapping
-                    .decommit(*addr.start, 0, count, &mut table, cpu_mask)
+                    .decommit(*addr.start, 0, count, table.as_table(), cpu_mask)
                     .await?;
             }
             mapping.attr = attr;
@@ -321,7 +453,7 @@ impl Virt {
             if let Some(count) = NonZeroUsize::new(count) {
                 let cpu_mask = self.cpu_mask.load(SeqCst);
                 mapping
-                    .decommit(range.start, offset, count, &mut table, cpu_mask)
+                    .decommit(range.start, offset, count, table.as_table(), cpu_mask)
                     .await?;
             }
 
@@ -341,7 +473,7 @@ impl Virt {
             if let Some(count) = NonZeroUsize::new(count) {
                 let cpu_mask = self.cpu_mask.load(SeqCst);
                 mapping
-                    .decommit(range.end, 0, count, &mut table, cpu_mask)
+                    .decommit(range.end, 0, count, table.as_table(), cpu_mask)
                     .await?;
             }
 
@@ -364,14 +496,20 @@ impl Virt {
         if range.start.val() & PAGE_MASK != 0 || range.end.val() & PAGE_MASK != 0 {
             return Err(EINVAL);
         }
-        let mut map = self.map.lock().await;
+        let mut map = self.map.write().await;
         let mut table = self.root.lock().await;
 
         for (addr, mut mapping) in map.drain(range.clone()) {
             let count = (addr.end.val() - addr.start.val()) >> PAGE_SHIFT;
             if let Some(count) = NonZeroUsize::new(count) {
                 mapping
-                    .decommit(addr.start, 0, count, &mut table, self.cpu_mask.load(SeqCst))
+                    .decommit(
+                        addr.start,
+                        0,
+                        count,
+                        table.as_table(),
+                        self.cpu_mask.load(SeqCst),
+                    )
                     .await?;
             }
         }
@@ -384,7 +522,7 @@ impl Virt {
             if let Some(count) = NonZeroUsize::new(count) {
                 let cpu_mask = self.cpu_mask.load(SeqCst);
                 mapping
-                    .decommit(range.start, offset, count, &mut table, cpu_mask)
+                    .decommit(range.start, offset, count, table.as_table(), cpu_mask)
                     .await?;
             }
             entry.set_former(mapping);
@@ -396,7 +534,7 @@ impl Virt {
             if let Some(count) = NonZeroUsize::new(count) {
                 let cpu_mask = self.cpu_mask.load(SeqCst);
                 mapping
-                    .decommit(range.end, 0, count, &mut table, cpu_mask)
+                    .decommit(range.end, 0, count, table.as_table(), cpu_mask)
                     .await?;
             }
             mapping.start_index += count;
@@ -408,7 +546,7 @@ impl Virt {
     pub async fn clear(&self) {
         log::trace!("Virt::clear table = {:p}", self.root.as_ptr());
 
-        let mut map = self.map.lock().await;
+        let mut map = self.map.write().await;
         let mut table = self.root.lock().await;
 
         let range = map.root_range();
@@ -416,7 +554,7 @@ impl Virt {
         let old = mem::replace(&mut *map, RangeMap::new(range.clone()));
 
         let count = (range.end.val() - range.start.val()) >> PAGE_SHIFT;
-        table.unmap(range.clone(), frames(), ID_OFFSET);
+        table.as_table().unmap(range.clone(), frames(), ID_OFFSET);
         tlb::flush(self.cpu_mask.load(SeqCst), range.start, count);
 
         for (addr, mapping) in old {
@@ -428,8 +566,8 @@ impl Virt {
         }
     }
 
-    pub async fn deep_fork(self: Pin<&Self>, init_root: Table) -> Result<Pin<Arsc<Virt>>, Error> {
-        let mut map = self.map.lock().await;
+    pub async fn deep_fork(&self, init_root: Table) -> Result<Arsc<Virt>, Error> {
+        let mut map = self.map.write().await;
         let mut table = self.root.lock().await;
 
         let range = map.root_range();
@@ -442,7 +580,7 @@ impl Virt {
                 if let Some(count) = NonZeroUsize::new(count) {
                     let cpu_mask = self.cpu_mask.load(SeqCst);
                     mapping
-                        .decommit(*addr.start, 0, count, &mut table, cpu_mask)
+                        .decommit(*addr.start, 0, count, table.as_table(), cpu_mask)
                         .await?;
                 }
             }
@@ -450,9 +588,9 @@ impl Virt {
             let _ = new_map.try_insert(*addr.start..*addr.end, new_mapping);
         }
 
-        Ok(Arsc::pin(Virt {
-            root: Mutex::new(init_root),
-            map: Mutex::new(new_map),
+        Ok(Arsc::new(Virt {
+            root: Mutex::new(init_root.into()),
+            map: RwLock::new(new_map),
             cpu_mask: AtomicUsize::new(0),
             _marker: PhantomPinned,
         }))
@@ -467,6 +605,7 @@ impl Drop for Virt {
         let count = (range.end.val() - range.start.val()) >> PAGE_SHIFT;
         self.root
             .get_mut()
+            .as_table()
             .unmap(*range.start..*range.end, frames(), ID_OFFSET);
         tlb::flush(self.cpu_mask.load(SeqCst), *range.start, count);
     }

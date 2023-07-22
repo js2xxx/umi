@@ -13,9 +13,11 @@ pub const KERNEL_START: usize = VIRT_START + KERNEL_OFFSET;
 pub const TIME_FREQ: u128 = 10_000_000;
 pub const TIME_FREQ_M: Ratio<u128> = Ratio::new_raw(1, 10); // 10^6 / FREQ
 
-pub const MAX_HARTS: usize = 2;
+pub const MAX_HARTS: usize = 1;
 pub const HART_RANGE: Range<usize> = 0..MAX_HARTS;
 
-pub fn device_tree(payload: usize) -> *const () {
-    payload as _
+pub fn device_tree(_payload: usize) -> *const () {
+    static DEVICE_TREE: &[u8] = include_bytes!("cv1811h.dtb");
+
+    DEVICE_TREE.as_ptr().cast()
 }

@@ -1,7 +1,14 @@
 #![no_std]
 
-#[cfg_attr(feature = "qemu-virt", path = "qemu-virt.rs")]
-mod imp;
+cfg_if::cfg_if! {
+    if #[cfg(feature = "cv1811h")] {
+        #[path = "cv1811h.rs"]
+        mod imp;
+    } else {
+        #[path = "qemu-virt.rs"]
+        mod imp;
+    }
+}
 
 use core::time::Duration;
 

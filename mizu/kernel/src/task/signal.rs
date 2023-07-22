@@ -93,7 +93,7 @@ impl TaskState {
         let mut uc_ptr = UserPtr::<Ucontext, Out>::new(cur - pad_uc);
         let mut usi_ptr = UserPtr::<UsigInfo, Out>::new(uc_ptr.addr() - MAX_SI_LEN);
 
-        let virt = self.virt.as_ref();
+        let virt = &self.virt;
 
         let usi = UsigInfo {
             sig: si.sig,
@@ -133,7 +133,7 @@ impl TaskState {
     #[async_handler]
     pub async fn resume_from_signal(ts: &mut TaskState, tf: &mut TrapFrame) -> ScRet {
         let uc_ptr = UserPtr::<Ucontext, In>::new((tf.gpr.tx.sp + MAX_SI_LEN).into());
-        let Ok(uc) = uc_ptr.read(ts.virt.as_ref()).await else {
+        let Ok(uc) = uc_ptr.read(&ts.virt).await else {
             tf.sepc += 4;
             return ScRet::Continue(Some(SigInfo {
                 sig: Sig::SIGSEGV,

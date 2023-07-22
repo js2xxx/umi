@@ -11,7 +11,6 @@ use alloc::{
     sync::{Arc, Weak},
     vec::Vec,
 };
-use core::pin::Pin;
 
 use arsc_rs::Arsc;
 use crossbeam_queue::SegQueue;
@@ -96,7 +95,7 @@ pub struct TaskState {
     sig_stack: Option<SigStack>,
     pub(crate) brk: usize,
 
-    pub(crate) virt: Pin<Arsc<Virt>>,
+    pub(crate) virt: Arsc<Virt>,
     pub(crate) futex: Arsc<Futexes>,
     pub(crate) shm: Arsc<Shm>,
     sig_actions: Arsc<ActionSet>,
@@ -172,7 +171,7 @@ impl TaskState {
 
     async fn cleanup(mut self, code: i32, sig: Option<Sig>) {
         if let Some(mut tid_clear) = self.tid_clear.take() {
-            let _ = tid_clear.write(self.virt.as_ref(), 0).await;
+            let _ = tid_clear.write(&self.virt, 0).await;
             self.futex.notify(tid_clear.to_futex_key(), 1);
         }
 

@@ -9,21 +9,21 @@ pub trait Param {
     type Item<'a>: Param + 'a;
 }
 
-impl<T: 'static> Param for &'_ mut T {
+impl<T: ?Sized + 'static> Param for &'_ mut T {
     type Item<'a> = &'a mut T;
 }
 
-impl<T: 'static> Param for &T {
+impl<T: ?Sized + 'static> Param for &T {
     type Item<'a> = &'a T;
 }
 
-impl<T: 'static> FromParam<&'_ mut T> for &'_ mut T {
+impl<T: ?Sized + 'static> FromParam<&'_ mut T> for &'_ mut T {
     fn from_param<'a>(item: <&'_ mut T as Param>::Item<'a>) -> Self::Item<'a> {
         item
     }
 }
 
-impl<T: 'static> FromParam<&'_ T> for &'_ T {
+impl<T: ?Sized + 'static> FromParam<&'_ T> for &'_ T {
     fn from_param<'a>(item: <&'_ T as Param>::Item<'a>) -> Self::Item<'a> {
         item
     }

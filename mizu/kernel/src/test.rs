@@ -36,7 +36,7 @@ pub async fn libc() {
     let oo = OpenOptions::RDONLY;
     let perm = Default::default();
 
-    let scripts = ["run-dynamic.sh", "run-static.sh"];
+    let scripts = ["run-static.sh", "run-dynamic.sh"];
 
     let stream = stream::iter(scripts)
         .then(|sh| crate::fs::open(sh.as_ref(), oo, perm))
@@ -242,26 +242,26 @@ pub async fn test_all() {
     println!("run busybox_testcode.sh");
     run_busybox(Some("./busybox_testcode.sh")).await;
 
-    println!("run iozone_testcode.sh");
-    run_busybox(Some("./iozone_testcode.sh")).await;
-
     println!("run libctest_testcode.sh");
     run_busybox(Some("./libctest_testcode.sh")).await;
 
     println!("run lua_testcode.sh");
     run_busybox(Some("./lua_testcode.sh")).await;
 
-    println!("run netperf_testcode.sh");
-    run_busybox(Some("./netperf_testcode.sh")).await;
-
     println!("run iperf_testcode.sh");
     run_busybox(Some("./iperf_testcode.sh")).await;
 
-    println!("run cyclic_testcode.sh");
-    run_busybox(Some("./cyclic_testcode.sh")).await;
+    println!("run cyclictest_testcode.sh");
+    run_busybox(Some("./cyclictest_testcode.sh")).await;
 
     println!("run lmbench_testcode.sh");
     run_busybox(Some("./lmbench_testcode.sh")).await;
+
+    println!("run netperf_testcode.sh");
+    run_busybox(Some("./netperf_testcode.sh")).await;
+
+    println!("run iozone_testcode.sh");
+    run_busybox(Some("./iozone_testcode.sh")).await;
 
     println!("run unixbench_testcode.sh");
     run_busybox(Some("./unixbench_testcode.sh")).await;

@@ -21,7 +21,7 @@ use umifs::{
     traits::{Entry, FileSystem},
     types::{OpenOptions, Permissions},
 };
-use umio::IoExt;
+use umio::{IntoAnyExt, IoExt};
 
 pub use self::pipe::pipe;
 use crate::{dev::blocks, executor};
@@ -136,6 +136,9 @@ pub async fn fs_init() {
     mount("proc".into(), "procfs".into(), Arsc::new(proc::ProcFs));
     mount("tmp".into(), "tmpfs".into(), Arsc::new(tmp::TmpFs::new()));
     for (index, block) in blocks().into_iter().enumerate() {
+        if let Some(sdmmc) = block.clone().downcast::<sdmmc::Sdmmc>() {
+            sdmmc.init().await.expect("Failed to initialize SD card")
+        }
         let block_shift = block.block_shift();
         let phys = crate::mem::new_phys(block.to_io().unwrap(), false);
         if let Ok(fs) =

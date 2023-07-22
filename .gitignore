@@ -2,5 +2,6 @@ target
 /debug
 kernel-qemu
 sbi-qemu
+os.bin
 /third-party/img
 .cargo

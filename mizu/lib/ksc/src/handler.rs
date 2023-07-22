@@ -179,6 +179,19 @@ impl<K: Eq + Hash, P: Param, O: Param> Handlers<K, P, O> {
         self.map.insert(key, Box::new(handler.handler()));
     }
 
+    pub fn try_insert<H, Marker: 'static>(&mut self, key: K, handler: H) -> bool
+    where
+        H: for<'any> IntoHandler<Marker, Param<'any> = P, Output<'any> = O> + 'static,
+    {
+        self.map
+            .try_insert(key, Box::new(handler.handler()))
+            .is_ok()
+    }
+
+    pub fn remove(&mut self, key: K) {
+        self.map.remove(&key);
+    }
+
     /// Execute the handler in the slot indexed by `scn`, which is acquired from
     /// the given `TrapFrame`.
     pub fn handle<'a>(
@@ -263,6 +276,18 @@ impl<K: Eq + Hash, P: Param, O: Param> AHandlers<K, P, O> {
             + 'static,
     {
         self.0.insert(key, handler)
+    }
+
+    pub fn try_insert<H, Marker: 'static>(&mut self, key: K, handler: H) -> bool
+    where
+        H: for<'any> IntoHandler<Marker, Param<'any> = P, Output<'any> = Boxed<'static, O>>
+            + 'static,
+    {
+        self.0.try_insert(key, handler)
+    }
+
+    pub fn remove(&mut self, key: K) {
+        self.0.remove(key)
     }
 
     /// Execute the async handler in the slot indexed by `scn`, which is

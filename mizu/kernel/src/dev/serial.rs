@@ -8,7 +8,7 @@ use core::{
 };
 
 use crossbeam_queue::SegQueue;
-use devices::intr::Interrupt;
+use devices::intr::Completion;
 use fdt::node::FdtNode;
 use futures_util::{FutureExt, Stream};
 use ksync::event::{Event, EventListener};
@@ -18,8 +18,8 @@ use rv39_paging::{PAddr, ID_OFFSET};
 use spin::{Mutex, MutexGuard, Once};
 use uart::Uart;
 
-use super::intr::intr_man;
-use crate::someb;
+use super::{interrupts, intr::intr_man};
+use crate::{someb, tryb};
 
 struct Serial {
     device: Mutex<Uart>,
@@ -37,6 +37,11 @@ impl fmt::Write for Stdout<'_> {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         if let Some(serial) = &mut self.0 {
             serial.write_str(s)?;
+        } else {
+            s.bytes().for_each(|b| {
+                #[allow(deprecated)]
+                sbi_rt::legacy::console_putchar(b.into());
+            })
         }
         Ok(())
     }
@@ -170,62 +175,70 @@ impl log::Log for Logger {
 
 static mut LOGGER: MaybeUninit<Logger> = MaybeUninit::uninit();
 
-async fn dispatcher(intr: Interrupt) {
-    loop {
-        if !intr.wait().await {
-            break;
-        }
-        if let Some(serial) = SERIAL.get() {
-            ksync::critical(|| {
-                let mut device = serial.device.lock();
-                while let Some(b) = device.try_recv() {
-                    serial.input.push(b);
-                    serial.input_ready.notify(1);
-                }
-            })
-        }
+fn ack_interrupt(completion: &Completion) -> bool {
+    completion();
+    if let Some(serial) = SERIAL.get() {
+        ksync::critical(|| {
+            let mut device = serial.device.lock();
+            while let Some(b) = device.try_recv() {
+                serial.input.push(b);
+                serial.input_ready.notify(1);
+            }
+        });
+        return true;
+    }
+    false
+}
+
+pub unsafe fn init_logger() {
+    let level = match option_env!("RUST_LOG") {
+        Some("error") => Level::Error,
+        Some("warn") => Level::Warn,
+        Some("info") => Level::Info,
+        Some("debug") => Level::Debug,
+        Some("trace") => Level::Trace,
+        _ => Level::Warn,
+    };
+    unsafe {
+        let logger = LOGGER.write(Logger(level, Mutex::new(())));
+        log::set_logger(logger).unwrap();
+        log::set_max_level(level.to_level_filter());
     }
 }
 
-pub fn init(node: &FdtNode) -> bool {
+fn init(node: &FdtNode, stride: usize) -> bool {
+    if SERIAL.is_completed() {
+        return false;
+    }
     let mut regs = someb!(node.reg());
     let reg = someb!(regs.next());
 
-    let mut intrs = someb!(node.interrupts());
-    let pin = someb!(intrs.next().and_then(|i| NonZeroU32::new(i as u32)));
-
+    let pin = someb!(interrupts(node).next().and_then(NonZeroU32::new));
     let intr_man = someb!(intr_man());
-    let intr = someb!(intr_man.insert(pin));
 
-    SERIAL.call_once(|| {
+    tryb!(SERIAL.try_call_once(|| {
         let paddr = PAddr::new(reg.starting_address as usize);
         let base = paddr.to_laddr(ID_OFFSET);
 
-        let mut dev = unsafe { Uart::new(base.val()) };
+        let mut dev = unsafe { Uart::new(base.cast(), stride) };
         dev.init();
         atomic::fence(atomic::Ordering::SeqCst);
 
-        crate::executor().spawn(dispatcher(intr)).detach();
+        assert!(intr_man.insert(pin, ack_interrupt));
 
-        let level = match option_env!("RUST_LOG") {
-            Some("error") => Level::Error,
-            Some("warn") => Level::Warn,
-            Some("info") => Level::Info,
-            Some("debug") => Level::Debug,
-            Some("trace") => Level::Trace,
-            _ => Level::Warn,
-        };
-        unsafe {
-            let logger = LOGGER.write(Logger(level, Mutex::new(())));
-            log::set_logger(logger).unwrap();
-            log::set_max_level(level.to_level_filter());
-        }
-
-        Serial {
+        Ok::<_, ()>(Serial {
             device: Mutex::new(dev),
             input: SegQueue::new(),
             input_ready: Default::default(),
-        }
-    });
+        })
+    }));
     true
+}
+
+pub fn init_ns16550a(node: &FdtNode) -> bool {
+    init(node, 1)
+}
+
+pub fn init_dw_apb_uart(node: &FdtNode) -> bool {
+    init(node, 4)
 }

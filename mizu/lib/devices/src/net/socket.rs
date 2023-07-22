@@ -6,7 +6,7 @@ use futures_util::Future;
 use ksc::Error::{self, EOPNOTSUPP};
 use smoltcp::wire::{IpEndpoint, IpListenEndpoint};
 
-pub const BUFFER_CAP: usize = 32768;
+pub const BUFFER_CAP: usize = 212992;
 const META_CAP: usize = 8;
 
 #[derive(Debug)]

@@ -1,5 +1,5 @@
 use alloc::{boxed::Box, sync::Arc};
-use core::{mem, pin::Pin, time::Duration};
+use core::{mem, time::Duration};
 
 use co_trap::UserCx;
 use devices::net::{Socket, BUFFER_CAP};
@@ -8,6 +8,7 @@ use ksc::{
     async_handler,
     Error::{self, EAFNOSUPPORT, EAGAIN, EINVAL, ENOPROTOOPT, ENOTCONN, ENOTSOCK},
 };
+use rv39_paging::Attr;
 use smoltcp::wire::{IpAddress, IpEndpoint, IpListenEndpoint, Ipv4Address, Ipv6Address};
 use umifs::types::{OpenOptions, Permissions};
 use umio::IntoAnyExt;
@@ -88,11 +89,7 @@ impl From<SockAddrIpv6> for IpListenEndpoint {
     }
 }
 
-async fn ipaddr<T>(
-    virt: Pin<&Virt>,
-    mut addr: UserPtr<u16, In>,
-    len: usize,
-) -> Result<Option<T>, Error>
+async fn ipaddr<T>(virt: &Virt, mut addr: UserPtr<u16, In>, len: usize) -> Result<Option<T>, Error>
 where
     T: From<SockAddrIpv4> + From<SockAddrIpv6>,
 {
@@ -122,7 +119,7 @@ where
 }
 
 async fn write_ipaddr(
-    virt: Pin<&Virt>,
+    virt: &Virt,
     (addr, port): (Option<IpAddress>, u16),
     mut ptr: UserPtr<u16, Out>,
     len: UserPtr<usize, InOut>,
@@ -222,7 +219,7 @@ pub async fn getsockname(
         let mut storage = None;
         let (socket, _) = sock(&ts.files, fd, &mut storage).await?;
         if let Some(IpListenEndpoint { addr, port }) = socket.listen_endpoint() {
-            write_ipaddr(ts.virt.as_ref(), (addr, port), ptr, len).await?;
+            write_ipaddr(&ts.virt, (addr, port), ptr, len).await?;
         }
         Ok(())
     };
@@ -308,10 +305,10 @@ pub async fn getsockopt(
             _ => return Ok(()),
         };
 
-        let written_len = len.read(ts.virt.as_ref()).await?.min(value_len);
-        ptr.write_slice(ts.virt.as_ref(), &value.as_bytes()[..written_len], false)
+        let written_len = len.read(&ts.virt).await?.min(value_len);
+        ptr.write_slice(&ts.virt, &value.as_bytes()[..written_len], false)
             .await?;
-        len.write(ts.virt.as_ref(), value_len).await?;
+        len.write(&ts.virt, value_len).await?;
 
         Ok(())
     };
@@ -333,7 +330,7 @@ pub async fn setsockopt(
             SOL_SOCKET => {
                 let mut value = SockOpt { value: 0 };
                 match value.as_bytes_mut().get_mut(..len) {
-                    Some(bytes) => ptr.read_slice(ts.virt.as_ref(), bytes).await?,
+                    Some(bytes) => ptr.read_slice(&ts.virt, bytes).await?,
                     None => return Err(EINVAL),
                 }
                 match opt {
@@ -368,13 +365,15 @@ pub async fn sendto(
 ) -> ScRet {
     let (fd, buf, len, _flags, addr, addr_len) = cx.args();
     let fut = async {
-        let mut buf = buf.as_slice(ts.virt.as_ref(), len).await?;
-        let endpoint = ipaddr(ts.virt.as_ref(), addr, addr_len).await?;
+        let mut guard = ts.virt.start_commit(Attr::READABLE).await;
+        buf.commit(&mut guard, len).await?;
+
+        let endpoint = ipaddr(&ts.virt, addr, addr_len).await?;
 
         let mut storage = None;
         let (socket, nonblock) = sock(&ts.files, fd, &mut storage).await?;
 
-        socket.send(&mut buf, endpoint, nonblock).await
+        socket.send(guard.as_slice(), endpoint, nonblock).await
     };
     cx.ret(fut.await);
     ScRet::Continue(None)
@@ -395,16 +394,17 @@ pub async fn recvfrom(
         ) -> Result<usize, Error>,
     >,
 ) -> ScRet {
-    let (fd, mut buf, len, _flags, ptr, addr_len) = cx.args();
+    let (fd, buf, len, _flags, ptr, addr_len) = cx.args();
     let fut = async {
-        let mut buf = buf.as_mut_slice(ts.virt.as_ref(), len).await?;
+        let mut guard = ts.virt.start_commit(Attr::WRITABLE).await;
+        buf.commit(&mut guard, len).await?;
 
         let mut storage = None;
         let (socket, nonblock) = sock(&ts.files, fd, &mut storage).await?;
 
-        let (len, endpoint) = socket.receive(&mut buf, nonblock).await?;
+        let (len, endpoint) = socket.receive(guard.as_mut_slice(), nonblock).await?;
         if let Some(IpEndpoint { addr, port }) = endpoint {
-            write_ipaddr(ts.virt.as_ref(), (Some(addr), port), ptr, addr_len).await?;
+            write_ipaddr(&ts.virt, (Some(addr), port), ptr, addr_len).await?;
         }
         Ok(len)
     };
@@ -422,7 +422,7 @@ pub async fn getpeername(
         let mut storage = None;
         let (socket, _) = sock(&ts.files, fd, &mut storage).await?;
         let IpEndpoint { addr, port } = socket.remote_endpoint().ok_or(ENOTCONN)?;
-        write_ipaddr(ts.virt.as_ref(), (Some(addr), port), ptr, len).await?;
+        write_ipaddr(&ts.virt, (Some(addr), port), ptr, len).await?;
         Ok(())
     };
     cx.ret(fut.await);
@@ -436,7 +436,7 @@ pub async fn connect(
 ) -> ScRet {
     let (fd, addr, len) = cx.args();
     let fut = async {
-        let endpoint = ipaddr(ts.virt.as_ref(), addr, len).await?.ok_or(EINVAL)?;
+        let endpoint = ipaddr(&ts.virt, addr, len).await?.ok_or(EINVAL)?;
         let mut storage = None;
         let (socket, nonblock) = sock(&ts.files, fd, &mut storage).await?;
         let timeout = if nonblock {
@@ -460,7 +460,7 @@ pub async fn bind(
 ) -> ScRet {
     let (fd, addr, len) = cx.args();
     let fut = async {
-        let endpoint = ipaddr(ts.virt.as_ref(), addr, len).await?.ok_or(EINVAL)?;
+        let endpoint = ipaddr(&ts.virt, addr, len).await?.ok_or(EINVAL)?;
         let mut storage = None;
         let (socket, _) = sock(&ts.files, fd, &mut storage).await?;
         socket.bind(endpoint)
@@ -501,7 +501,7 @@ pub async fn accept(
         };
         let new = poll_with(socket.accept(), timeout).await?;
         if let Some(IpEndpoint { addr, port }) = new.remote_endpoint() {
-            write_ipaddr(ts.virt.as_ref(), (Some(addr), port), ptr, len).await?;
+            write_ipaddr(&ts.virt, (Some(addr), port), ptr, len).await?;
         }
         let fi = FdInfo {
             entry: socket::tcp_accept(new),
