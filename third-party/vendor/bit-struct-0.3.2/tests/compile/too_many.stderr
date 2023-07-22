@@ -1,0 +1,27 @@
+error[E0080]: evaluation of constant value failed
+ --> tests/compile/too_many.rs:1:1
+  |
+1 | / bit_struct::bit_struct! {
+2 | |     struct TooMany(u16) {
+3 | |         a: u8,
+4 | |         b: u8,
+5 | |         c: bit_struct::u1
+6 | |     }
+7 | | }
+  | |_^ attempt to compute `0_usize - 1_usize`, which would overflow
+  |
+  = note: this error originates in the macro `$crate::impl_fields` which comes from the expansion of the macro `bit_struct::bit_struct` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0080]: evaluation of constant value failed
+ --> tests/compile/too_many.rs:1:1
+  |
+1 | / bit_struct::bit_struct! {
+2 | |     struct TooMany(u16) {
+3 | |         a: u8,
+4 | |         b: u8,
+5 | |         c: bit_struct::u1
+6 | |     }
+7 | | }
+  | |_^ attempt to compute `0_usize - 1_usize`, which would overflow
+  |
+  = note: this error originates in the macro `$crate::impl_fields` which comes from the expansion of the macro `bit_struct::bit_struct` (in Nightly builds, run with -Z macro-backtrace for more info)

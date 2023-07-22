@@ -1,0 +1,43 @@
+error[E0277]: the trait bound `EnumNoBits: ValidCheck<u16>` is not satisfied
+  --> tests/compile/incorrect_type.rs:6:1
+   |
+6  | / bit_struct::bit_struct! {
+7  | |     struct Incorrect(u16) {
+8  | |         a: EnumNoBits
+9  | |     }
+10 | | }
+   | |_^ the trait `ValidCheck<u16>` is not implemented for `EnumNoBits`
+   |
+   = help: the following other types implement trait `ValidCheck<P>`:
+             bool
+             i10
+             i11
+             i12
+             i128
+             i13
+             i14
+             i15
+           and 122 others
+   = note: this error originates in the macro `bit_struct::bit_struct` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `EnumNoBits: BitCount` is not satisfied
+  --> tests/compile/incorrect_type.rs:6:1
+   |
+6  | / bit_struct::bit_struct! {
+7  | |     struct Incorrect(u16) {
+8  | |         a: EnumNoBits
+9  | |     }
+10 | | }
+   | |_^ the trait `BitCount` is not implemented for `EnumNoBits`
+   |
+   = help: the following other types implement trait `BitCount`:
+             bool
+             i10
+             i11
+             i12
+             i13
+             i14
+             i15
+             i17
+           and 117 others
+   = note: this error originates in the macro `$crate::impl_fields` which comes from the expansion of the macro `bit_struct::bit_struct` (in Nightly builds, run with -Z macro-backtrace for more info)
