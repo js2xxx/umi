@@ -41,7 +41,24 @@ use crate::{
 pub async fn uyield(_: &mut TaskState, cx: UserCx<'_, fn()>) -> ScRet {
     yield_now().await;
     cx.ret(());
-    ScRet::Continue(None)
+    Continue(None)
+}
+
+#[async_handler]
+pub async fn affinity(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(usize, usize, UserPtr<usize, Out>) -> Result<(), Error>>,
+) -> ScRet {
+    let (_tid, len, mut out) = cx.args();
+    let fut = async {
+        let mask = hart_id::hart_ids();
+        if len < mem::size_of::<usize>() {
+            return Err(EINVAL);
+        }
+        out.write(ts.virt.as_ref(), mask).await
+    };
+    cx.ret(fut.await);
+    Continue(None)
 }
 
 #[async_handler]
