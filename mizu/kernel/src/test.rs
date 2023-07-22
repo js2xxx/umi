@@ -251,11 +251,11 @@ pub async fn test_all() {
     println!("run iperf_testcode.sh");
     run_busybox(Some("./iperf_testcode.sh")).await;
 
-    println!("run lmbench_testcode.sh");
-    run_busybox(Some("./lmbench_testcode.sh")).await;
-
     println!("run cyclictest_testcode.sh");
     run_busybox(Some("./cyclictest_testcode.sh")).await;
+
+    println!("run lmbench_testcode.sh");
+    run_busybox(Some("./lmbench_testcode.sh")).await;
 
     println!("run netperf_testcode.sh");
     run_busybox(Some("./netperf_testcode.sh")).await;

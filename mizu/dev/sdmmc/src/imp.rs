@@ -1,5 +1,4 @@
 use alloc::vec::Vec;
-use devices::intr::Completion;
 use core::{
     fmt, mem,
     ops::Range,
@@ -9,6 +8,7 @@ use core::{
 };
 
 use bit_struct::{u12, u2, u3, u6};
+use devices::intr::Completion;
 use futures_util::task::AtomicWaker;
 use ksc::Error::{self, EILSEQ, EINVAL, EIO, ENODEV, ETIMEDOUT};
 use ktime::Instant;
