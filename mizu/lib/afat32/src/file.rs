@@ -239,7 +239,7 @@ impl<T: TimeProvider> Io for FatFile<T> {
             }
             None => (count << cluster_shift) - offset_in_cluster,
         };
-        log::trace!("FatFile::read_at: rest {rest:#x} bytes can be read");
+        // log::trace!("FatFile::read_at: rest {rest:#x} bytes can be read");
 
         let mut cluster_offset = self.fs.offset_from_cluster(cluster) as usize + offset_in_cluster;
         let mut read_len = 0;
@@ -250,12 +250,12 @@ impl<T: TimeProvider> Io for FatFile<T> {
                 break Ok(read_len);
             }
             let len = rest.min(buffer[0].len());
-            log::trace!("FatFile::read_at: attempt to read {len:#x} bytes");
+            // log::trace!("FatFile::read_at: attempt to read {len:#x} bytes");
 
             let len = device
                 .read_at(cluster_offset, &mut [&mut buffer[0][..len]])
                 .await?;
-            log::trace!("FatFile::read_at: actual read {len:#x} bytes");
+            // log::trace!("FatFile::read_at: actual read {len:#x} bytes");
 
             cluster_offset += len;
             read_len += len;
@@ -285,18 +285,20 @@ impl<T: TimeProvider> Io for FatFile<T> {
                     (cluster, count)
                 }
                 None => {
-                    let mut times = (cluster_index
+                    let gap_count: u32 = (cluster_index - clusters.len()).try_into()?;
+                    let times: u32 = (cluster_index
                         + ((ioslice_len + ((1 << cluster_shift) - 1)) >> cluster_shift)
                         - clusters.len())
                     .try_into()?;
                     let mut prev = clusters.last().map(|&(c, _)| c);
 
+                    let mut allocated = 0;
                     loop {
-                        let mut count = times;
+                        let mut count = times - allocated;
                         // log::trace!(
                         //     "FatFile::write_at {self:p} remaining {count} clusters to allocate"
                         // );
-                        let new = self.fs.alloc_cluster(prev, &mut count, true).await?;
+                        let new = self.fs.alloc_cluster(prev, &mut count, false).await?;
                         let new_end = new + count - 1;
 
                         if let Some(&(_, old_end)) = clusters.last() {
@@ -315,9 +317,9 @@ impl<T: TimeProvider> Io for FatFile<T> {
 
                         clusters.extend((new..(new + count)).zip(iter::repeat(new_end)));
 
-                        times -= count;
-                        if times == 0 {
-                            break (new, 1);
+                        allocated += count;
+                        if allocated > gap_count || allocated >= times {
+                            break (new, (allocated - gap_count) as usize);
                         }
                         prev = Some(new);
                     }
@@ -335,9 +337,11 @@ impl<T: TimeProvider> Io for FatFile<T> {
                 break Ok(written_len);
             }
             let len = rest.min(buffer[0].len());
+            // log::trace!("FatFile::write_at: attempt to write {len:#x} bytes");
             let len = device
                 .write_at(cluster_offset, &mut [&buffer[0][..len]])
                 .await?;
+            // log::trace!("FatFile::write_at: actual wrote {len:#x} bytes");
 
             cluster_offset += len;
             offset += len;

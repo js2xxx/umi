@@ -18,4 +18,5 @@ concat-arrays = "0"
 futures-util = {version = "0", default-features = false, features = ["alloc"]}
 log = "0"
 nom = {version = "7", default-features = false, features = ["alloc"]}
+smallvec = "1"
 spin = "0"

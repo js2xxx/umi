@@ -64,6 +64,7 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         .map(RT_SIGPROCMASK, signal::sigprocmask)
         .map(RT_SIGACTION, signal::sigaction)
         .map(RT_SIGTIMEDWAIT, signal::sigtimedwait)
+        .map(RT_SIGSUSPEND, signal::sigsuspend)
         .map(KILL, signal::kill)
         .map(TKILL, signal::tkill)
         .map(TGKILL, signal::tgkill)
@@ -110,7 +111,7 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         .map(TRUNCATE, fd::truncate)
         // Network
         .map(SOCKET, fd::socket)
-        .map(SOCKETPAIR, dummy_zero)
+        .map(SOCKETPAIR, fd::socket_pair)
         .map(GETSOCKNAME, fd::getsockname)
         .map(GETSOCKOPT, fd::getsockopt)
         .map(SETSOCKOPT, fd::setsockopt)

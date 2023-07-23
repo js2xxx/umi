@@ -521,15 +521,11 @@ impl DirEntryEditor {
 
     pub(crate) async fn flush(&mut self, device: &dyn Io) -> Result<(), Error> {
         if self.dirty {
-            self.write(device).await?;
+            let bytes = self.data.to_bytes();
+            device.write_all_at(self.pos as usize, &bytes).await?;
+
             self.dirty = false;
         }
-        Ok(())
-    }
-
-    async fn write(&self, device: &dyn Io) -> Result<(), Error> {
-        let bytes = self.data.to_bytes();
-        device.write_all_at(self.pos as usize, &bytes).await?;
         Ok(())
     }
 }

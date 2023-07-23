@@ -223,8 +223,7 @@ impl Future for ChunkOp<'_> {
                             },
                         }?;
 
-                        // log::trace!("VirtioBlock::poll: submitted {dir:?}, token
-                        // = {token:?}");
+                        // log::trace!("VirtioBlock::poll: submitted {dir:?}, token = {token:?}");
 
                         let (tx, rx) = oneshot();
                         let request = Request {

@@ -193,7 +193,7 @@ impl TaskState {
 
         let sig_mask = matches!(
             scn,
-            Scn::KILL | Scn::TKILL | Scn::TGKILL | Scn::RT_SIGQUEUEINFO
+            Scn::KILL | Scn::TKILL | Scn::TGKILL | Scn::RT_SIGQUEUEINFO | Scn::RT_SIGSUSPEND
         )
         .then(|| mem::replace(&mut self.sig_mask, !SigSet::EMPTY));
 

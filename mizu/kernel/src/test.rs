@@ -105,6 +105,14 @@ pub async fn run(command: &str) -> (i32, Option<Sig>) {
     task.unwrap().wait().await
 }
 
+#[allow(dead_code)]
+pub async fn run_task(executable: &str) -> (i32, Option<Sig>) {
+    let mut cmd = Command::new(executable);
+    cmd.open_executable().await.unwrap();
+    let task = cmd.envs(ENVS).spawn().await;
+    task.unwrap().wait().await
+}
+
 async fn print_file(path: impl AsRef<Path>) {
     let (file, _) = crate::fs::open(path.as_ref(), Default::default(), Default::default())
         .await
@@ -237,7 +245,7 @@ pub async fn test_all() {
     // self::test::run_busybox(Some("./test_all.sh")).await;
 
     println!("run time-test");
-    run("./time-test").await;
+    run_task("time-test").await;
 
     println!("run busybox_testcode.sh");
     run_busybox(Some("./busybox_testcode.sh")).await;
@@ -251,18 +259,21 @@ pub async fn test_all() {
     println!("run iperf_testcode.sh");
     run_busybox(Some("./iperf_testcode.sh")).await;
 
+    println!("run iozone_testcode.sh");
+    run_busybox(Some("./iozone_testcode.sh")).await;
+
     println!("run cyclictest_testcode.sh");
     run_busybox(Some("./cyclictest_testcode.sh")).await;
 
     println!("run lmbench_testcode.sh");
     run_busybox(Some("./lmbench_testcode.sh")).await;
 
+    println!("run unixbench_testcode.sh");
+    run_busybox(Some("./unixbench_testcode.sh")).await;
+
     println!("run netperf_testcode.sh");
     run_busybox(Some("./netperf_testcode.sh")).await;
 
-    println!("run iozone_testcode.sh");
-    run_busybox(Some("./iozone_testcode.sh")).await;
-
-    println!("run unixbench_testcode.sh");
-    run_busybox(Some("./unixbench_testcode.sh")).await;
+    println!("run libc-bench");
+    run_task("libc-bench").await;
 }

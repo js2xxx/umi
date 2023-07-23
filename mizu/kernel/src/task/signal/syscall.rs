@@ -5,7 +5,7 @@ use co_trap::UserCx;
 use futures_util::future::{select, Either};
 use ksc::{
     async_handler,
-    Error::{self, EINVAL, EPERM, ESRCH, ETIMEDOUT},
+    Error::{self, EINTR, EINVAL, EPERM, ESRCH, ETIMEDOUT},
 };
 use ktime::TimeOutExt;
 use rv39_paging::{LAddr, PAGE_SIZE};
@@ -257,6 +257,31 @@ pub async fn sigtimedwait(
         }
 
         Ok(si.sig.raw())
+    };
+    cx.ret(fut.await);
+    ScRet::Continue(None)
+}
+
+#[async_handler]
+pub async fn sigsuspend(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(UserPtr<SigSet, In>, usize) -> Result<(), Error>>,
+) -> ScRet {
+    let (set, size) = cx.args();
+    let fut = async {
+        if size != mem::size_of::<SigSet>() {
+            return Err(EINVAL);
+        }
+        let set = set.read(&ts.virt).await?;
+        let old = mem::replace(&mut ts.sig_mask, set);
+
+        let local = pin!(ts.task.sig.wait_event(!ts.sig_mask));
+        let shared = ts.task.shared_sig.load(SeqCst);
+        let shared = pin!(shared.wait_event(!ts.sig_mask));
+        select(local, shared).await;
+
+        ts.sig_mask = old;
+        Err(EINTR)
     };
     cx.ret(fut.await);
     ScRet::Continue(None)

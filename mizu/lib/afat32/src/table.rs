@@ -248,7 +248,12 @@ impl Fat {
         Ok(())
     }
 
-    async fn find_free<R>(&self, cluster_range: R, num: &mut u32) -> Result<u32, Error>
+    async fn find_free<R>(
+        &self,
+        cluster_range: R,
+        num: &mut u32,
+        buf: &mut [u32],
+    ) -> Result<u32, Error>
     where
         R: RangeBounds<u32>,
     {
@@ -265,21 +270,18 @@ impl Fat {
             Bound::Unbounded => allocable_range.end,
         };
 
-        let mut buf = [0; BATCH_LEN];
-
         // The range may be massive so that `try_join_all` will allocate huge amount of
         // memory, resulting in potential memory exhaustion.
         let mut count = 0;
         let mut ret = None;
-        for start in (start..end).step_by(BATCH_LEN) {
-            let len = BATCH_LEN.min((end - start) as usize);
+        for start in (start..end).step_by(buf.len()) {
+            let len = buf.len().min((end - start) as usize);
             for (cluster, entry) in self.get_range(start, &mut buf[..len]).await? {
                 if entry == FatEntry::Free {
                     if count >= *num {
                         *num = count;
                         return Ok(ret.unwrap());
-                    }
-                    if count == 0 {
+                    } else if count == 0 {
                         ret = Some(cluster);
                     }
                     count += 1;
@@ -312,9 +314,12 @@ impl Fat {
 
         let _alloc = self.allocate_lock.lock().await;
 
-        let ret = match self.find_free(hint.., &mut *num).await {
+        let mut buf: smallvec::SmallVec<[_; BATCH_LEN]> =
+            smallvec::smallvec![0; ALLOCATE_BATCH_LEN.min(*num as usize)];
+
+        let ret = match self.find_free(hint.., &mut *num, &mut buf).await {
             Ok(cluster) => cluster,
-            Err(ENOSPC) => self.find_free(..hint, &mut *num).await?,
+            Err(ENOSPC) => self.find_free(..hint, &mut *num, &mut buf).await?,
             Err(err) => return Err(err),
         };
 
@@ -322,13 +327,9 @@ impl Fat {
             self.set(prev, FatEntry::Next(ret)).await?;
         }
         if *num > 1 {
-            let mut buf = [0; BATCH_LEN];
-            self.set_range(
-                ret,
-                &mut buf[..((*num as usize) - 1)],
-                ((ret + 1)..(ret + *num)).map(FatEntry::Next),
-            )
-            .await?;
+            let buf = &mut buf[..((*num as usize) - 1)];
+            let iter = ((ret + 1)..(ret + *num)).map(FatEntry::Next);
+            self.set_range(ret, buf, iter).await?;
         }
         self.set(ret + *num - 1, FatEntry::End).await?;
         Ok(ret)
@@ -421,4 +422,5 @@ impl Fat {
     }
 }
 
+const ALLOCATE_BATCH_LEN: usize = 1024;
 const BATCH_LEN: usize = 64;
