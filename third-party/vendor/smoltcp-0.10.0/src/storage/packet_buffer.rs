@@ -71,6 +71,10 @@ impl<'a, H> PacketBuffer<'a, H> {
         self.metadata_ring.is_full()
     }
 
+    pub fn len(&self) -> usize {
+        self.metadata_ring.len()
+    }
+
     // There is currently no enqueue_with() because of the complexity of managing padding
     // in case of failure.
 

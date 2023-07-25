@@ -336,6 +336,22 @@ impl<'a> Socket<'a> {
         !self.rx_buffer.is_empty()
     }
 
+    /// Return the amount of octets queued in the transmit buffer.
+    ///
+    /// Note that the Berkeley sockets interface does not have an equivalent of this API.
+    pub fn send_queue(&self) -> usize {
+        self.tx_buffer.len()
+    }
+
+    /// Return the amount of octets queued in the receive buffer. This value can be larger than
+    /// the slice read by the next `recv` or `peek` call because it includes all queued octets,
+    /// and not only the octets that may be returned as a contiguous slice.
+    ///
+    /// Note that the Berkeley sockets interface does not have an equivalent of this API.
+    pub fn recv_queue(&self) -> usize {
+        self.rx_buffer.len()
+    }
+
     /// Return the maximum number packets the socket can receive.
     #[inline]
     pub fn packet_recv_capacity(&self) -> usize {
