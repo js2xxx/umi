@@ -9,7 +9,7 @@ use core::{
     time::Duration,
 };
 
-use bit_struct::{u12, u2, u3, u6};
+use bit_struct::{u12, u2, u3, u4, u6};
 use devices::intr::Completion;
 use futures_util::task::AtomicWaker;
 use ksc::Error::{self, EILSEQ, EINVAL, EIO, ENODEV, ETIMEDOUT};
@@ -24,7 +24,7 @@ use crate::{
     adma::DescTable,
     reg::{
         AdmaErrorStatus, AutoCmdError, BlockSize, Capabilities, ClockControl, Command, DmaSelect,
-        Interrupt, PowerControl, RespType, SdmmcRegs, SoftwareReset, TransferMode,
+        Interrupt, PowerControl, RespType, SdmmcRegs, SoftwareReset, TimeoutControl, TransferMode,
     },
     Data, SdmmcInfo,
 };
@@ -100,6 +100,7 @@ pub struct Inner {
 
     intr_enable: Interrupt,
     clock_div: u64,
+    timeout_clock: u64,
 
     working_cmd: Option<WorkingCmd>,
     resp_slot: Option<Result<[u32; 4], Error>>,
@@ -154,6 +155,7 @@ impl Inner {
             dma_table: DescTable::new()?,
             intr_enable: Interrupt::empty(),
             clock_div: 0,
+            timeout_clock: 0,
             working_cmd: None,
             resp_slot: None,
             data_slot: None,
@@ -210,14 +212,13 @@ impl Inner {
         Self::clock(regs, Some(self.clock_div));
 
         let value = self.caps.timeout_clock_freq().get().value() as u64;
-        let timeout_clock = if self.caps.timeout_clock_unit().get() {
-            value * 1000
+        self.timeout_clock = if self.caps.timeout_clock_unit().get() {
+            value * 1_000
         } else {
             value
         };
-        map_field!(regs.timeout_control).write(TimeoutControl::new(u4!(0), u4!(2)));
 
-        let _ = (bus_width, clock_freqs, timeout_clock);
+        let _ = bus_width;
         Ok(self.block_shift)
     }
 }
@@ -394,6 +395,29 @@ impl Inner {
         Ok(())
     }
 
+    fn set_timeout(&mut self, is_busy: bool) {
+        let regs = &mut self.regs;
+        if is_busy {
+            map_field!(regs.timeout_control).write(TimeoutControl::new(u4!(0), u4!(14)));
+        }
+        const MICROS: u64 = 1_000_000;
+
+        // Default: 1 second timeout.
+        let mut timeout = (1 << 13) * 1000 / self.timeout_clock;
+        let mut count = 0;
+        while timeout < MICROS && count < 15 {
+            count += 1;
+            timeout <<= 1;
+        }
+
+        let counter_value = if count >= 15 {
+            u4!(14)
+        } else {
+            u4::new(count).unwrap()
+        };
+        map_field!(regs.timeout_control).write(TimeoutControl::new(u4!(0), counter_value));
+    }
+
     pub fn send_cmd<R: Resp>(
         &mut self,
         cx: &mut Context<'_>,
@@ -414,6 +438,7 @@ impl Inner {
         ready!(self.poll_inhibit(cx, has_data || is_busy));
 
         self.set_transfer(use_auto_cmd, data)?;
+        self.set_timeout(is_busy);
 
         let regs = &mut self.regs;
         map_field!(regs.argument).write(cmd.arg);

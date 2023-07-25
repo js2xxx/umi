@@ -235,6 +235,23 @@ impl Sdmmc {
         self.cmd(common_cmd::select_card(rca.address())).await?;
 
         let mut buffer = Vec::new();
+        // buffer.resize(512, 0);
+        // let mut data = Data {
+        //     buffer,
+        //     block_shift: None,
+        //     block_count: 1,
+        //     is_read: true,
+        //     bytes_transfered: 0,
+        // };
+
+        // self.cmd_transfer(common_cmd::read_single_block(0), &mut data)
+        //     .await?;
+        // log::trace!("{:p}", data.buffer.as_ptr());
+
+        // assert_eq!(data.bytes_transfered, data.buffer.len());
+        // assert!(data.buffer.iter().any(|&b| b != 0));
+        // let mut buffer = data.buffer;
+        // todo!()
 
         self.cmd(common_cmd::app_cmd(rca.address())).await?;
         let scr: SCR = self

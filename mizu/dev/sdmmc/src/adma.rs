@@ -4,7 +4,7 @@ use core::{
 };
 
 use bitflags::bitflags;
-use kmem::{Frame, LAddr, PAddr, ID_OFFSET, PAGE_SIZE};
+use kmem::{Frame, LAddr, PAddr, DMA_OFFSET, ID_OFFSET, PAGE_SIZE};
 use ksc::Error;
 use static_assertions::const_assert_eq;
 
@@ -55,7 +55,9 @@ unsafe impl Sync for DescTable {}
 
 macro_rules! as_mut {
     ($x:expr) => {
-        unsafe { &mut *($x).table.as_mut_ptr().cast::<[Descriptor; MAX_SEGMENTS]>() }
+        unsafe {
+            &mut *(($x).table.base().to_laddr(DMA_OFFSET)).cast::<[Descriptor; MAX_SEGMENTS]>()
+        }
     };
 }
 
@@ -95,6 +97,7 @@ impl DescTable {
             desc.addr = *self.bounce_buffer.base() as u64;
             desc.len = len as u16;
             desc.attr = Attr::ACTION_XFER | Attr::VALID;
+            // log::trace!("Set at {desc:p}: {desc:#x?}");
 
             filled += len;
             base += len;
@@ -105,6 +108,7 @@ impl DescTable {
             desc.addr = base as u64;
             desc.len = 0;
             desc.attr = Attr::ACTION_XFER | Attr::VALID;
+            // log::trace!("Set at {desc:p}: {desc:#x?}");
 
             filled += Descriptor::MAX_LEN;
             base += Descriptor::MAX_LEN;
@@ -117,6 +121,7 @@ impl DescTable {
             desc.addr = base as u64;
             desc.len = len as u16;
             desc.attr = Attr::ACTION_XFER | Attr::VALID;
+            // log::trace!("Set at {desc:p}: {desc:#x?}");
 
             filled += len;
             // base += len;
@@ -126,6 +131,7 @@ impl DescTable {
         desc.addr = 0;
         desc.len = 0;
         desc.attr = Attr::ACTION_NONE | Attr::END | Attr::VALID;
+        // log::trace!("Set at {desc:p}: {desc:#x?}");
 
         atomic::fence(SeqCst);
         filled
