@@ -3,29 +3,33 @@ use core::arch::asm;
 
 use arsc_rs::Arsc;
 use art::Executor;
-use rv39_paging::{table_1g, AddrExt, Attr, Entry, Level, PAddr, Table, ID_OFFSET};
+use rv39_paging::{table_1g, AddrExt, Attr, Entry, Level, PAddr, Table, ID_OFFSET, DMA_OFFSET};
 use spin::Once;
 use static_assertions::const_assert_eq;
 
 const_assert_eq!(config::KERNEL_START_PHYS + ID_OFFSET, config::KERNEL_START);
-#[no_mangle]
-static BOOT_PAGES: Table = const {
+
+const fn boot_pages() -> Table {
     let low_start = config::KERNEL_START_PHYS.round_down(Level::max());
     let delta = Level::max().page_size();
 
     let addrs = [0, delta, delta * 2, delta * 3];
 
     table_1g![
-        // The temporary identity mappings.
+        // The identity mappings.
         low_start => low_start, Attr::KERNEL_MEM;
 
-        // The temporary higher half mappings.
+        // The higher half mappings.
         ID_OFFSET + addrs[0] => addrs[0], Attr::KERNEL_DEV;
         ID_OFFSET + addrs[1] => addrs[1], Attr::KERNEL_DEV;
         ID_OFFSET + addrs[2] => addrs[2], Attr::KERNEL_MEM;
         ID_OFFSET + addrs[3] => addrs[3], Attr::KERNEL_MEM;
+        DMA_OFFSET + addrs[2] => addrs[2], Attr::KERNEL_DMA;
+        DMA_OFFSET + addrs[3] => addrs[3], Attr::KERNEL_DMA;
     ]
-};
+}
+#[no_mangle]
+static BOOT_PAGES: Table = const { boot_pages() };
 
 pub const KERNEL_PAGES: Table = const {
     let delta = Level::max().page_size();
@@ -35,6 +39,8 @@ pub const KERNEL_PAGES: Table = const {
         ID_OFFSET + addrs[1] => addrs[1], Attr::KERNEL_DEV;
         ID_OFFSET + addrs[2] => addrs[2], Attr::KERNEL_MEM;
         ID_OFFSET + addrs[3] => addrs[3], Attr::KERNEL_MEM;
+        DMA_OFFSET + addrs[2] => addrs[2], Attr::KERNEL_DMA;
+        DMA_OFFSET + addrs[3] => addrs[3], Attr::KERNEL_DMA;
     ]
 };
 

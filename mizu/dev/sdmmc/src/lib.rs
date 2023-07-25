@@ -41,7 +41,7 @@ use crate::imp::CapacityType;
 pub struct Data {
     pub buffer: Vec<u8>,
     pub block_shift: Option<u32>,
-    pub block_count: u32,
+    pub block_count: u16,
     pub is_read: bool,
 
     pub bytes_transfered: usize,
@@ -92,7 +92,7 @@ impl Sdmmc {
     ) -> Result<R::Repr, Error> {
         poll_fn(|cx| {
             let cmd = common_cmd::cmd::<R>(cmd.cmd, cmd.arg);
-            let data = data.as_mut().map(|vec| mem::take(*vec));
+            let data = data.as_mut().map(|data| mem::take(*data));
             self.with(|s| s.send_cmd(cx, cmd, require_crc, use_auto_cmd, data))
         })
         .await?;
@@ -105,8 +105,8 @@ impl Sdmmc {
         self.cmd_with(cmd, false, false, None).await
     }
 
-    async fn app_cmd<R: RespExt>(&self, cmd: Cmd<R>) -> Result<R::Repr, Error> {
-        self.cmd(common_cmd::app_cmd(0)).await?;
+    async fn app_cmd<R: RespExt>(&self, rca: u16, cmd: Cmd<R>) -> Result<R::Repr, Error> {
+        self.cmd(common_cmd::app_cmd(rca)).await?;
         self.cmd(cmd).await
     }
 
@@ -199,11 +199,9 @@ impl Sdmmc {
 
         let ocr = loop {
             // Initialize card
-
             // 3.2-3.3V
-            let voltage_window = 1 << 20;
-            let cmd = sd_cmd::sd_send_op_cond(true, false, true, voltage_window);
-            let ocr: OCR<SD> = self.app_cmd(cmd).await?.into();
+            let cmd = sd_cmd::sd_send_op_cond(true, false, true, 0x1ff);
+            let ocr: OCR<SD> = self.app_cmd(0, cmd).await?.into();
             if ocr.is_busy() {
                 // Still powering up
                 continue;
@@ -211,11 +209,12 @@ impl Sdmmc {
             break ocr;
         };
 
-        if ocr.v18_allowed() {
+        if ocr.v18_allowed() && ocr.high_capacity() {
             let res = self.cmd(sd_cmd::voltage_switch()).await?;
             if res & (1 << 19) != 0 {
                 return Err(EIO);
             }
+            self.with(|s| s.switch_voltage())?
         }
 
         let capacity_type = if ocr.high_capacity() {
@@ -223,11 +222,12 @@ impl Sdmmc {
         } else {
             CapacityType::Standard
         };
+
+        let cid: CID<SD> = self.cmd(common_cmd::all_send_cid()).await?.into();
+        log::info!("SD card CID: {cid:?}");
+
         let rca: RCA<SD> = self.cmd(sd_cmd::send_relative_address()).await?.into();
         log::info!("SD card RCA: {}", rca.address());
-
-        let cid: CID<SD> = self.cmd(common_cmd::send_cid(rca.address())).await?.into();
-        log::info!("SD card CID: {cid:?}");
 
         let csd: CSD<SD> = self.cmd(common_cmd::send_csd(rca.address())).await?.into();
         log::info!("SD card CSD: {csd:?}");

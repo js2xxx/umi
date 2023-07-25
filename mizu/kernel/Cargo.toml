@@ -5,8 +5,17 @@ name = "mizu"
 version = "0.1.0"
 
 [features]
-cv1811h = ["config/cv1811h", "rv39-paging/cv1811h", "uart/uart-status"]
-qemu-virt = ["config/qemu-virt", "rv39-paging/qemu-virt"]
+cv1811h = [
+  "config/cv1811h",
+  "rv39-paging/cv1811h",
+  "kmem/cv1811h",
+  "uart/uart-status",
+  "sdmmc/mars",
+]
+qemu-virt = [
+  "config/qemu-virt",
+  "rv39-paging/qemu-virt",
+]
 test = [
   "art/test",
   "kalloc/test",

@@ -25,6 +25,8 @@ bitflags! {
         const DIRTY = 1 << 7;
 
         #[cfg(feature = "cv1811h")]
+        const BUFFERABLE = 1 << 61;
+        #[cfg(feature = "cv1811h")]
         const CACHABLE = 1 << 62;
         #[cfg(feature = "cv1811h")]
         const STRONG_ORDER = 1 << 63;
@@ -45,14 +47,21 @@ impl Attr {
     cfg_if::cfg_if! {
         if #[cfg(feature = "cv1811h")] {
             pub const KERNEL_MEM: Self = Self::KERNEL_RWX
+                .union(Self::BUFFERABLE)
                 .union(Self::CACHABLE)
                 .union(Self::ACCESSED)
                 .union(Self::DIRTY);
-            pub const KERNEL_DEV: Self = Self::KERNEL_RWX.union(Self::STRONG_ORDER)
+            pub const KERNEL_DMA: Self = Self::KERNEL_RWX
+                .union(Self::BUFFERABLE)
+                .union(Self::ACCESSED)
+                .union(Self::DIRTY);
+            pub const KERNEL_DEV: Self = Self::KERNEL_RWX
+                .union(Self::STRONG_ORDER)
                 .union(Self::ACCESSED)
                 .union(Self::DIRTY);
         } else {
             pub const KERNEL_MEM: Self = Self::KERNEL_RWX;
+            pub const KERNEL_DMA: Self = Self::KERNEL_RWX;
             pub const KERNEL_DEV: Self = Self::KERNEL_RWX;
         }
     }
@@ -82,7 +91,10 @@ impl AttrBuilder {
         cfg_if::cfg_if! {
             if #[cfg(feature = "cv1811h")] {
                 AttrBuilder {
-                    attr: Attr::CACHABLE.union(Attr::ACCESSED).union(Attr::DIRTY),
+                    attr: Attr::BUFFERABLE
+                        .union(Attr::CACHABLE)
+                        .union(Attr::ACCESSED)
+                        .union(Attr::DIRTY),
                 }
             } else {
                 AttrBuilder {
