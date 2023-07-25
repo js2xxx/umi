@@ -1,7 +1,10 @@
-use core::mem;
+use core::{
+    mem,
+    sync::atomic::{self, Ordering::SeqCst},
+};
 
 use bitflags::bitflags;
-use kmem::{Frame, LAddr, PAddr, ID_OFFSET, PAGE_SIZE};
+use kmem::{Frame, LAddr, PAddr, DMA_OFFSET, ID_OFFSET, PAGE_SIZE};
 use ksc::Error;
 use static_assertions::const_assert_eq;
 
@@ -11,12 +14,18 @@ pub const ADDR_ALIGN: usize = 4;
 pub const ADDR_MASK: usize = ADDR_ALIGN - 1;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-#[repr(transparent)]
-pub struct Descriptor(u128);
+#[repr(C, packed)]
+pub struct Descriptor {
+    attr: Attr,
+    len: u16,
+    addr: u64,
+    _reserved: u32,
+}
+const_assert_eq!(mem::size_of::<Descriptor>(), mem::size_of::<u128>());
 
 bitflags! {
     #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-    pub struct Attr: u8 {
+    pub struct Attr: u16 {
         const VALID = 1 << 0;
         const END = 1 << 1;
         const GEN_INTR = 1 << 2;
@@ -31,46 +40,7 @@ bitflags! {
 }
 
 impl Descriptor {
-    const ADDR_MASK: u128 = (u64::MAX as u128) << 32;
-    const LEN_MASK: u128 = 0xffff_ffc0;
-
-    const MAX_LEN: u32 = 1 << 26;
-
-    // pub const fn addr(&self) -> u64 {
-    //     (self.0 >> 32) as u64
-    // }
-
-    pub fn set_addr(&mut self, addr: u64) {
-        self.0 &= !Self::ADDR_MASK;
-        self.0 |= (addr as u128) << 32;
-    }
-
-    // pub const fn len(&self) -> u32 {
-    //     let tmp = self.0 as u32;
-    //     let raw = (tmp >> 16) | ((tmp & 0xffc0) << 10);
-    //     if raw == 0 {
-    //         Self::MAX_LEN
-    //     } else {
-    //         raw
-    //     }
-    // }
-
-    pub fn set_len(&mut self, len: u32) {
-        assert!(len <= Self::MAX_LEN);
-        self.0 &= !Self::LEN_MASK;
-        if len < Self::MAX_LEN {
-            self.0 |= (((len & 0xffff) << 16) | ((len & 0x3ff0000) >> 10)) as u128;
-        }
-    }
-
-    // pub fn attr(&self) -> Attr {
-    //     Attr::from_bits_truncate(self.0 as u8)
-    // }
-
-    pub fn set_attr(&mut self, attr: Attr) {
-        self.0 &= !(Attr::all().bits() as u128);
-        self.0 |= attr.bits() as u128;
-    }
+    const MAX_LEN: usize = 1 << 16;
 }
 
 #[derive(Debug)]
@@ -85,12 +55,14 @@ unsafe impl Sync for DescTable {}
 
 macro_rules! as_mut {
     ($x:expr) => {
-        unsafe { &mut *($x).table.as_mut_ptr().cast::<[Descriptor; MAX_SEGMENTS]>() }
+        unsafe {
+            &mut *(($x).table.base().to_laddr(DMA_OFFSET)).cast::<[Descriptor; MAX_SEGMENTS]>()
+        }
     };
 }
 
 impl DescTable {
-    pub const MAX_LEN: usize = (MAX_SEGMENTS - 2) * Descriptor::MAX_LEN as usize;
+    pub const MAX_LEN: usize = (MAX_SEGMENTS - 2) * Descriptor::MAX_LEN;
 
     pub fn new() -> Result<Self, Error> {
         Ok(DescTable {
@@ -122,39 +94,46 @@ impl DescTable {
             }
 
             let desc = table.next().unwrap();
-            desc.set_addr(*self.bounce_buffer.base() as u64);
-            desc.set_len(len as u32);
-            desc.set_attr(Attr::ACTION_XFER | Attr::VALID);
+            desc.addr = *self.bounce_buffer.base() as u64;
+            desc.len = len as u16;
+            desc.attr = Attr::ACTION_XFER | Attr::VALID;
+            // log::trace!("Set at {desc:p}: {desc:#x?}");
 
             filled += len;
             base += len;
         }
 
-        while filled + Descriptor::MAX_LEN as usize <= buf.len() {
+        while filled + Descriptor::MAX_LEN <= buf.len() {
             let desc = table.next().unwrap();
-            desc.set_addr(base as u64);
-            desc.set_len(Descriptor::MAX_LEN);
-            desc.set_attr(Attr::ACTION_XFER | Attr::VALID);
+            desc.addr = base as u64;
+            desc.len = 0;
+            desc.attr = Attr::ACTION_XFER | Attr::VALID;
+            // log::trace!("Set at {desc:p}: {desc:#x?}");
 
-            filled += Descriptor::MAX_LEN as usize;
-            base += Descriptor::MAX_LEN as usize;
+            filled += Descriptor::MAX_LEN;
+            base += Descriptor::MAX_LEN;
         }
 
         if filled < buf.len() {
             let len = buf.len() - filled;
 
             let desc = table.next().unwrap();
-            desc.set_addr(base as u64);
-            desc.set_len(len as u32);
-            desc.set_attr(Attr::ACTION_XFER | Attr::VALID);
+            desc.addr = base as u64;
+            desc.len = len as u16;
+            desc.attr = Attr::ACTION_XFER | Attr::VALID;
+            // log::trace!("Set at {desc:p}: {desc:#x?}");
 
             filled += len;
             // base += len;
         }
 
         let desc = table.next().unwrap();
-        desc.set_attr(Attr::ACTION_NONE | Attr::END | Attr::VALID);
+        desc.addr = 0;
+        desc.len = 0;
+        desc.attr = Attr::ACTION_NONE | Attr::END | Attr::VALID;
+        // log::trace!("Set at {desc:p}: {desc:#x?}");
 
+        atomic::fence(SeqCst);
         filled
     }
 
@@ -162,6 +141,7 @@ impl DescTable {
     ///
     /// `buf` must be the same as the last `fill`ed.
     pub unsafe fn extract(&mut self, buf: &mut [u8], read: bool) {
+        atomic::fence(SeqCst);
         if !read {
             return;
         }

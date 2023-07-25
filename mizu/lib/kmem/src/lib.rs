@@ -11,8 +11,8 @@ mod phys;
 mod virt;
 
 pub use rv39_paging::{
-    Attr, AttrBuilder, LAddr, PAddr, CANONICAL_PREFIX, ID_OFFSET, PAGE_LAYOUT, PAGE_MASK,
-    PAGE_SHIFT, PAGE_SIZE,
+    Attr, AttrBuilder, LAddr, PAddr, CANONICAL_PREFIX, DMA_OFFSET, ID_OFFSET, PAGE_LAYOUT,
+    PAGE_MASK, PAGE_SHIFT, PAGE_SIZE,
 };
 
 pub use self::{

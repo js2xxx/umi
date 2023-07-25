@@ -43,7 +43,7 @@ pub struct SdmmcRegs {
     pub force_event_for_acmd_error_status: u16,
     pub force_event_for_error_intr_status: u16,
 
-    pub adma_error_status: u8,
+    pub adma_error_status: AdmaErrorStatus,
     pub _reserved1: [u8; 3],
 
     pub adma_system_address: u64,
@@ -151,7 +151,6 @@ bitflags! {
         const POWER_ON      = 0b0001;
         const VOLTAGE_1_8V  = 0b1010;
         const VOLTAGE_3_0V  = 0b1100;
-        const VOLTAGE_3_3V  = 0b1110;
     }
 }
 
@@ -259,20 +258,20 @@ bitflags! {
     }
 }
 
-bit_struct! {
-    pub struct AutoCmdError(u16) {
-        _reserved1: u8,
-
-        cmd_not_issue_by_auto_cmd12: bool,
-        _reserved2: bool,
-        auto_cmd_response: bool,
-        auto_cmd_index: bool,
-        auto_cmd_end_bit: bool,
-        auto_cmd_crc: bool,
-        auto_cmd_timeout: bool,
-        auto_cmd_not_executed: bool,
+bitflags! {
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+    pub struct AutoCmdError: u16 {
+        const NOT_EXECUTED  = 1 << 0;
+        const TIMEOUT       = 1 << 1;
+        const CRC           = 1 << 2;
+        const END_BIT       = 1 << 3;
+        const INDEX         = 1 << 4;
+        const RESP          = 1 << 5;
+        const NOT_ISSUED_BY_AUTO_CMD12  = 1 << 7;
     }
+}
 
+bit_struct! {
     pub struct HostControl2(u16) {
         preset_value_enable: bool,
         async_intr_enable: bool,
@@ -287,9 +286,13 @@ bit_struct! {
         execute_tuning: bool,
         driver_strength_select: u2,
         signaling_1_8v_enable: bool,
-        uhs_mode_select: u3,
+        uhs_mode: UhsMode,
     }
+}
 
+enums! { pub UhsMode { Sdr12, Sdr25, Sdr50, Sdr104, Ddr50, Reserved1, Reserved2, Uhs2 } }
+
+bit_struct! {
     pub struct Capabilities(u64) {
         _reserved1: u3,
         vdd2_1_8v_support: bool,
@@ -331,3 +334,13 @@ bit_struct! {
         timeout_clock_freq: u6,
     }
 }
+
+bit_struct! {
+    pub struct AdmaErrorStatus(u8) {
+        _reserved: u5,
+        length_mismatch: bool,
+        error_state: AdmaErrorState,
+    }
+}
+
+enums! { pub AdmaErrorState { Stop, Fetch, NotUsed, Transfering } }

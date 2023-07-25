@@ -3,6 +3,9 @@ edition = "2021"
 name = "sdmmc"
 version = "0.1.0"
 
+[features]
+mars = ["kmem/cv1811h"]
+
 [dependencies]
 # Local crates
 devices = {path = "../../lib/devices"}

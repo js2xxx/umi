@@ -101,8 +101,9 @@ impl Socket {
     }
 
     pub async fn flush(&self) {
-        if let Socket::Tcp(socket) = self {
-            socket.flush().await
+        match self {
+            Socket::Tcp(socket) => socket.flush().await,
+            Socket::Udp(socket) => socket.flush().await,
         }
     }
 
@@ -114,8 +115,9 @@ impl Socket {
     }
 
     pub async fn close(&self) {
-        if let Socket::Tcp(socket) = self {
-            socket.close().await
+        match self {
+            Socket::Tcp(socket) => socket.close().await,
+            Socket::Udp(socket) => socket.flush().await,
         }
     }
 }
