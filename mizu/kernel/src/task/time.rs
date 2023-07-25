@@ -143,6 +143,10 @@ impl Counter {
         }
     }
 
+    pub fn next_deadline(&self) -> Option<Instant> {
+        self.activated.then_some(self.next_tick)
+    }
+
     pub fn update(&mut self, times: &Times) -> Option<SigInfo> {
         if !self.activated {
             return None;

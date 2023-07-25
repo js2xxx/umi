@@ -9,9 +9,13 @@ use core::{
 
 use arsc_rs::Arsc;
 use co_trap::{FastResult, TrapFrame};
-use futures_util::future::{select, Either};
+use futures_util::{
+    future::{select, Either},
+    FutureExt,
+};
 use kmem::Virt;
 use ksc::{Error::EINTR, Scn, ENOSYS};
+use ktime::TimeOutExt;
 use pin_project::pin_project;
 use riscv::register::{
     scause::{Exception, Scause, Trap},
@@ -197,6 +201,8 @@ impl TaskState {
         )
         .then(|| mem::replace(&mut self.sig_mask, !SigSet::EMPTY));
 
+        let next_deadline = self.counters.iter().filter_map(|c| c.next_deadline()).min();
+
         let syscall = async {
             let task = self.task.clone();
 
@@ -206,9 +212,14 @@ impl TaskState {
 
             let handle = pin!(crate::syscall::SYSCALL.handle(scn, (self, &mut *tf)));
 
-            match select(handle, select(local, shared)).await {
-                Either::Left((res, _)) => Some(res),
-                Either::Right(_) => None,
+            let task = select(handle, select(local, shared)).map(|either| match either {
+                Either::Left((Some(res), _)) => Ok(res),
+                Either::Left((None, _)) => Err(ENOSYS),
+                Either::Right(_) => Err(EINTR),
+            });
+            match next_deadline {
+                None => task.await,
+                Some(ddl) => task.on_timeout(ddl, || Err(EINTR)).await,
             }
         }
         .await;
@@ -218,12 +229,12 @@ impl TaskState {
         }
 
         tf.set_syscall_ret(match syscall {
-            Some(Some(res)) => return res,
-            Some(None) => {
+            Ok(res) => return res,
+            Err(ENOSYS) => {
                 log::warn!("SYSCALL not implemented: {scn:?}");
                 ENOSYS.into_raw()
             }
-            None => EINTR.into_raw(),
+            Err(e) => e.into_raw(),
         });
 
         Continue(None)

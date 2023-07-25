@@ -3,7 +3,7 @@ use core::arch::asm;
 
 use arsc_rs::Arsc;
 use art::Executor;
-use rv39_paging::{table_1g, AddrExt, Attr, Entry, Level, PAddr, Table, ID_OFFSET, DMA_OFFSET};
+use rv39_paging::{table_1g, AddrExt, Attr, Entry, Level, PAddr, Table, DMA_OFFSET, ID_OFFSET};
 use spin::Once;
 use static_assertions::const_assert_eq;
 

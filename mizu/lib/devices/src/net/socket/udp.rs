@@ -157,6 +157,21 @@ impl Socket {
         poll_fn(|cx| self.poll_wait_for_send(cx)).await
     }
 
+    pub fn poll_flush(&self, cx: &mut Context) -> Poll<()> {
+        self.with_mut(|s| {
+            if s.send_queue() == 0 {
+                Poll::Ready(())
+            } else {
+                s.register_send_waker(cx.waker());
+                Poll::Pending
+            }
+        })
+    }
+
+    pub async fn flush(&self) {
+        poll_fn(|cx| self.poll_flush(cx)).await
+    }
+
     pub fn listen_endpoint(&self) -> IpListenEndpoint {
         self.with(|socket| socket.endpoint())
     }

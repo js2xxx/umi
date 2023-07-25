@@ -82,7 +82,7 @@ impl Inner {
 
     fn poll_for_close(&self, cx: &mut Context) -> Poll<()> {
         self.with_mut(|_, s| match s.state() {
-            State::Closed | State::TimeWait => Poll::Ready(()),
+            State::Closed | State::TimeWait if s.send_queue() == 0 => Poll::Ready(()),
             _ => {
                 s.register_send_waker(cx.waker());
                 s.register_recv_waker(cx.waker());
