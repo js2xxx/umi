@@ -121,6 +121,7 @@ pub enum Scn {
     MMAP = 222,
     MPROTECT = 226,
     MSYNC = 227,
+    MADVISE = 233,
     WAIT4 = 260,
     PRLIMIT64 = 261,
     RENAMEAT2 = 276,

@@ -13,7 +13,7 @@ use fdt::node::FdtNode;
 use futures_util::{FutureExt, Stream};
 use ksync::event::{Event, EventListener};
 use ktime::Instant;
-use log::Level;
+use log::{Level, LevelFilter};
 use rv39_paging::{PAddr, ID_OFFSET};
 use spin::{Mutex, MutexGuard, Once};
 use uart::Uart;
@@ -138,7 +138,7 @@ impl core::fmt::Display for OptionU32Display {
     }
 }
 
-struct Logger(Level, Mutex<()>);
+struct Logger(LevelFilter, Mutex<()>);
 
 impl log::Log for Logger {
     fn enabled(&self, metadata: &log::Metadata) -> bool {
@@ -192,17 +192,17 @@ fn ack_interrupt(completion: &Completion) -> bool {
 
 pub unsafe fn init_logger() {
     let level = match option_env!("RUST_LOG") {
-        Some("error") => Level::Error,
-        Some("warn") => Level::Warn,
-        Some("info") => Level::Info,
-        Some("debug") => Level::Debug,
-        Some("trace") => Level::Trace,
-        _ => Level::Warn,
+        Some("error") => LevelFilter::Error,
+        Some("warn") => LevelFilter::Warn,
+        Some("info") => LevelFilter::Info,
+        Some("debug") => LevelFilter::Debug,
+        Some("trace") => LevelFilter::Trace,
+        _ => LevelFilter::Warn,
     };
     unsafe {
         let logger = LOGGER.write(Logger(level, Mutex::new(())));
         log::set_logger(logger).unwrap();
-        log::set_max_level(level.to_level_filter());
+        log::set_max_level(level);
     }
 }
 

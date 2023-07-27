@@ -32,6 +32,7 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         .map(SET_ROBUST_LIST, crate::mem::set_robust_list)
         .map(MMAP, crate::mem::mmap)
         .map(MSYNC, crate::mem::msync)
+        .map(MADVISE, crate::mem::madvise)
         .map(MPROTECT, crate::mem::mprotect)
         .map(MUNMAP, crate::mem::munmap)
         .map(MEMBARRIER, crate::mem::membarrier)

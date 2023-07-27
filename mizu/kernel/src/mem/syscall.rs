@@ -248,6 +248,32 @@ pub async fn msync(
 }
 
 #[async_handler]
+pub async fn madvise(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(usize, usize, i32) -> Result<(), Error>>,
+) -> ScRet {
+    const MADV_WILLNEED: i32 = 3;
+    const MADV_DONTNEED: i32 = 4;
+
+    let (addr, len, advice) = cx.args();
+    let fut = async {
+        let range = addr..addr.checked_add(len).ok_or(EINVAL)?;
+        let range = range.start.into()..range.end.into();
+
+        match advice {
+            MADV_WILLNEED => {
+                let mut g = ts.virt.start_commit(Default::default()).await;
+                g.push(range).await
+            }
+            MADV_DONTNEED => ts.virt.decommit_range(range).await,
+            _ => Ok(()),
+        }
+    };
+    cx.ret(fut.await);
+    ScRet::Continue(None)
+}
+
+#[async_handler]
 pub async fn mprotect(
     ts: &mut TaskState,
     cx: UserCx<'_, fn(usize, usize, i32) -> Result<(), Error>>,
