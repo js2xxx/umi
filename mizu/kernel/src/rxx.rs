@@ -101,6 +101,7 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
 
         static _stdata: u32;
         static _tdata_size: u32;
+        static _tbss_size: u32;
 
         static mut _sheap: u32;
         static mut _eheap: u32;
@@ -120,8 +121,10 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
         let tp: *mut u32;
         asm!("mv {0}, tp", out(reg) tp);
 
-        let len = (&_tdata_size) as *const u32 as usize;
-        tp.copy_from_nonoverlapping(&_stdata, len / mem::size_of::<u32>());
+        let tdata_count = (&_tdata_size) as *const u32 as usize / mem::size_of::<u32>();
+        tp.copy_from_nonoverlapping(&_stdata, tdata_count);
+        let tbss_count = (&_tbss_size) as *const u32 as usize / mem::size_of::<u32>();
+        tp.add(tdata_count).write_bytes(0, tbss_count);
     }
 
     // Disable interrupt in `ksync`.

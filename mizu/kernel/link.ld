@@ -34,11 +34,19 @@ SECTIONS
     .tdata : ALIGN(0x10)
     {
         _stdata = .;
-        *(.tdata*)
-        *(.tbss*);
+        *(.tdata*);
         . = ALIGN(0x10);
         _etdata = .;
         _tdata_size = _etdata - _stdata;
+    } >VIRT AT>RAM :data :tls
+
+    .itbss (NOLOAD) : ALIGN(0x10)
+    {
+        _stbss = .;
+        *(.tbss*);
+        . = ALIGN(0x10);
+        _etbss = .;
+        _tbss_size = _etbss - _stbss;
     } >VIRT AT>RAM :data :tls
 
     .bss (NOLOAD) : ALIGN(0x10)
@@ -62,7 +70,7 @@ SECTIONS
     .tbss (NOLOAD) : ALIGN(0x10)
     {
         _stp = .;
-        . += _tdata_size * %MAX_HARTS%;
+        . += (_tdata_size + _tbss_size) * %MAX_HARTS%;
         _etp = .;
     } >VIRT AT>RAM
 

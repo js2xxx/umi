@@ -33,9 +33,11 @@ use self::{
 use crate::mem::{Futexes, Out, Shm, UserPtr};
 
 const DEFAULT_STACK_SIZE: usize = PAGE_SIZE * 80;
-const DEFAULT_STACK_ATTR: Attr = Attr::USER_ACCESS
-    .union(Attr::READABLE)
-    .union(Attr::WRITABLE);
+const DEFAULT_STACK_ATTR: Attr = Attr::builder()
+    .user_access(true)
+    .readable(true)
+    .writable(true)
+    .build();
 
 #[derive(Clone, Copy, Debug)]
 pub enum TaskEvent {
