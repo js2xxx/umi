@@ -932,7 +932,6 @@ checksum = "b328e2cb950eeccd55b7f55c3a963691455dcd044cfb5354f0c5e68d2c2d6ee2"
 name = "sdmmc"
 version = "0.1.0"
 dependencies = [
- "array-macro",
  "async-trait",
  "bit-struct",
  "bitflags 2.3.3",

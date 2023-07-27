@@ -3,7 +3,7 @@ use core::arch::asm;
 
 use arsc_rs::Arsc;
 use art::Executor;
-use rv39_paging::{table_1g, AddrExt, Attr, Entry, Level, PAddr, Table, DMA_OFFSET, ID_OFFSET};
+use rv39_paging::{table_1g, AddrExt, Attr, Entry, Level, PAddr, Table, ID_OFFSET};
 use spin::Once;
 use static_assertions::const_assert_eq;
 
@@ -24,8 +24,6 @@ const fn boot_pages() -> Table {
         ID_OFFSET + addrs[1] => addrs[1], Attr::KERNEL_DEV;
         ID_OFFSET + addrs[2] => addrs[2], Attr::KERNEL_MEM;
         ID_OFFSET + addrs[3] => addrs[3], Attr::KERNEL_MEM;
-        DMA_OFFSET + addrs[2] => addrs[2], Attr::KERNEL_DMA;
-        DMA_OFFSET + addrs[3] => addrs[3], Attr::KERNEL_DMA;
     ]
 }
 #[no_mangle]
@@ -39,8 +37,6 @@ pub const KERNEL_PAGES: Table = const {
         ID_OFFSET + addrs[1] => addrs[1], Attr::KERNEL_DEV;
         ID_OFFSET + addrs[2] => addrs[2], Attr::KERNEL_MEM;
         ID_OFFSET + addrs[3] => addrs[3], Attr::KERNEL_MEM;
-        DMA_OFFSET + addrs[2] => addrs[2], Attr::KERNEL_DMA;
-        DMA_OFFSET + addrs[3] => addrs[3], Attr::KERNEL_DMA;
     ]
 };
 

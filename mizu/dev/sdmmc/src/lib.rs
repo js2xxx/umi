@@ -9,7 +9,7 @@ mod reg;
 
 extern crate alloc;
 
-use alloc::{boxed::Box, vec::Vec};
+use alloc::{boxed::Box, vec, vec::Vec};
 use core::{
     fmt,
     future::poll_fn,
@@ -23,19 +23,17 @@ use core::{
     time::Duration,
 };
 
-use array_macro::array;
+use async_trait::async_trait;
 use devices::{block::Block, impl_io_for_block, intr::Completion};
-use imp::RespExt;
-use ksc::Error::{self, EIO, ENOSYS};
+use ksc::Error::{self, EINVAL, EIO, ENOSYS};
 use sdio_host::{
     common_cmd,
-    sd::{SDStatus, CIC, CID, CSD, OCR, RCA, SCR, SD},
+    sd::{CIC, CID, CSD, OCR, RCA, SD},
     sd_cmd, Cmd,
 };
 use spin::Mutex;
 
-use self::imp::Inner;
-use crate::imp::CapacityType;
+use self::imp::{CapacityType, Inner, RespExt};
 
 #[derive(Debug, Clone, Default)]
 pub struct Data {
@@ -61,8 +59,6 @@ pub struct SdmmcInfo {
     pub rca: RCA<SD>,
     pub cid: CID<SD>,
     pub csd: CSD<SD>,
-    pub scr: SCR,
-    pub status: SDStatus,
 }
 
 impl fmt::Debug for SdmmcInfo {
@@ -73,7 +69,6 @@ impl fmt::Debug for SdmmcInfo {
             .field("rca", &self.rca.address())
             .field("cid", &self.cid)
             .field("csd", &self.csd)
-            .field("scr", &self.scr)
             .finish()
     }
 }
@@ -129,31 +124,6 @@ impl Sdmmc {
             let _ = self.cmd(common_cmd::stop_transmission()).await;
         }
         res.map(|_| resp)
-    }
-
-    async fn cmd_read_reg<R: RespExt, const N: usize>(
-        &self,
-        cmd: Cmd<R>,
-        buffer: &mut Vec<u8>,
-    ) -> Result<[u32; N], Error> {
-        let len = N * mem::size_of::<u32>();
-        buffer.resize(len, 0);
-
-        let mut data = Data {
-            buffer: mem::take(buffer),
-            block_shift: Some(len.ilog2()),
-            block_count: 1,
-            is_read: true,
-            bytes_transfered: 0,
-        };
-
-        self.cmd_transfer(cmd, &mut data).await?;
-
-        assert_eq!(data.bytes_transfered, len);
-        *buffer = data.buffer;
-
-        let mut iter = buffer.array_chunks::<{ mem::size_of::<u32>() }>();
-        Ok(array![_ => u32::from_le_bytes(*iter.next().unwrap()); N])
     }
 }
 
@@ -224,48 +194,18 @@ impl Sdmmc {
         };
 
         let cid: CID<SD> = self.cmd(common_cmd::all_send_cid()).await?.into();
-        log::info!("SD card CID: {cid:?}");
+        log::info!("SD card {cid:?}");
 
         let rca: RCA<SD> = self.cmd(sd_cmd::send_relative_address()).await?.into();
         log::info!("SD card RCA: {}", rca.address());
 
         let csd: CSD<SD> = self.cmd(common_cmd::send_csd(rca.address())).await?.into();
-        log::info!("SD card CSD: {csd:?}");
+        log::info!("SD card {csd:?}");
 
         self.cmd(common_cmd::select_card(rca.address())).await?;
 
-        let mut buffer = Vec::new();
-        // buffer.resize(512, 0);
-        // let mut data = Data {
-        //     buffer,
-        //     block_shift: None,
-        //     block_count: 1,
-        //     is_read: true,
-        //     bytes_transfered: 0,
-        // };
-
-        // self.cmd_transfer(common_cmd::read_single_block(0), &mut data)
-        //     .await?;
-        // log::trace!("{:p}", data.buffer.as_ptr());
-
-        // assert_eq!(data.bytes_transfered, data.buffer.len());
-        // assert!(data.buffer.iter().any(|&b| b != 0));
-        // let mut buffer = data.buffer;
-        // todo!()
-
-        self.cmd(common_cmd::app_cmd(rca.address())).await?;
-        let scr: SCR = self
-            .cmd_read_reg(sd_cmd::send_scr(), &mut buffer)
-            .await?
-            .into();
-        log::info!("SD card SCR: {scr:?}");
-
-        self.cmd(common_cmd::app_cmd(rca.address())).await?;
-        let status: SDStatus = self
-            .cmd_read_reg(sd_cmd::sd_status(), &mut buffer)
-            .await?
-            .into();
-        log::info!("SD card status: {status:?}");
+        self.app_cmd(rca.address(), sd_cmd::set_bus_width(true))
+            .await?;
 
         self.capacity_blocks
             .store(csd.block_count() as usize, Release);
@@ -275,8 +215,6 @@ impl Sdmmc {
             rca,
             cid,
             csd,
-            scr,
-            status,
         };
         self.with(|s| s.info = info);
 
@@ -286,8 +224,18 @@ impl Sdmmc {
     pub fn ack_interrupt(&self, completion: &Completion) -> bool {
         self.with(|s| s.ack_interrupt(completion))
     }
+
+    fn block(&self, block: usize) -> Result<(u32, u32), Error> {
+        match self.with(|s| (s.info.capacity_type, s.block_shift)) {
+            (CapacityType::Standard, shift) => {
+                Ok((block.checked_shl(shift).ok_or(EINVAL)?.try_into()?, shift))
+            }
+            (CapacityType::High, shift) => Ok((block.try_into()?, shift)),
+        }
+    }
 }
 
+#[async_trait]
 impl Block for Sdmmc {
     fn block_shift(&self) -> u32 {
         self.block_shift.load(Acquire)
@@ -301,42 +249,53 @@ impl Block for Sdmmc {
         self.ack_interrupt(completion)
     }
 
-    fn read<'life0, 'life1, 'async_trait>(
-        &'life0 self,
-        _: usize,
-        _: &'life1 mut [u8],
-    ) -> ::core::pin::Pin<
-        Box<
-            dyn ::core::future::Future<Output = Result<usize, Error>>
-                + ::core::marker::Send
-                + 'async_trait,
-        >,
-    >
-    where
-        'life0: 'async_trait,
-        'life1: 'async_trait,
-        Self: 'async_trait,
-    {
-        todo!()
+    async fn read(&self, block: usize, buf: &mut [u8]) -> Result<usize, Error> {
+        log::trace!("SD card read at {block:#x}, buffer len = {:#x}", buf.len());
+
+        let (addr, block_shift) = self.block(block)?;
+        let block_count = buf.len() >> block_shift;
+        let mut data = Data {
+            buffer: vec![0; block_count << block_shift],
+            block_shift: Some(block_shift),
+            block_count: block_count.try_into().ok().unwrap_or(u16::MAX),
+            is_read: true,
+            bytes_transfered: 0,
+        };
+
+        let cmd = if block_count > 1 {
+            common_cmd::read_multiple_blocks(addr)
+        } else {
+            common_cmd::read_single_block(addr)
+        };
+        self.cmd_transfer(cmd, &mut data).await?;
+
+        log::trace!("SD card read {:#x} bytes", data.bytes_transfered);
+        buf[..data.bytes_transfered].copy_from_slice(&data.buffer[..data.bytes_transfered]);
+        Ok(data.bytes_transfered)
     }
 
-    fn write<'life0, 'life1, 'async_trait>(
-        &'life0 self,
-        _: usize,
-        _: &'life1 [u8],
-    ) -> ::core::pin::Pin<
-        Box<
-            dyn ::core::future::Future<Output = Result<usize, Error>>
-                + ::core::marker::Send
-                + 'async_trait,
-        >,
-    >
-    where
-        'life0: 'async_trait,
-        'life1: 'async_trait,
-        Self: 'async_trait,
-    {
-        todo!()
+    async fn write(&self, block: usize, buf: &[u8]) -> Result<usize, Error> {
+        log::trace!("SD card write at {block:#x}, buffer len = {:#x}", buf.len());
+
+        let (addr, block_shift) = self.block(block)?;
+        let block_count = buf.len() >> block_shift;
+        let mut data = Data {
+            buffer: buf[..block_count << block_shift].to_vec(),
+            block_shift: Some(block_shift),
+            block_count: block_count.try_into().ok().unwrap_or(u16::MAX),
+            is_read: false,
+            bytes_transfered: 0,
+        };
+
+        let cmd = if block_count > 1 {
+            common_cmd::read_multiple_blocks(addr)
+        } else {
+            common_cmd::read_single_block(addr)
+        };
+        self.cmd_transfer(cmd, &mut data).await?;
+
+        log::trace!("SD card written {:#x} bytes", data.bytes_transfered);
+        Ok(data.bytes_transfered)
     }
 }
 impl_io_for_block!(Sdmmc);

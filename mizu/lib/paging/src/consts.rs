@@ -13,10 +13,6 @@ pub const NR_ENTRIES: usize = 1 << NR_ENTRIES_SHIFT;
 
 pub const CANONICAL_PREFIX: usize = 0xffff_ffc0_0000_0000;
 pub const ID_OFFSET: usize = CANONICAL_PREFIX;
-#[cfg(not(feature = "cv1811h"))]
-pub const DMA_OFFSET: usize = ID_OFFSET;
-#[cfg(feature = "cv1811h")]
-pub const DMA_OFFSET: usize = ID_OFFSET + 2 * 1024 * 1024 * 1024;
 
 pub const BLANK_BEGIN: usize = (1 << 38) - 1;
 pub const BLANK_END: usize = CANONICAL_PREFIX - 1;

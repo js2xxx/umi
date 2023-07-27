@@ -146,6 +146,11 @@ impl LAddr {
     pub unsafe fn as_mut_slice<'a>(this: Range<Self>) -> &'a mut [u8] {
         unsafe { slice::from_raw_parts_mut(*this.start, this.end.val() - this.start.val()) }
     }
+
+    pub fn from_slice<T>(slice: &[T]) -> Range<LAddr> {
+        let ptrs = slice.as_ptr_range();
+        LAddr::from(ptrs.start)..LAddr::from(ptrs.end)
+    }
 }
 
 impl const Deref for LAddr {

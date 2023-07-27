@@ -137,10 +137,10 @@ bit_struct! {
     pub struct HostControl1(u8) {
         card_detect_signal_select: bool,
         card_detect_test_level: bool,
-        extended_data_transfer_width: bool,
+        bus_width_8bit: bool,
         dma_select: DmaSelect,
         high_speed_enable: bool,
-        data_transfer_width: bool,
+        bus_width_4bit: bool,
         led: bool,
     }
 }

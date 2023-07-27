@@ -94,7 +94,7 @@ pub struct Inner {
     caps: Capabilities,
 
     pub info: SdmmcInfo,
-    block_shift: u32,
+    pub block_shift: u32,
 
     dma_table: DescTable,
 
@@ -191,12 +191,16 @@ impl Inner {
 
         map_field!(regs.host_control_2).update(|mut hc2| {
             hc2.host_v4_enable().set(true);
-            hc2.adma2_length_enable().set(true);
             hc2
         });
 
         map_field!(regs.host_control_1).update(|mut hc1| {
             hc1.high_speed_enable().set(true);
+            match bus_width {
+                4 => hc1.bus_width_4bit().set(true),
+                8 => hc1.bus_width_8bit().set(true),
+                _ => {}
+            }
             hc1
         });
 
@@ -218,7 +222,6 @@ impl Inner {
             value
         };
 
-        let _ = bus_width;
         Ok(self.block_shift)
     }
 }
@@ -344,7 +347,7 @@ impl Inner {
         let len = ((data.block_count as usize) << block_shift).min(DescTable::MAX_LEN);
 
         let buffer = data.buffer.get_mut(..len).ok_or(EINVAL)?;
-        let filled = unsafe { self.dma_table.fill(buffer, !data.is_read) };
+        let filled = unsafe { self.dma_table.fill(buffer, data.is_read) };
 
         self.data_slot = Some(DataSlot {
             buffer: mem::take(&mut data.buffer),
@@ -355,7 +358,7 @@ impl Inner {
         map_field!(regs.adma_system_address).write(*self.dma_table.dma_addr() as u64);
         map_field!(regs.host_control_1).update(|mut hc1| {
             hc1.dma_select().set(DmaSelect::Adma2);
-            hc1.data_transfer_width().set(true);
+            hc1.bus_width_4bit().set(true);
             hc1
         });
 
@@ -371,8 +374,12 @@ impl Inner {
         Ok(())
     }
 
-    fn set_transfer(&mut self, use_auto_cmd: bool, data: Option<Data>) -> Result<(), Error> {
-        if let Some(mut data) = data {
+    fn set_transfer(
+        &mut self,
+        use_auto_cmd: bool,
+        data: Option<Data>,
+    ) -> Result<TransferMode, Error> {
+        Ok(if let Some(mut data) = data {
             self.send_data(&mut data)?;
             let regs = &mut self.regs;
 
@@ -382,17 +389,16 @@ impl Inner {
             map_field!(regs.host_control_2).write(hc2);
 
             let mut transfer_mode = TransferMode::empty();
-            transfer_mode.set(TransferMode::BLOCK_COUNT_ENABLE, data.block_count > 1);
+            transfer_mode.set(TransferMode::BLOCK_COUNT_ENABLE, true);
             transfer_mode.set(TransferMode::IS_MULTI_BLOCK, data.block_count > 1);
             transfer_mode.set(TransferMode::IS_READ, data.is_read);
             transfer_mode.set(TransferMode::AUTO_CMD23_ENABLE, use_auto_cmd);
             transfer_mode |= TransferMode::DMA_ENABLE;
-            map_field!(regs.transfer_mode).write(transfer_mode)
+            transfer_mode
         } else {
             let regs = &mut self.regs;
-            map_field!(regs.transfer_mode).update(|tm| tm & !TransferMode::AUTO_CMD_MASK)
-        }
-        Ok(())
+            map_field!(regs.transfer_mode).read() & !TransferMode::AUTO_CMD_MASK
+        })
     }
 
     fn set_timeout(&mut self, is_busy: bool) {
@@ -437,11 +443,13 @@ impl Inner {
 
         ready!(self.poll_inhibit(cx, has_data || is_busy));
 
-        self.set_transfer(use_auto_cmd, data)?;
+        let transfer_mode = self.set_transfer(use_auto_cmd, data)?;
         self.set_timeout(is_busy);
 
         let regs = &mut self.regs;
+
         map_field!(regs.argument).write(cmd.arg);
+        map_field!(regs.transfer_mode).write(transfer_mode);
 
         let mut cmd_reg = Command::of_defaults();
         cmd_reg.resp_type().set(resp_type(R::LENGTH, is_busy));
@@ -610,6 +618,7 @@ impl Inner {
             let regs = &mut self.regs;
             let mut intr = map_field!(regs.intr_status).read();
             if matches!(intr.bits(), 0 | u32::MAX) {
+                completion();
                 break true;
             }
             // log::trace!("Sd card: {intr:?}");
@@ -617,7 +626,6 @@ impl Inner {
             let mask =
                 intr & (Interrupt::CMD_MASK | Interrupt::DATA_MASK | Interrupt::CURRENT_LIMIT_ERR);
             map_field!(regs.intr_status).write(mask);
-            completion();
 
             if intr.intersects(Interrupt::INSERTION | Interrupt::REMOVAL) {
                 let present = map_field!(regs.present_state).read().card_inserted().get();
