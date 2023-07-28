@@ -164,6 +164,7 @@ async fn handle_scause(scause: Scause, ts: &mut TaskState, tf: &mut TrapFrame) -
                 }
 
                 // TODO: avoid raw instruction.
+                #[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))]
                 if excep == Exception::InstructionPageFault {
                     unsafe { core::arch::asm!("fence.i") }
                 }
