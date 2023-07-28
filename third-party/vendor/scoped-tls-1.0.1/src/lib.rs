@@ -251,6 +251,11 @@ impl<T> ScopedKey<T> {
     pub fn is_set(&'static self) -> bool {
         self.with_inner(|c| !c.get().is_null())
     }
+
+    /// Return the raw pointer stored in the variable.
+    pub fn as_ptr(&'static self) -> *const T {
+        self.with_inner(|c| c.get()).cast()
+    }
 }
 
 #[cfg(test)]
