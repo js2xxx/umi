@@ -97,5 +97,5 @@ MEMORY
     RAM : ORIGIN = %RAM_START%, LENGTH = %RAM_SIZE%
 }
 
-PROVIDE(_heap_size = 24M);
+PROVIDE(_heap_size = 32M);
 PROVIDE(_stack_size = 400K);

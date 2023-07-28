@@ -3,7 +3,7 @@ use core::{
     future::poll_fn,
     mem,
     pin::pin,
-    sync::atomic::{AtomicU8, AtomicUsize, Ordering::SeqCst},
+    sync::atomic::{AtomicUsize, Ordering::SeqCst},
     task::{Context, Poll},
     time::Duration,
 };
@@ -47,7 +47,7 @@ pub struct Socket {
 struct Inner {
     stack: Arsc<Stack>,
     handle: RwLock<SocketHandle>,
-    iface_id: AtomicU8,
+    iface_id: AtomicUsize,
 
     listen: Mutex<Option<IpListenEndpoint>>,
     backlog: AtomicUsize,
@@ -223,7 +223,7 @@ impl Socket {
             self.inner.iface_id.store(iface_id, SeqCst);
 
             let socket = s.sockets.get_mut::<tcp::Socket>(*handle);
-            let iface = s.ifaces.get_mut(&iface_id).unwrap();
+            let iface = s.ifaces.get_mut(iface_id).unwrap();
             socket.connect(iface.context(), remote, local)
         });
 

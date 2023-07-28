@@ -120,11 +120,10 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
     unsafe {
         let tp: *mut u32;
         asm!("mv {0}, tp", out(reg) tp);
-        let tp = tp.byte_add(8);
 
         let tdata_count = (&_tdata_size) as *const u32 as usize / mem::size_of::<u32>();
         tp.copy_from_nonoverlapping(&_stdata, tdata_count);
-        let tbss_count = (&_tbss_size) as *const u32 as usize / mem::size_of::<u32>();
+        let tbss_count = ((&_tbss_size) as *const u32 as usize + 8) / mem::size_of::<u32>();
         tp.add(tdata_count).write_bytes(0, tbss_count);
     }
 
@@ -210,6 +209,9 @@ unsafe extern "C" fn _start() -> ! {
         .option norelax
         la tp, _stp
         la t0, _tdata_size
+        la t1, _tbss_size
+        add t0, t0, t1
+        addi t0, t0, 8
         mul t0, a0, t0
         add tp, tp, t0
         .option pop

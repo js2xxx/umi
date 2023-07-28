@@ -1,5 +1,5 @@
 use alloc::{boxed::Box, sync::Arc};
-use core::{ops::Deref, pin::pin, time::Duration};
+use core::{iter, ops::Deref, pin::pin, time::Duration};
 
 use arsc_rs::Arsc;
 use async_trait::async_trait;
@@ -44,14 +44,14 @@ fn config() -> Config {
 }
 
 pub(super) fn init_stack() {
-    let _ = STACK.try_call_once(|| {
-        if let Some(dev) = crate::dev::net(0) {
-            let stack = Stack::new(dev, config());
-            let s2 = stack.clone();
-            crate::executor().spawn(s2.run()).detach();
-            return Ok(stack);
-        }
-        Err(())
+    let _ = STACK.call_once(|| {
+        let pairs = crate::dev::nets()
+            .into_iter()
+            .zip(iter::repeat_with(config));
+        let stack = Stack::new(pairs);
+        let s2 = stack.clone();
+        crate::executor().spawn(s2.run()).detach();
+        stack
     });
 }
 
