@@ -51,17 +51,12 @@ impl Attr {
                 .union(Self::CACHABLE)
                 .union(Self::ACCESSED)
                 .union(Self::DIRTY);
-            pub const KERNEL_DMA: Self = Self::KERNEL_RWX
-                .union(Self::BUFFERABLE)
-                .union(Self::ACCESSED)
-                .union(Self::DIRTY);
             pub const KERNEL_DEV: Self = Self::KERNEL_RWX
                 .union(Self::STRONG_ORDER)
                 .union(Self::ACCESSED)
                 .union(Self::DIRTY);
         } else {
             pub const KERNEL_MEM: Self = Self::KERNEL_RWX;
-            pub const KERNEL_DMA: Self = Self::KERNEL_RWX;
             pub const KERNEL_DEV: Self = Self::KERNEL_RWX;
         }
     }

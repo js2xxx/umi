@@ -4,7 +4,7 @@ use core::{
 };
 
 use bitflags::bitflags;
-use kmem::{Frame, LAddr, PAddr, DMA_OFFSET, ID_OFFSET, PAGE_SIZE};
+use kmem::{Frame, LAddr, PAddr, ID_OFFSET, PAGE_SIZE};
 use ksc::Error;
 use static_assertions::const_assert_eq;
 
@@ -41,6 +41,13 @@ bitflags! {
 
 impl Descriptor {
     const MAX_LEN: usize = 1 << 16;
+
+    fn set(&mut self, addr: u64, len: u16, attr: Attr) {
+        self.addr = addr;
+        self.len = len;
+        self.attr = attr;
+        self._reserved = 0;
+    }
 }
 
 #[derive(Debug)]
@@ -56,7 +63,7 @@ unsafe impl Sync for DescTable {}
 macro_rules! as_mut {
     ($x:expr) => {
         unsafe {
-            &mut *(($x).table.base().to_laddr(DMA_OFFSET)).cast::<[Descriptor; MAX_SEGMENTS]>()
+            &mut *(($x).table.base().to_laddr(ID_OFFSET)).cast::<[Descriptor; MAX_SEGMENTS]>()
         }
     };
 }
@@ -77,63 +84,65 @@ impl DescTable {
 
     /// # Safety
     ///
-    /// `buf` must be alive until the trasfer is complete.
-    pub unsafe fn fill(&mut self, buf: &mut [u8], write: bool) -> usize {
+    /// `buf` must be alive until the transfer is complete.
+    pub unsafe fn fill(&mut self, buf: &mut [u8], read: bool) -> usize {
         assert!(buf.len() <= Self::MAX_LEN);
+        kmem::sync_dma_for_device(read, !read, LAddr::from_slice(&*buf));
 
-        let mut table = as_mut!(self).iter_mut();
-        let mut base = *LAddr::new(buf.as_mut_ptr()).to_paddr(ID_OFFSET);
+        let table = as_mut!(self);
+        let mut iter = table.iter_mut();
+        let mut base = LAddr::new(buf.as_mut_ptr()).to_paddr(ID_OFFSET);
 
         let mut filled = 0;
+        let mut count = 0;
 
-        let align_offset = (ADDR_ALIGN - (base & ADDR_MASK)) & ADDR_MASK;
+        let align_offset = (ADDR_ALIGN - (*base & ADDR_MASK)) & ADDR_MASK;
         if align_offset > 0 {
             let len = align_offset.min(buf.len());
-            if write {
+            if !read {
                 self.bounce_buffer[..len].copy_from_slice(&buf[..len]);
             }
+            let addr = self.bounce_buffer.base();
 
-            let desc = table.next().unwrap();
-            desc.addr = *self.bounce_buffer.base() as u64;
-            desc.len = len as u16;
-            desc.attr = Attr::ACTION_XFER | Attr::VALID;
+            let desc = iter.next().unwrap();
+            desc.set(*addr as u64, len as u16, Attr::ACTION_XFER | Attr::VALID);
+            kmem::sync_dma_for_device(read, !read, LAddr::from_slice(&self.bounce_buffer[..len]));
             // log::trace!("Set at {desc:p}: {desc:#x?}");
 
             filled += len;
             base += len;
+            count += 1;
         }
 
         while filled + Descriptor::MAX_LEN <= buf.len() {
-            let desc = table.next().unwrap();
-            desc.addr = base as u64;
-            desc.len = 0;
-            desc.attr = Attr::ACTION_XFER | Attr::VALID;
+            let desc = iter.next().unwrap();
+            desc.set(*base as u64, 0, Attr::ACTION_XFER | Attr::VALID);
             // log::trace!("Set at {desc:p}: {desc:#x?}");
 
             filled += Descriptor::MAX_LEN;
             base += Descriptor::MAX_LEN;
+            count += 1;
         }
 
         if filled < buf.len() {
             let len = buf.len() - filled;
 
-            let desc = table.next().unwrap();
-            desc.addr = base as u64;
-            desc.len = len as u16;
-            desc.attr = Attr::ACTION_XFER | Attr::VALID;
+            let desc = iter.next().unwrap();
+            desc.set(*base as u64, len as u16, Attr::ACTION_XFER | Attr::VALID);
             // log::trace!("Set at {desc:p}: {desc:#x?}");
 
             filled += len;
             // base += len;
+            count += 1;
         }
 
-        let desc = table.next().unwrap();
-        desc.addr = 0;
-        desc.len = 0;
-        desc.attr = Attr::ACTION_NONE | Attr::END | Attr::VALID;
+        let desc = iter.next().unwrap();
+        desc.set(0, 0, Attr::ACTION_NONE | Attr::END | Attr::VALID);
         // log::trace!("Set at {desc:p}: {desc:#x?}");
+        count += 1;
 
         atomic::fence(SeqCst);
+        kmem::sync_dma_for_device(true, true, LAddr::from_slice(&table[..count]));
         filled
     }
 
@@ -141,7 +150,9 @@ impl DescTable {
     ///
     /// `buf` must be the same as the last `fill`ed.
     pub unsafe fn extract(&mut self, buf: &mut [u8], read: bool) {
+        kmem::sync_dma_for_cpu(read, !read, LAddr::from_slice(&*buf));
         atomic::fence(SeqCst);
+
         if !read {
             return;
         }
@@ -149,7 +160,10 @@ impl DescTable {
         let align_offset = (ADDR_ALIGN - (base & ADDR_MASK)) & ADDR_MASK;
         if align_offset > 0 {
             let len = align_offset.min(buf.len());
-            buf[..len].copy_from_slice(&self.bounce_buffer[..len]);
+            let src = &self.bounce_buffer[..len];
+
+            kmem::sync_dma_for_cpu(read, !read, LAddr::from_slice(src));
+            buf[..len].copy_from_slice(src);
         }
     }
 }

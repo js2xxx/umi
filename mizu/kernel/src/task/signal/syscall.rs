@@ -79,7 +79,7 @@ bitflags::bitflags! {
     }
 }
 
-pub const SIGRETURN_GUARD: usize = 0xAEF0_AEF0_AEF0_AEF0;
+pub const SIGRETURN_GUARD: usize = 0xffff_ffff_ffff_fffc;
 
 #[async_handler]
 pub async fn sigaction(

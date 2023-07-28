@@ -15,7 +15,6 @@ ksync = {path = "../../lib/ksync"}
 ktime = {path = "../../lib/ktime"}
 umio = {path = "../../lib/umio"}
 # External crates
-array-macro = "2"
 async-trait = "0"
 bit-struct = {version = "0", default-features = false}
 bitflags = "2"

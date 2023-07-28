@@ -9,10 +9,8 @@ use core::{
 };
 
 use arsc_rs::Arsc;
-use futures_util::{task::AtomicWaker, Future, FutureExt};
-use hashbrown::HashMap;
+use futures_util::{future::join_all, task::AtomicWaker, Future, FutureExt};
 use ktime::{Instant, InstantExt, Timer};
-use rand_riscv::RandomState;
 use smoltcp::{
     iface::{self, Interface, SocketHandle, SocketSet},
     phy::{Device, Loopback, Tracer},
@@ -43,9 +41,9 @@ fn writer(id: u8, instant: impl Display, packet: impl Display) {
 }
 
 pub struct Stack {
-    device: Arc<RwLock<dyn Net>>,
+    devices: Vec<Arc<RwLock<dyn Net>>>,
     socket: RwLock<SocketStack>,
-    state: RwLock<State>,
+    states: RwLock<Vec<State>>,
 }
 
 #[derive(Debug)]
@@ -65,7 +63,7 @@ pub(in crate::net) struct SocketStack {
     next_local_port: u16,
 
     pub loopback: Tracer<Loopback>,
-    pub ifaces: HashMap<u8, Interface, RandomState>,
+    pub ifaces: Vec<Interface>,
 
     waker: AtomicWaker,
 }
@@ -84,7 +82,7 @@ impl fmt::Debug for Stack {
         f.debug_struct("Stack")
             .field("device", &..)
             .field("socket", &self.socket)
-            .field("state", &self.state)
+            .field("state", &self.states)
             .finish()
     }
 }
@@ -92,15 +90,11 @@ impl fmt::Debug for Stack {
 impl Stack {
     pub(in crate::net) fn with_mut<T>(
         &self,
-        f: impl FnOnce(&mut dyn Net, &mut State, &mut SocketStack) -> T,
+        f: impl FnOnce(&[Arc<RwLock<dyn Net>>], &mut [State], &mut SocketStack) -> T,
     ) -> T {
         ksync::critical(|| {
             let mut socket = self.socket.write();
-            let res = f(
-                &mut *self.device.write(),
-                &mut self.state.write(),
-                &mut socket,
-            );
+            let res = f(&self.devices, &mut self.states.write(), &mut socket);
             socket.waker.wake();
             res
         })
@@ -127,11 +121,11 @@ impl Stack {
         config
     }
 
-    fn update_interface(iface: &mut Interface, device: &mut dyn Net) {
+    fn update_interface(iface: &mut Interface, device: &dyn Net) {
         iface.set_hardware_addr(HardwareAddress::Ethernet(EthernetAddress(device.address())))
     }
 
-    pub fn new(device: Arc<RwLock<dyn Net>>, config: Config) -> Arsc<Self> {
+    pub fn new(pairs: impl IntoIterator<Item = (Arc<RwLock<dyn Net>>, Config)>) -> Arsc<Self> {
         let now = instant_to_smoltcp(ktime::Instant::now());
 
         let next_local_port = (rand_riscv::seed64() % (LOCAL_PORT_MAX - LOCAL_PORT_MIN) as u64)
@@ -155,45 +149,53 @@ impl Stack {
         );
         loopback_interface
             .update_ip_addrs(|addrs| *addrs = [LOOPBACK_IPV4, LOOPBACK_IPV6].into_iter().collect());
-        socket.ifaces.insert_unique_unchecked(0, loopback_interface);
+        socket.ifaces.push(loopback_interface);
 
-        ksync::critical(|| {
-            let config = Self::new_iface_config(HardwareAddress::Ethernet(EthernetAddress(
+        let mut devices = Vec::new();
+        let mut states = Vec::new();
+
+        for (device, config) in pairs {
+            let c = Self::new_iface_config(HardwareAddress::Ethernet(EthernetAddress(
                 device.read().address(),
             )));
-            let iface = Interface::new(config, &mut device.write().with_cx(None), now);
-            socket.ifaces.insert_unique_unchecked(1, iface)
-        });
+            let mut iface = Interface::new(c, &mut device.write().with_cx(None), now);
 
-        let mut state = State {
-            link_up: false,
+            let mut state = State {
+                link_up: false,
 
-            dhcpv4: None,
+                dhcpv4: None,
 
-            dns_socket: socket.sockets.add(dns::Socket::new(&[], Vec::new())),
-            dns_servers_ipv4: Default::default(),
-            dns_servers_ipv6: Default::default(),
-            dns_waker: AtomicWaker::new(),
-        };
+                dns_socket: socket.sockets.add(dns::Socket::new(&[], Vec::new())),
+                dns_servers_ipv4: Default::default(),
+                dns_servers_ipv6: Default::default(),
+                dns_waker: AtomicWaker::new(),
+            };
 
-        match config.ipv4 {
-            ConfigV4::Static(config) => state.apply_ipv4_config(&mut socket, config),
-            ConfigV4::Dhcp(config) => {
-                let mut dhcpv4 = dhcpv4::Socket::new();
-                state.apply_dhcpv4_config(&mut dhcpv4, config);
-                state.dhcpv4 = Some(socket.sockets.add(dhcpv4));
+            match config.ipv4 {
+                ConfigV4::Static(config) => {
+                    state.apply_ipv4_config(&mut iface, &mut socket.sockets, config)
+                }
+                ConfigV4::Dhcp(config) => {
+                    let mut dhcpv4 = dhcpv4::Socket::new();
+                    state.apply_dhcpv4_config(&mut dhcpv4, config);
+                    state.dhcpv4 = Some(socket.sockets.add(dhcpv4));
+                }
+                ConfigV4::None => {}
             }
-            ConfigV4::None => {}
-        }
 
-        if let ConfigV6::Static(config) = config.ipv6 {
-            state.apply_ipv6_config(&mut socket, config)
+            if let ConfigV6::Static(config) = config.ipv6 {
+                state.apply_ipv6_config(&mut iface, &mut socket.sockets, config)
+            }
+
+            socket.ifaces.push(iface);
+            devices.push(device);
+            states.push(state);
         }
 
         Arsc::new(Stack {
-            device,
+            devices,
             socket: RwLock::new(socket),
-            state: RwLock::new(state),
+            states: RwLock::new(states),
         })
     }
 
@@ -205,27 +207,16 @@ impl Stack {
     }
 }
 
-macro_rules! extern_ifaces {
-    ($sstack:expr) => {{
-        let iter = $sstack.ifaces.iter_mut();
-        iter.filter_map(|(&id, iface)| (id != 0).then_some((id, iface)))
-    }};
-}
-
 impl Stack {
-    pub fn max_transmission_unit(&self, iface_id: u8) -> usize {
+    pub fn max_transmission_unit(&self, iface_id: usize) -> usize {
         if iface_id == 0 {
             self.with_socket(|s| s.loopback.capabilities().max_transmission_unit)
         } else {
-            ksync::critical(|| self.device.read().features().max_unit)
+            ksync::critical(|| self.devices[iface_id - 1].read().features().max_unit)
         }
     }
 
-    pub async fn dns_query(
-        &self,
-        name: &str,
-        ty: DnsQueryType,
-    ) -> Result<heapless::Vec<IpAddress, 1>, DnsError> {
+    pub async fn dns_query(&self, name: &str, ty: DnsQueryType) -> Vec<IpAddress> {
         struct CallOnDrop<F: FnOnce()>(Option<F>);
         impl<F: FnOnce()> Drop for CallOnDrop<F> {
             fn drop(&mut self) {
@@ -236,49 +227,70 @@ impl Stack {
         }
 
         match ty {
-            DnsQueryType::A if let Ok(ip) = name.parse().map(IpAddress::Ipv4) => {
-                return Ok([ip].into_iter().collect())
+            DnsQueryType::A if let Ok(ip) = name.parse().map(IpAddress::Ipv4) =>
+    {             return [ip].into_iter().collect()
             }
-            DnsQueryType::Aaaa if let Ok(ip) = name.parse().map(IpAddress::Ipv6) => {
-                return Ok([ip].into_iter().collect())
+            DnsQueryType::Aaaa if let Ok(ip) = name.parse().map(IpAddress::Ipv6)
+    => {             return [ip].into_iter().collect()
             },
             _ => {}
         }
 
-        let handle = poll_fn(|cx| self.dns_start_query(name, ty, cx)).await?;
+        let len = self.devices.len();
 
-        let mut cancel = CallOnDrop(Some(|| self.dns_cancel(handle)));
-        let result = poll_fn(|cx| self.dns_get_result(handle, cx)).await?;
-        cancel.0 = None;
+        let futures = (1..=len).map(|iface_id| async move {
+            let handle = poll_fn(|cx| self.dns_start_query(name, ty, iface_id, cx)).await?;
 
-        Ok(result)
+            let mut cancel = CallOnDrop(Some(|| self.dns_cancel(handle, iface_id)));
+            let result = poll_fn(|cx| self.dns_get_result(handle, iface_id, cx)).await?;
+            cancel.0 = None;
+
+            Ok::<_, DnsError>(result)
+        });
+
+        let results = join_all(futures).await;
+
+        let iter = results.into_iter().filter_map(|res| match res {
+            Ok(res) => Some(res),
+            Err(err) => {
+                log::error!("DNS query error: {err:?}");
+                None
+            }
+        });
+        iter.flatten().collect()
     }
 
     fn dns_start_query(
         &self,
         name: &str,
         ty: DnsQueryType,
+        iface_id: usize,
         cx: &mut Context<'_>,
     ) -> Poll<Result<dns::QueryHandle, dns::StartQueryError>> {
         self.with_mut(|_, state, s| {
+            let state = &mut state[iface_id];
+            let iface = &mut s.ifaces[iface_id];
+
             let socket = s.sockets.get_mut::<dns::Socket>(state.dns_socket);
-            for (_, iface) in extern_ifaces!(s) {
-                match socket.start_query(iface.context(), name, ty) {
-                    Err(dns::StartQueryError::NoFreeSlot) => {}
-                    res => return Poll::Ready(res),
+            match socket.start_query(iface.context(), name, ty) {
+                Err(dns::StartQueryError::NoFreeSlot) => {
+                    state.dns_waker.register(cx.waker());
+                    Poll::Pending
                 }
+                res => Poll::Ready(res),
             }
-            state.dns_waker.register(cx.waker());
-            Poll::Pending
         })
     }
 
     fn dns_get_result(
         &self,
         handle: dns::QueryHandle,
+        iface_id: usize,
         cx: &mut Context<'_>,
     ) -> Poll<Result<heapless::Vec<IpAddress, 1>, dns::GetQueryResultError>> {
         self.with_mut(|_, state, s| {
+            let state = &mut state[iface_id];
+
             let socket = s.sockets.get_mut::<dns::Socket>(state.dns_socket);
             match socket.get_query_result(handle) {
                 Err(dns::GetQueryResultError::Pending) => {
@@ -293,8 +305,10 @@ impl Stack {
         })
     }
 
-    fn dns_cancel(&self, handle: dns::QueryHandle) {
+    fn dns_cancel(&self, handle: dns::QueryHandle, iface_id: usize) {
         self.with_mut(|_, state, s| {
+            let state = &mut state[iface_id];
+
             let socket = s.sockets.get_mut::<dns::Socket>(state.dns_socket);
             socket.cancel_query(handle);
             s.waker.wake();
@@ -304,16 +318,19 @@ impl Stack {
 
     fn poll(&self, cx: &mut Context) -> Option<Instant> {
         ksync::critical(|| {
-            let mut write = self.state.write();
-            write.poll(cx, &mut *self.device.write(), &mut self.socket.write())
+            let mut write = self.socket.write();
+            write.poll(cx, &self.devices, &mut self.states.write())
         })
     }
 }
 
 impl State {
-    fn apply_ipv4_config(&mut self, s: &mut SocketStack, config: StaticConfigV4) {
-        let iface = s.ifaces.get_mut(&1).unwrap();
-
+    fn apply_ipv4_config(
+        &mut self,
+        iface: &mut Interface,
+        sockets: &mut SocketSet,
+        config: StaticConfigV4,
+    ) {
         iface.update_ip_addrs(|addrs| match addrs.first_mut() {
             Some(addr) => *addr = IpCidr::Ipv4(config.address),
             None => addrs.push(IpCidr::Ipv4(config.address)).unwrap(),
@@ -326,12 +343,15 @@ impl State {
         }
 
         self.dns_servers_ipv4 = config.dns_servers;
-        self.update_dns_servers(s);
+        self.update_dns_servers(sockets);
     }
 
-    fn apply_ipv6_config(&mut self, s: &mut SocketStack, config: StaticConfigV6) {
-        let iface = s.ifaces.get_mut(&1).unwrap();
-
+    fn apply_ipv6_config(
+        &mut self,
+        iface: &mut Interface,
+        sockets: &mut SocketSet,
+        config: StaticConfigV6,
+    ) {
         iface.update_ip_addrs(|addrs| match addrs.first_mut() {
             Some(addr) => *addr = IpCidr::Ipv6(config.address),
             None => addrs.push(IpCidr::Ipv6(config.address)).unwrap(),
@@ -344,11 +364,11 @@ impl State {
         }
 
         self.dns_servers_ipv6 = config.dns_servers;
-        self.update_dns_servers(s);
+        self.update_dns_servers(sockets);
     }
 
-    fn update_dns_servers(&mut self, s: &mut SocketStack) {
-        let socket = s.sockets.get_mut::<dns::Socket>(self.dns_socket);
+    fn update_dns_servers(&mut self, s: &mut SocketSet) {
+        let socket = s.get_mut::<dns::Socket>(self.dns_socket);
         let servers_ipv4 = self.dns_servers_ipv4.iter().copied().map(IpAddress::Ipv4);
         let servers_ipv6 = self.dns_servers_ipv6.iter().copied().map(IpAddress::Ipv6);
         let servers: heapless::Vec<_, 6> = servers_ipv4.chain(servers_ipv6).collect();
@@ -362,70 +382,10 @@ impl State {
         socket.set_retry_config(config.retry_config);
     }
 
-    fn unapply_dhcpv4_config(&mut self, s: &mut SocketStack) {
-        let iface = s.ifaces.get_mut(&1).unwrap();
+    fn unapply_dhcpv4_config(&mut self, iface: &mut Interface) {
         iface.update_ip_addrs(|addrs| addrs.clear());
         iface.routes_mut().remove_default_ipv4_route();
         self.dns_servers_ipv4.clear();
-    }
-
-    fn poll(
-        &mut self,
-        cx: &mut Context,
-        device: &mut dyn Net,
-        s: &mut SocketStack,
-    ) -> Option<Instant> {
-        s.waker.register(cx.waker());
-        Stack::update_interface(s.ifaces.get_mut(&1).unwrap(), device);
-
-        let instant = instant_to_smoltcp(ktime::Instant::now());
-
-        s.ifaces
-            .get_mut(&0)
-            .unwrap()
-            .poll(instant, &mut s.loopback, &mut s.sockets);
-
-        let mut poller = Tracer::new(device.with_cx(Some(cx)), |i, p| writer(1, i, p));
-        for (_id, iface) in extern_ifaces!(s) {
-            iface.poll(instant, &mut poller, &mut s.sockets);
-        }
-
-        let old = mem::replace(&mut self.link_up, device.is_link_up());
-        if old != self.link_up {
-            let s = if self.link_up { "up" } else { "down" };
-            log::info!("Net device link {s}");
-        }
-
-        if let Some(dhcpv4) = self.dhcpv4 {
-            let socket = s.sockets.get_mut::<dhcpv4::Socket>(dhcpv4);
-            if self.link_up {
-                match socket.poll() {
-                    Some(dhcpv4::Event::Configured(config)) => {
-                        let config = StaticConfigV4 {
-                            address: config.address,
-                            gateway: config.router,
-                            dns_servers: config.dns_servers,
-                        };
-                        self.apply_ipv4_config(s, config)
-                    }
-                    Some(dhcpv4::Event::Deconfigured) => self.unapply_dhcpv4_config(s),
-                    None => {}
-                }
-            } else if old {
-                socket.reset();
-                self.unapply_dhcpv4_config(s)
-            }
-        }
-
-        let ddl = s.ifaces.values_mut().fold(None, |acc, iface| {
-            let next = iface.poll_at(instant, &s.sockets);
-            match (acc, next) {
-                (None, next) => next,
-                (acc, None) => acc,
-                (Some(acc), Some(next)) => Some(next.min(acc)),
-            }
-        });
-        ddl.map(instant_from_smoltcp)
     }
 }
 
@@ -440,7 +400,7 @@ impl SocketStack {
         res
     }
 
-    pub fn select_tcp_addr(&mut self, remote: &IpEndpoint, local: &mut IpListenEndpoint) -> u8 {
+    pub fn select_tcp_addr(&mut self, remote: &IpEndpoint, local: &mut IpListenEndpoint) -> usize {
         let loopback_ipv4 = LOOPBACK_IPV4.contains_addr(&remote.addr);
         let loopback_ipv6 = LOOPBACK_IPV6.contains_addr(&remote.addr);
         match (loopback_ipv4, loopback_ipv6) {
@@ -451,8 +411,71 @@ impl SocketStack {
         if loopback_ipv4 || loopback_ipv6 {
             0
         } else {
-            self.ifaces.keys().find(|&&k| k != 0).copied().unwrap()
+            // TODO: Select a better interface.
+            self.ifaces.len() - 1
         }
+    }
+
+    fn poll(
+        &mut self,
+        cx: &mut Context,
+        device: &[Arc<RwLock<dyn Net>>],
+        state: &mut [State],
+    ) -> Option<Instant> {
+        self.waker.register(cx.waker());
+
+        let instant = instant_to_smoltcp(ktime::Instant::now());
+
+        let mut ifaces = self.ifaces.iter_mut();
+        ifaces
+            .next()
+            .unwrap()
+            .poll(instant, &mut self.loopback, &mut self.sockets);
+
+        for ((iface, dev), state) in ifaces.zip(device).zip(state) {
+            let mut dev = dev.write();
+            Stack::update_interface(iface, &*dev);
+
+            let mut poller = Tracer::new(dev.with_cx(Some(cx)), |i, p| writer(1, i, p));
+            iface.poll(instant, &mut poller, &mut self.sockets);
+
+            let old = mem::replace(&mut state.link_up, dev.is_link_up());
+            if old != state.link_up {
+                let s = if state.link_up { "up" } else { "down" };
+                log::info!("Net device {:x?} link {s}", dev.address());
+            }
+
+            if let Some(dhcpv4) = state.dhcpv4 {
+                let socket = self.sockets.get_mut::<dhcpv4::Socket>(dhcpv4);
+                if state.link_up {
+                    match socket.poll() {
+                        Some(dhcpv4::Event::Configured(config)) => {
+                            let config = StaticConfigV4 {
+                                address: config.address,
+                                gateway: config.router,
+                                dns_servers: config.dns_servers,
+                            };
+                            state.apply_ipv4_config(iface, &mut self.sockets, config)
+                        }
+                        Some(dhcpv4::Event::Deconfigured) => state.unapply_dhcpv4_config(iface),
+                        None => {}
+                    }
+                } else if old {
+                    socket.reset();
+                    state.unapply_dhcpv4_config(iface)
+                }
+            }
+        }
+
+        let ddl = self.ifaces.iter_mut().fold(None, |acc, iface| {
+            let next = iface.poll_at(instant, &self.sockets);
+            match (acc, next) {
+                (None, next) => next,
+                (acc, None) => acc,
+                (Some(acc), Some(next)) => Some(next.min(acc)),
+            }
+        });
+        ddl.map(instant_from_smoltcp)
     }
 }
 
