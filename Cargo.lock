@@ -888,7 +888,7 @@ dependencies = [
 [[package]]
 name = "scoped-tls"
 version = "1.0.1"
-source = "git+https://github.com/js2xxx/scoped-tls?branch=no_std#0f3a84e21cbb6591a6a41efa307e44f7693145dd"
+source = "git+https://github.com/js2xxx/scoped-tls?branch=no_std#6331b33804cf40deb1c8a7e455b731872f6d3cf8"
 
 [[package]]
 name = "scoped_threadpool"

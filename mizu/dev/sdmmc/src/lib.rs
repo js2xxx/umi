@@ -13,7 +13,6 @@ use alloc::{boxed::Box, vec, vec::Vec};
 use core::{
     fmt,
     future::poll_fn,
-    mem,
     ops::Range,
     ptr::NonNull,
     sync::atomic::{
@@ -87,8 +86,7 @@ impl Sdmmc {
     ) -> Result<R::Repr, Error> {
         poll_fn(|cx| {
             let cmd = common_cmd::cmd::<R>(cmd.cmd, cmd.arg);
-            let data = data.as_mut().map(|data| mem::take(*data));
-            self.with(|s| s.send_cmd(cx, cmd, require_crc, use_auto_cmd, data))
+            self.with(|s| s.send_cmd(cx, cmd, require_crc, use_auto_cmd, data.as_deref_mut()))
         })
         .await?;
 

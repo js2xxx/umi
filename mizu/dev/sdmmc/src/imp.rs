@@ -377,10 +377,10 @@ impl Inner {
     fn set_transfer(
         &mut self,
         use_auto_cmd: bool,
-        data: Option<Data>,
+        data: Option<&mut Data>,
     ) -> Result<TransferMode, Error> {
-        Ok(if let Some(mut data) = data {
-            self.send_data(&mut data)?;
+        Ok(if let Some(data) = data {
+            self.send_data(data)?;
             let regs = &mut self.regs;
 
             let mut hc2 = map_field!(regs.host_control_2).read();
@@ -430,7 +430,7 @@ impl Inner {
         cmd: Cmd<R>,
         require_crc: bool,
         use_auto_cmd: bool,
-        data: Option<Data>,
+        data: Option<&mut Data>,
     ) -> Poll<Result<(), Error>> {
         if !self.is_present() {
             return Poll::Ready(Err(ENODEV));
@@ -472,7 +472,10 @@ impl Inner {
             return Poll::Ready(Err(ENODEV));
         }
         match self.resp_slot.take() {
-            Some(resp) => Poll::Ready(resp),
+            Some(resp) => {
+                self.cmd_idle.wake();
+                Poll::Ready(resp)
+            }
             None => {
                 self.cmd_finished.register(cx.waker());
                 Poll::Pending
@@ -495,6 +498,7 @@ impl Inner {
                 Some(res) => {
                     let buffer = mem::take(&mut slot.buffer);
                     self.data_slot = None;
+                    self.data_idle.wake();
                     Poll::Ready((buffer, res))
                 }
                 None => {

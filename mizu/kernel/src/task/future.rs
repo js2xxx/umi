@@ -41,11 +41,8 @@ pub struct TaskFut<F> {
 
 impl<F> TaskFut<F> {
     pub fn new(virt: Arsc<Virt>, fut: F) -> Self {
-        TaskFut {
-            virt,
-            fp: FP.try_with(Fp::copy).unwrap_or_default(),
-            fut,
-        }
+        let fp = FP.try_with(Fp::copy).unwrap_or_default();
+        TaskFut { virt, fp, fut }
     }
 }
 
@@ -164,6 +161,11 @@ async fn handle_scause(scause: Scause, ts: &mut TaskState, tf: &mut TrapFrame) -
                             num: 0,
                         },
                     }));
+                }
+
+                // TODO: avoid raw instruction.
+                if excep == Exception::InstructionPageFault {
+                    unsafe { core::arch::asm!("fence.i") }
                 }
             }
             _ => panic!(

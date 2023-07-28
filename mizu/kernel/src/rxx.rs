@@ -120,6 +120,7 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
     unsafe {
         let tp: *mut u32;
         asm!("mv {0}, tp", out(reg) tp);
+        let tp = tp.byte_add(8);
 
         let tdata_count = (&_tdata_size) as *const u32 as usize / mem::size_of::<u32>();
         tp.copy_from_nonoverlapping(&_stdata, tdata_count);

@@ -8,6 +8,7 @@
 #![feature(inline_const)]
 #![feature(maybe_uninit_as_bytes)]
 #![feature(naked_functions)]
+#![feature(pointer_byte_offsets)]
 #![feature(pointer_is_aligned)]
 #![feature(result_option_inspect)]
 #![feature(thread_local)]

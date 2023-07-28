@@ -70,7 +70,7 @@ SECTIONS
     .tbss (NOLOAD) : ALIGN(0x10)
     {
         _stp = .;
-        . += (_tdata_size + _tbss_size) * %MAX_HARTS%;
+        . += (_tdata_size + _tbss_size + 8) * %MAX_HARTS%;
         _etp = .;
     } >VIRT AT>RAM
 
