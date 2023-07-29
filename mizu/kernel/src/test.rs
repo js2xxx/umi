@@ -276,4 +276,7 @@ pub async fn test_all() {
 
     println!("run iozone_testcode.sh");
     run_busybox(Some("./iozone_testcode.sh")).await;
+
+    #[cfg(feature = "cv1811h")]
+    println!("!TEST FINISH!");
 }

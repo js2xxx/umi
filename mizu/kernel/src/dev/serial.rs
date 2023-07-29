@@ -185,9 +185,8 @@ fn ack_interrupt(completion: &Completion) -> bool {
                 serial.input_ready.notify(1);
             }
         });
-        return true;
     }
-    false
+    true
 }
 
 pub unsafe fn init_logger() {

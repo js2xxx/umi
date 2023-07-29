@@ -179,12 +179,24 @@ unsafe extern "C" fn __rt_init(hartid: usize, payload: usize) {
 #[cfg(not(feature = "test"))]
 #[naked]
 #[no_mangle]
+unsafe extern "C" fn _fix_args() {
+    #[cfg(not(feature = "cv1811h"))]
+    asm!("ret", options(noreturn));
+    #[cfg(feature = "cv1811h")]
+    asm!("li a0, 0; li a1, 0; ret", options(noreturn));
+}
+
+#[cfg(not(feature = "test"))]
+#[naked]
+#[no_mangle]
 #[link_section = ".init"]
 unsafe extern "C" fn _start() -> ! {
     asm!("
         csrw sie, zero
         csrw sip, zero
         csrw satp, zero
+
+        call {_fix_args}
 
         // Load ID offset to jump to higher half
         li t3, {ID_OFFSET}
@@ -227,7 +239,8 @@ unsafe extern "C" fn _start() -> ! {
 
         la t0, {_init}
         jr t0
-        ", 
+        ",
+        _fix_args = sym _fix_args,
         _init = sym __rt_init,
         BOOT_PAGES = sym BOOT_PAGES,
         ID_OFFSET = const ID_OFFSET,
