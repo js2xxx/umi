@@ -40,13 +40,13 @@ impl<T: Net + ?Sized> Net for &'_ mut T {
 
 pub trait NetTx: Send {
     fn tx_peek(&mut self, cx: &mut Context<'_>) -> Option<Token>;
-    fn tx_buffer(&mut self, token: Token) -> &mut [u8];
+    fn tx_buffer(&mut self, token: &Token) -> &mut [u8];
     fn transmit(&mut self, token: Token, len: usize);
 }
 
 pub trait NetRx: Send {
     fn rx_peek(&mut self, cx: &mut Context<'_>) -> Option<Token>;
-    fn rx_buffer(&mut self, token: Token) -> &mut [u8];
+    fn rx_buffer(&mut self, token: &Token) -> &mut [u8];
     fn receive(&mut self, token: Token);
 }
 
@@ -136,7 +136,7 @@ impl phy::TxToken for TxToken<'_> {
     where
         F: FnOnce(&mut [u8]) -> R,
     {
-        let buf = self.device.tx_buffer(self.token);
+        let buf = self.device.tx_buffer(&self.token);
         let res = f(&mut buf[..len]);
         self.device.transmit(self.token, len);
         res
@@ -148,7 +148,7 @@ impl phy::RxToken for RxToken<'_> {
     where
         F: FnOnce(&mut [u8]) -> R,
     {
-        let res = f(self.device.rx_buffer(self.token));
+        let res = f(self.device.rx_buffer(&self.token));
         self.device.receive(self.token);
         res
     }

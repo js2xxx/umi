@@ -137,7 +137,7 @@ impl<const LEN: usize> NetTx for TxRing<LEN> {
         }
     }
 
-    fn tx_buffer(&mut self, token: Token) -> &mut [u8] {
+    fn tx_buffer(&mut self, token: &Token) -> &mut [u8] {
         if self.free_head == token.0 {
             let (bytes, _) = self.buffers[self.free_head].split_array_mut();
             self.free_head = usize::from_le_bytes(*bytes);
@@ -179,7 +179,7 @@ impl<const RX: usize> NetRx for RxRing<RX> {
         })
     }
 
-    fn rx_buffer(&mut self, token: Token) -> &mut [u8] {
+    fn rx_buffer(&mut self, token: &Token) -> &mut [u8] {
         let (start, len) = self.len[token.0];
         &mut self.buffers[token.0][start..][..len]
     }

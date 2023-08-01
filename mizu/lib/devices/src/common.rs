@@ -23,5 +23,5 @@ pub fn bitmap_index_u32(index: usize) -> (usize, u32) {
     (byte, bit_in_byte_mask)
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug)]
 pub struct Token(pub usize);
