@@ -75,21 +75,21 @@ pub trait Future {
 
 在Rust中，一个异步函数`async fn`最终都会编译成一个独立的状态机。而在异步函数中调用异步函数，则需要使用`.await`关键字。因此，每一次`.await`的出现就代表一个可能的任务间上下文切换。
 
-### 目录
+### 模块目录
 
 我们的OS秉承模块化的设计，在`mizu`目录下分出三块：
 
-- `kernel`是最终二进制文件的可执行程序，依赖所有模块并有一些自身的代码逻辑；
 - `lib`是各个模块的所在，一些模块完全独立可被复用，而另一些依赖着其他模块，作为单独的功能代码便于解耦调试；
-  - [`ksync`](lib/ksync.md)
-  - [`ktime`](lib/ktime.md)
-  - [`co-trap`](lib/co-trap.md)
-  - [`art`](lib/art.md)
-  - [`ksc`](lib/ksc.md)
-  - [`devices`](lib/devices.md)
-  - [`kmem`](lib/kmem.md)
+  - [`ksync`](lib/ksync.md)：同步源语
+  - [`ktime`](lib/ktime.md)：时间相关
+  - [`co-trap`](lib/co-trap.md)：上下文切换
+  - [`art`](lib/art.md)：异步执行器
+  - [`ksc`](lib/ksc.md)：系统调用相关
+  - [`devices`](lib/devices.md)：设备抽象和网络协议栈
+  - [`kmem`](lib/kmem.md)：内存管理
   - [其他模块](lib/misc.md)
-- `dev`是各个设备驱动程序的所在，依赖着`lib`中的模块。
+- `dev`是各个设备驱动程序的所在，依赖着`lib`中的模块；
   - [`virtio`](dev/virtio.md)，包括块设备和网络设备
   - `plic`，是对[文档](https://github.com/riscv/riscv-plic-spec)的一层包装。
   - [`SD卡`](dev/sdmmc.md)
+- [`kernel`](kernel/index.md)是最终二进制文件的可执行程序，依赖所有模块并有一些自身的代码逻辑。
