@@ -152,8 +152,90 @@ impl Future for StackBackground {
 
 ```
 
-## 重写的`smoltcp`
+## 插座
 
-在使用这个crate的时候，`iperf`测试的UDP的丢包率一直居高不下（20%左右）。经过排查发现是`smoltcp`中的UDP收包逻辑较为简单，没有伪remote的参与，而`iperf`使用多个插座连接同一个服务器端口，于是经常出现收发不均衡的现象，造成丢包。于是在`smoltcp`中加入了伪远程端口字段，使得在UDP收包时优先匹配远程端口。经过测试将丢包率降到了个位数。
+插座的实现方式有一些设计，但不多：UDP基本是对`smoltcp`的一层包装，TCP的系统调用接口则跟`smoltcp`大相径庭。为了支持TCP插座的ACCEPT操作，创建了一个ACCEPT队列，放在一个单独的背景任务里，潜在的优化点是可能可以跟网络协议栈的大背景任务合并。
+
+```rust
+#[derive(Debug)]
+pub struct Socket {
+    inner: Arsc<Inner>,
+    accept: Mutex<Option<Receiver<SegQueue<Socket>>>>,
+}
+
+#[derive(Debug)]
+struct Inner {
+    stack: Arsc<Stack>,
+    handle: RwLock<SocketHandle>,
+    iface_id: AtomicUsize,
+
+    listen: Mutex<Option<IpListenEndpoint>>,
+    backlog: AtomicUsize,
+    accept_event: Event,
+}
+
+impl Inner {
+    async fn accept_task(
+        self: Arsc<Self>,
+        endpoint: IpListenEndpoint,
+        tx: Sender<SegQueue<Socket>>,
+    ) {
+        while !tx.is_closed() {
+            let mut listener = None;
+            // Listen to `self.accept_event`.
+
+            let establishment = poll_fn(|cx| self.poll_for_establishment(cx));
+            let closed = pin!(self.close_event(&tx));
+
+            let Either::Left((res, _)) = select(establishment, closed).await else { break };
+
+            if let Ok(handle) = res {
+                let conn = ...; // Create new smoltcp socket and add it to the stack.
+                // 由于smoltcp的插座是单连接的，因此需要将已经建立连接的自身插座实例返
+                // 回给发送给accept函数，将自身的插座实例替换为一个新的监听状态的插座。
+                if let Some(conn) = conn {
+                    let data = ...; // Create new connection socket interface.
+                    if tx.send(data).await.is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+        self.close().await
+    }
+}
+
+impl Socket {
+    pub fn listen(&self, backlog: usize) -> Result<impl Future<Output = ()> + 'static, Error> {
+        let endpoint = ...; // Create the listen endpoint.
+
+        self.inner
+            .with_mut(|_, socket| socket.listen(endpoint))
+            .map_err(|_| EINVAL)?;
+
+        self.inner.backlog.store(backlog, SeqCst);
+        let inner = self.inner.clone();
+        let (tx, rx) = unbounded();
+        ksync::critical(|| *self.accept.lock() = Some(rx));
+
+        Ok(inner.accept_task(endpoint, tx)) // Return the accept background task to be spawned
+                                            // in the kernel.
+    }
+
+    pub async fn accept(&self) -> Result<Self, Error> {
+        let Some(rx) = ksync::critical(|| self.accept.lock().clone()) else {
+            return Err(EINVAL);
+        };
+        let socket = rx.recv().await.unwrap();
+        self.inner.accept_event.notify(1);
+        Ok(socket)
+    }
+}
+
+```
+
+## 经过修改的`smoltcp`
+
+在使用这个crate的时候，`iperf`测试的UDP的丢包率一直居高不下（20%左右）。经过排查发现是`smoltcp`中的UDP收包逻辑较为简单，没有伪remote的参与，而`iperf`使用多个插座连接同一个服务器端口，于是经常出现收发不均衡的现象，造成某些插座缓冲区满而丢包。于是在`smoltcp`中加入了伪远程端口字段，使得在UDP收包时优先匹配远程端口。经过测试将丢包率降到了个位数。
 
 还在`smoltcp`中增加了检测收发缓冲区空闲大小的函数，以支持其poll事件功能。
