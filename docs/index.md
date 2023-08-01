@@ -87,9 +87,80 @@ pub trait Future {
   - [`ksc`](lib/ksc.md)：系统调用相关
   - [`devices`](lib/devices.md)：设备抽象和网络协议栈
   - [`kmem`](lib/kmem.md)：内存管理
+  - [`afat32`](lib/afat32.md)：异步并发的FAT32文件系统。
   - [其他模块](lib/misc.md)
 - `dev`是各个设备驱动程序的所在，依赖着`lib`中的模块；
   - [`virtio`](dev/virtio.md)，包括块设备和网络设备
   - `plic`，是对[文档](https://github.com/riscv/riscv-plic-spec)的一层包装。
   - [`SD卡`](dev/sdmmc.md)
 - [`kernel`](kernel/index.md)是最终二进制文件的可执行程序，依赖所有模块并有一些自身的代码逻辑。
+
+## 常见问题与细节
+
+### 启动时的地址转换
+
+由于我们的内核是放在高位的地址空间，而启动时SBI会将我们放到低位地址空间中，这不仅需要从低到高进行一个长跳转，而且会导致编译出来的符号表地址的不统一。
+
+1. 为了保证长跳转不出错，我们使用一个启动页表，同时映射低地址和高地址，并在入口先加载该页表，跳转之后再换成其他页表或者抹去低地址的页表；
+2. 为了保证符号的统一性，我们将内核编译成静态的PIE（Position-Independent Executable），即不依赖绝对地址的可执行文件。这样可以将所有的函数调用和跳转转换成相对PC的寻址模式，具体表现为汇编出包含`auipc`指令的代码。并且如果不能控制GOT（全局偏移表）的生成，我们还需要在链接选项中添加诸如`--apply-dynamic-relocs`和`-Ztls-model=local-exec`等选项，并且在链接脚本中制定最终的加载地址，在静态连接时就确定GOT中表项的值，从而避免我们程序运行时再麻烦地动态设置。
+
+### 每个模块内部的单元测试
+
+为了不依赖于内核来测试各个模块，我们在一些模块内部实现了单元测试，直接运行在宿主机（工作机器）平台下。
+
+### 第三方依赖的自动下载
+
+```bash
+# scripts/revendor.sh
+
+#! /bin/bash
+
+RUST_DIR="$(rustc --print=sysroot)"
+
+# Rust标准库（包括core和alloc）自身也会包括一些依赖项，这些依赖项的版本被固定在这个Cargo.lock中，会被
+# cargo硬编码监测。需要将其复制到这些core、alloc或者test等的根目录下来保证和Cargo.toml的一致性，不然
+# 在执行cargo vendor的时候，会更新一些不被该Cargo.lock认可的依赖项，造成vendor换源之后编译失败。
+cp -f "$RUST_DIR"/lib/rustlib/src/rust/Cargo.lock \
+    "$RUST_DIR"/lib/rustlib/src/rust/library/test/
+
+mkdir -p .cargo
+cp -rf cargo-config/* .cargo
+
+# 这里的`scripts/config.patch.toml`是项目中非crates.io中的依赖项的源信息。具体示例在下文。
+cp -f scripts/config.patch.toml .cargo/config.toml
+
+rm -rf third-party/vendor
+
+cargo update
+
+# 实际的下载操作，cargo会自动检测你工作区中所有项目的依赖然后一起下载到指定目录中，在这里是
+# third-party/vendor。
+cargo vendor third-party/vendor \
+    --respect-source-config --versioned-dirs \
+    -s $RUST_DIR/lib/rustlib/src/rust/library/test/Cargo.toml \
+    >> .cargo/config2.toml
+
+mv -f .cargo/config2.toml .cargo/config.toml
+
+# 这里的`scripts/config.toml`里包含公用的编译选项。比如LTO、编译参数设置等等。
+cat scripts/config.toml >> .cargo/config.toml
+
+cp -rf .cargo/* cargo-config
+```
+运行这个脚本之后，当前所有的第三方库源将会全部被替换成本地源。如果想要改回网络下载，将你的`scripts/config.toml`替换掉`cargo-config`中对应文件即可。
+
+```toml
+# scripts/cargo.patch.toml
+
+# 比如说我的项目中依赖了我自己在Github上event-listener的fork，但是我可能又会引用一些依赖crates.io上的
+# 该项目官方源的第三方库。这个时候如果直接进行cargo vendor就会造成多个源同时存在使得vendor失败。因此我们
+# 需要将指向crate.io的该项目的源也替换成我自己的fork，从而解决冲突。
+[patch.crates-io]
+event-listener = { git = "https://github.com/js2xxx/event-listener"}
+```
+
+## 参考项目
+
+- 往届的项目：[Maturin](https://gitlab.eduxiji.net/scPointer/maturin)，[FTL OS](https://gitlab.eduxiji.net/DarkAngelEX/oskernel2022-ftlos)；
+- 商业和开源项目：Linux，Fuchsia；
+- 徐启航同学之前写的OS：[oceanic](https://github.com/js2xxx/oceanic)。

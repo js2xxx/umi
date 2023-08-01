@@ -223,4 +223,4 @@ pub unsafe fn init(fdt_base: *const ()) -> Result<(), FdtError> {
 [fdt](https://docs.rs/fdt/0.1.5/fdt/)
 [设备树的文档](https://devicetree-specification.readthedocs.io/en/latest/index.html)
 
-而对于文件系统，我们也直接建立了串口、管道、DevFS等对应的文件系统结构。其中串口文件作为`klog`模块的简单包装，管道也仅是对`kmem::Phys`的简单包装，而DevFS则是囊括了`umifs::misc`和块设备中的所有文件节点。
+而对于文件系统，我们也直接建立了串口、管道、DevFS等对应的文件系统结构。其中管道仅是对`kmem::Phys`的简单包装，而DevFS则是囊括了`umifs::misc`和块设备中的所有文件节点。
