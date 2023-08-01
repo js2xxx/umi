@@ -86,6 +86,7 @@ pub trait Future {
   - [`co-trap`](lib/co-trap.md)
   - [`art`](lib/art.md)
   - [`ksc`](lib/ksc.md)
+  - [`devices`](lib/devices.md)
   - [其他模块](lib/misc.md)
 - `dev`是各个设备驱动程序的所在，依赖着`lib`中的模块。
   - [`virtio`](dev/virtio.md)，包括块设备和网络设备
