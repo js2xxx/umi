@@ -325,7 +325,8 @@ impl Inner {
 
         let mut state = map_field!(regs.present_state).read();
         let inhibit_cmd = state.inhibit_cmd().get();
-        let inhibit_data = occupies_data_line && state.inhibit_data().get();
+        let inhibit_data =
+            (occupies_data_line && state.inhibit_data().get()) || self.data_slot.is_some();
         if inhibit_cmd || inhibit_data {
             if inhibit_cmd {
                 self.cmd_idle.register(cx.waker());

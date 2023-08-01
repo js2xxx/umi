@@ -16,9 +16,14 @@ pub fn thead_flush(base: LAddr) {
     unsafe { asm!(".insn r 0b1011, 0, 1, zero, {}, x7", in(reg) base.val()) }
 }
 
+pub fn thead_sync_s() {
+    unsafe { asm!(".long 0x0190000b") }
+}
+
 fn cmo<F: Fn(LAddr)>(range: Range<LAddr>, f: F) {
     let range = (range.start.val() & !(CACHE_SIZE - 1))..range.end.val();
-    range.step_by(CACHE_SIZE).for_each(|addr| f(addr.into()))
+    range.step_by(CACHE_SIZE).for_each(|addr| f(addr.into()));
+    thead_sync_s();
 }
 
 // pub fn cmo_inval(range: Range<LAddr>) {

@@ -189,7 +189,7 @@ impl TaskState {
             }
         };
 
-        if scn != Scn::WRITE || tf.syscall_arg::<0>() >= 3 {
+        if (scn != Scn::WRITE && scn != Scn::WRITEV) || tf.syscall_arg::<0>() >= 3 {
             // Get rid of tracing writes to STDIO.
             log::info!(
                 "task {} syscall {scn:?}, sepc = {:#x}",
