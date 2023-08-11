@@ -9,7 +9,7 @@ use core::{
 
 use crossbeam_queue::SegQueue;
 use devices::intr::Completion;
-use fdt::node::FdtNode;
+use fdt::{node::FdtNode, Fdt};
 use futures_util::{FutureExt, Stream};
 use ksync::event::{Event, EventListener};
 use ktime::Instant;
@@ -234,10 +234,10 @@ fn init(node: &FdtNode, stride: usize) -> bool {
     true
 }
 
-pub fn init_ns16550a(node: &FdtNode) -> bool {
+pub fn init_ns16550a(node: &FdtNode, _: &Fdt) -> bool {
     init(node, 1)
 }
 
-pub fn init_dw_apb_uart(node: &FdtNode) -> bool {
+pub fn init_dw_apb_uart(node: &FdtNode, _: &Fdt) -> bool {
     init(node, 4)
 }

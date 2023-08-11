@@ -102,9 +102,11 @@ pub async fn getcwd(
 
         let cwd = ts.files.cwd();
         let path = cwd.as_str().as_bytes();
-        if path.len() >= len {
+        if path.len() + 1 >= len {
             Err(ERANGE)
         } else {
+            buf.write(&ts.virt, b'/').await?;
+            buf.advance(1);
             buf.write_slice(&ts.virt, path, true).await?;
             Ok(buf)
         }

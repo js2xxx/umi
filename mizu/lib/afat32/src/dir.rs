@@ -430,39 +430,29 @@ impl<T: TimeProvider> Entry for FatDir<T> {
                 Ok((self, false))
             };
         }
-        Ok(
-            match (
-                options.contains(OpenOptions::CREAT),
-                options.contains(OpenOptions::DIRECTORY),
-            ) {
-                (false, false) => {
-                    let dirent = (*self).open(path).await?;
-                    (
-                        if dirent.is_dir() {
-                            Arc::new(dirent.to_dir().await?)
-                        } else {
-                            Arc::new(dirent.to_file().await?)
-                        },
-                        false,
-                    )
-                }
-                (false, true) => (Arc::new(self.open_dir(path).await?), false),
-                (true, false) => {
-                    let (file, created) = self.create_file(path).await?;
-                    // if !created && options.contains(OpenOptions::EXCL) {
-                    //     return Err(EEXIST);
-                    // }
-                    (Arc::new(file), created)
-                }
-                (true, true) => {
-                    let (dir, created) = self.create_dir(path).await?;
-                    // if !created && options.contains(OpenOptions::EXCL) {
-                    //     return Err(EEXIST);
-                    // }
-                    (Arc::new(dir), created)
-                }
-            },
-        )
+
+        if !options.contains(OpenOptions::CREAT) {
+            let dirent = (*self).open(path).await?;
+            if dirent.is_dir() {
+                return Ok((Arc::new(dirent.to_dir().await?), false));
+            }
+            if options.contains(OpenOptions::DIRECTORY) {
+                return Err(ENOTDIR);
+            }
+            Ok((Arc::new(dirent.to_file().await?), false))
+        } else if !options.contains(OpenOptions::DIRECTORY) {
+            let (file, created) = self.create_file(path).await?;
+            // if !created && options.contains(OpenOptions::EXCL) {
+            //     return Err(EEXIST);
+            // }
+            Ok((Arc::new(file), created))
+        } else {
+            let (dir, created) = self.create_dir(path).await?;
+            // if !created && options.contains(OpenOptions::EXCL) {
+            //     return Err(EEXIST);
+            // }
+            Ok((Arc::new(dir), created))
+        }
     }
 
     async fn metadata(&self) -> Metadata {

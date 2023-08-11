@@ -1,11 +1,11 @@
-use fdt::node::FdtNode;
+use fdt::{node::FdtNode, Fdt};
 use plic::IntrManager;
 use rv39_paging::{PAddr, ID_OFFSET};
 use spin::{Lazy, Once};
 
 static PLIC: Once<IntrManager> = Once::new();
 
-pub fn init_plic(fdt: &FdtNode) -> bool {
+pub fn init_plic(fdt: &FdtNode, _: &Fdt) -> bool {
     let res: Result<&IntrManager, &str> = PLIC.try_call_once(|| {
         let reg = fdt.reg().and_then(|mut reg| reg.next());
         let reg = reg.ok_or("should have memory registers")?;

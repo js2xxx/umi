@@ -1,7 +1,7 @@
 use alloc::sync::Arc;
 use core::num::NonZeroU32;
 
-use fdt::node::FdtNode;
+use fdt::{node::FdtNode, Fdt};
 use rv39_paging::{PAddr, ID_OFFSET};
 use sdmmc::Sdmmc;
 
@@ -11,7 +11,7 @@ use crate::{
     someb, tryb,
 };
 
-pub fn init(node: &FdtNode) -> bool {
+pub fn init(node: &FdtNode, _: &Fdt) -> bool {
     let intr_pin = someb!(interrupts(node).next().and_then(NonZeroU32::new));
     let intr_manager = someb!(intr_man());
 
