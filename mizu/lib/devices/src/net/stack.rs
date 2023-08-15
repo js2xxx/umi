@@ -49,6 +49,7 @@ pub struct Stack {
 #[derive(Debug)]
 pub(in crate::net) struct State {
     link_up: bool,
+    local_sockets: SocketSet<'static>,
 
     dhcpv4: Option<SocketHandle>,
 
@@ -160,31 +161,33 @@ impl Stack {
             )));
             let mut iface = Interface::new(c, &mut device.write().with_cx(None), now);
 
+            let mut local_sockets = SocketSet::new(Vec::new());
+            let dns_socket = local_sockets.add(dns::Socket::new(&[], Vec::new()));
+
             let mut state = State {
                 link_up: false,
+                local_sockets,
 
                 dhcpv4: None,
 
-                dns_socket: socket.sockets.add(dns::Socket::new(&[], Vec::new())),
+                dns_socket,
                 dns_servers_ipv4: Default::default(),
                 dns_servers_ipv6: Default::default(),
                 dns_waker: AtomicWaker::new(),
             };
 
             match config.ipv4 {
-                ConfigV4::Static(config) => {
-                    state.apply_ipv4_config(&mut iface, &mut socket.sockets, config)
-                }
+                ConfigV4::Static(config) => state.apply_ipv4_config(&mut iface, config),
                 ConfigV4::Dhcp(config) => {
                     let mut dhcpv4 = dhcpv4::Socket::new();
                     state.apply_dhcpv4_config(&mut dhcpv4, config);
-                    state.dhcpv4 = Some(socket.sockets.add(dhcpv4));
+                    state.dhcpv4 = Some(state.local_sockets.add(dhcpv4));
                 }
                 ConfigV4::None => {}
             }
 
             if let ConfigV6::Static(config) = config.ipv6 {
-                state.apply_ipv6_config(&mut iface, &mut socket.sockets, config)
+                state.apply_ipv6_config(&mut iface, config)
             }
 
             socket.ifaces.push(iface);
@@ -325,50 +328,46 @@ impl Stack {
 }
 
 impl State {
-    fn apply_ipv4_config(
-        &mut self,
-        iface: &mut Interface,
-        sockets: &mut SocketSet,
-        config: StaticConfigV4,
-    ) {
+    fn apply_ipv4_config(&mut self, iface: &mut Interface, config: StaticConfigV4) {
+        log::info!("Applying IPv4 configuration:");
+        log::info!("    IP address: {}", config.address);
         iface.update_ip_addrs(|addrs| match addrs.first_mut() {
             Some(addr) => *addr = IpCidr::Ipv4(config.address),
             None => addrs.push(IpCidr::Ipv4(config.address)).unwrap(),
         });
 
         if let Some(gateway) = config.gateway {
+            log::info!("    Gateway: {gateway}");
             iface.routes_mut().add_default_ipv4_route(gateway).unwrap();
         } else {
             iface.routes_mut().remove_default_ipv4_route();
         }
 
         self.dns_servers_ipv4 = config.dns_servers;
-        self.update_dns_servers(sockets);
+        self.update_dns_servers();
     }
 
-    fn apply_ipv6_config(
-        &mut self,
-        iface: &mut Interface,
-        sockets: &mut SocketSet,
-        config: StaticConfigV6,
-    ) {
+    fn apply_ipv6_config(&mut self, iface: &mut Interface, config: StaticConfigV6) {
+        log::info!("Applying IPv6 configuration:");
+        log::info!("    IP address: {}", config.address);
         iface.update_ip_addrs(|addrs| match addrs.first_mut() {
             Some(addr) => *addr = IpCidr::Ipv6(config.address),
             None => addrs.push(IpCidr::Ipv6(config.address)).unwrap(),
         });
 
         if let Some(gateway) = config.gateway {
+            log::info!("    Gateway: {gateway}");
             iface.routes_mut().add_default_ipv6_route(gateway).unwrap();
         } else {
             iface.routes_mut().remove_default_ipv6_route();
         }
 
         self.dns_servers_ipv6 = config.dns_servers;
-        self.update_dns_servers(sockets);
+        self.update_dns_servers();
     }
 
-    fn update_dns_servers(&mut self, s: &mut SocketSet) {
-        let socket = s.get_mut::<dns::Socket>(self.dns_socket);
+    fn update_dns_servers(&mut self) {
+        let socket = self.local_sockets.get_mut::<dns::Socket>(self.dns_socket);
         let servers_ipv4 = self.dns_servers_ipv4.iter().copied().map(IpAddress::Ipv4);
         let servers_ipv6 = self.dns_servers_ipv6.iter().copied().map(IpAddress::Ipv6);
         let servers: heapless::Vec<_, 6> = servers_ipv4.chain(servers_ipv6).collect();
@@ -438,6 +437,7 @@ impl SocketStack {
 
             let mut poller = Tracer::new(dev.with_cx(Some(cx)), |i, p| writer(1, i, p));
             iface.poll(instant, &mut poller, &mut self.sockets);
+            iface.poll(instant, &mut poller, &mut state.local_sockets);
 
             let old = mem::replace(&mut state.link_up, dev.is_link_up());
             if old != state.link_up {
@@ -446,7 +446,7 @@ impl SocketStack {
             }
 
             if let Some(dhcpv4) = state.dhcpv4 {
-                let socket = self.sockets.get_mut::<dhcpv4::Socket>(dhcpv4);
+                let socket = state.local_sockets.get_mut::<dhcpv4::Socket>(dhcpv4);
                 if state.link_up {
                     match socket.poll() {
                         Some(dhcpv4::Event::Configured(config)) => {
@@ -455,7 +455,7 @@ impl SocketStack {
                                 gateway: config.router,
                                 dns_servers: config.dns_servers,
                             };
-                            state.apply_ipv4_config(iface, &mut self.sockets, config)
+                            state.apply_ipv4_config(iface, config)
                         }
                         Some(dhcpv4::Event::Deconfigured) => state.unapply_dhcpv4_config(iface),
                         None => {}

@@ -22,23 +22,6 @@ use crate::trap::poll_with;
 
 static STACK: Once<Arsc<Stack>> = Once::INIT;
 
-#[cfg(feature = "qemu-virt")]
-fn config() -> Config {
-    Config {
-        ipv4: devices::net::ConfigV4::Static(devices::net::StaticConfigV4 {
-            address: smoltcp::wire::Ipv4Cidr::new(
-                smoltcp::wire::Ipv4Address::new(10, 0, 2, 15),
-                24,
-            ),
-            gateway: Some(smoltcp::wire::Ipv4Address::new(10, 0, 2, 2)),
-            dns_servers: [smoltcp::wire::Ipv4Address::new(10, 0, 2, 3)]
-                .into_iter()
-                .collect(),
-        }),
-        ipv6: devices::net::ConfigV6::None,
-    }
-}
-#[cfg(not(feature = "qemu-virt"))]
 fn config() -> Config {
     Default::default()
 }
