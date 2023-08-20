@@ -43,5 +43,5 @@ async fn main(payload: usize) {
     mem::test_phys().await;
     fs::test_file().await;
 
-    self::test::test_all().await;
+    self::test::busybox_interact().await;
 }
