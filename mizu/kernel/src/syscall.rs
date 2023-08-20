@@ -1,7 +1,7 @@
 pub mod ffi;
 
 use alloc::boxed::Box;
-use core::{ops::ControlFlow, time::Duration};
+use core::{mem, ops::ControlFlow, time::Duration};
 
 use co_trap::{TrapFrame, UserCx};
 use kmem::Virt;
@@ -11,6 +11,7 @@ use ksc::{
     Scn::{self, *},
 };
 use ktime::Instant;
+use rand_riscv::rand_core::RngCore;
 use spin::Lazy;
 use sygnal::SigInfo;
 
@@ -83,6 +84,7 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         .map(PPOLL, fd::ppoll)
         .map(PSELECT6, fd::pselect)
         .map(SENDFILE, fd::sendfile)
+        .map(COPY_FILE_RANGE, fd::copy_file_range)
         .map(SYNC, fd::sync)
         .map(FSYNC, fd::fsync)
         .map(CHDIR, fd::chdir)
@@ -132,6 +134,7 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         .map(NANOSLEEP, sleep)
         // Miscellaneous
         .map(UNAME, uname)
+        .map(GETRANDOM, getrandom)
         .map(SETSID, dummy_zero)
         .map(GETEUID, dummy_zero)
         .map(GETEGID, dummy_zero)
@@ -276,5 +279,27 @@ async fn uname(
     }
     let ret = inner(&ts.virt, cx.args());
     cx.ret(ret.await);
+    ScRet::Continue(None)
+}
+
+#[async_handler]
+async fn getrandom(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(UserPtr<u8, Out>, usize) -> Result<usize, Error>>,
+) -> ScRet {
+    let (mut buf, len) = cx.args();
+    let fut = async {
+        let mut rng = rand_riscv::rng();
+        let mut rest = len;
+        while rest > 0 {
+            let count = rest.min(mem::size_of::<u64>());
+            let data = rng.next_u64().to_le_bytes();
+            buf.write_slice(&ts.virt, &data[..count], false).await?;
+            buf.advance(count);
+            rest -= count;
+        }
+        Ok(len)
+    };
+    cx.ret(fut.await);
     ScRet::Continue(None)
 }

@@ -248,12 +248,12 @@ pub async fn fchmodat(
     ts: &mut TaskState,
     cx: UserCx<'_, fn(i32, UserPtr<u8, In>, u32, i32) -> Result<(), Error>>,
 ) -> ScRet {
-    let (fd, path, _perm, _flags) = cx.args();
+    let (fd, path, perm, _flags) = cx.args();
     let fut = async {
         let mut buf = [0; MAX_PATH_LEN];
         let (path, root) = path.read_path(&ts.virt, &mut buf).await?;
 
-        let _ = if root {
+        let entry = if root {
             crate::fs::open(
                 path,
                 OpenOptions::RDONLY,
@@ -275,7 +275,12 @@ pub async fn fchmodat(
                 .0
             }
         };
-        // TODO: Implement this.
+        let metadata = SetMetadata {
+            perm: Some(Permissions::from_bits_truncate(perm)),
+            ..Default::default()
+        };
+        entry.set_metadata(metadata).await?;
+
         Ok(())
     };
     cx.ret(fut.await);

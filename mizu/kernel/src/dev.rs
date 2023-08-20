@@ -19,7 +19,7 @@ pub use self::{
     serial::{init_logger, Stdin, Stdout},
 };
 
-static DEV_INIT: Lazy<Handlers<&str, &FdtNode, bool>> = Lazy::new(|| {
+static DEV_INIT: Lazy<Handlers<&str, (&FdtNode, &Fdt), bool>> = Lazy::new(|| {
     Handlers::new()
         .map("ns16550a", serial::init_ns16550a)
         .map("snps,dw-apb-uart", serial::init_dw_apb_uart)
@@ -66,7 +66,7 @@ pub unsafe fn init(fdt_base: *const ()) -> Result<(), FdtError> {
         nodes.retain(|node| {
             if let Some(compat) = node.compatible() {
                 let init = compat.all().any(|key| {
-                    let ret = DEV_INIT.handle(key, node);
+                    let ret = DEV_INIT.handle(key, (node, fdt));
                     matches!(ret, Some(true))
                 });
                 if init {

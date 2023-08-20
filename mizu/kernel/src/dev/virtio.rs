@@ -2,7 +2,7 @@ use alloc::sync::Arc;
 use core::num::NonZeroU32;
 
 use devices::{intr::Completion, net::Net};
-use fdt::node::FdtNode;
+use fdt::{node::FdtNode, Fdt};
 use rv39_paging::{PAddr, ID_OFFSET};
 use spin::RwLock;
 use virtio::{block::VirtioBlock, net::VirtioNet};
@@ -11,7 +11,7 @@ use virtio_drivers::transport::{mmio::MmioTransport, DeviceType, Transport};
 use super::{block::BLOCKS, interrupts, net::NETS};
 use crate::{dev::intr::intr_man, someb, tryb};
 
-pub fn init_mmio(node: &FdtNode) -> bool {
+pub fn init_mmio(node: &FdtNode, _: &Fdt) -> bool {
     let intr_pin = someb!(interrupts(node).next().and_then(NonZeroU32::new));
     let intr_manager = someb!(intr_man());
 

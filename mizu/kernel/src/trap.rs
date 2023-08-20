@@ -1,5 +1,5 @@
 use core::{
-    sync::atomic::{AtomicU8, Ordering::Relaxed},
+    sync::atomic::{AtomicU8, AtomicUsize, Ordering::Relaxed},
     time::Duration,
 };
 
@@ -64,6 +64,8 @@ extern "C" fn ktrap_handler(_tf: &mut KTrapFrame) {
     }
 }
 
+pub static TIMER_COUNT: AtomicUsize = AtomicUsize::new(0);
+
 pub fn handle_intr(intr: Interrupt, from: &str) {
     match intr {
         Interrupt::SupervisorTimer => {
@@ -74,6 +76,7 @@ pub fn handle_intr(intr: Interrupt, from: &str) {
             let raw = 0;
             // log::trace!("timer tick at {raw}");
             sbi_rt::set_timer(raw + config::TIME_FREQ as u64 / TIMER_GRAN_DIV);
+            TIMER_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         }
         Interrupt::SupervisorExternal => crate::dev::INTR.notify(hart_id::hart_id()),
         Interrupt::SupervisorSoft => crate::cpu::IPI.receive(),

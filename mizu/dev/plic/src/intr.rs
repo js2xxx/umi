@@ -1,14 +1,16 @@
+use alloc::collections::BTreeMap;
 use core::{num::NonZeroU32, ptr::NonNull};
 
 use devices::intr::{Completion, IntrHandler};
 use ksc::Handlers;
-use spin::{RwLock, RwLockUpgradableGuard};
+use spin::{Mutex, RwLock, RwLockUpgradableGuard};
 
 use crate::dev::Plic;
 
 pub struct IntrManager {
     plic: Plic,
     map: RwLock<Handlers<u32, &'static Completion, bool>>,
+    counts: Mutex<BTreeMap<u32, usize>>,
 }
 
 impl IntrManager {
@@ -17,6 +19,7 @@ impl IntrManager {
         IntrManager {
             plic,
             map: RwLock::new(Default::default()),
+            counts: Default::default(),
         }
     }
 
@@ -45,6 +48,10 @@ impl IntrManager {
         self.plic.pending(pin.get())
     }
 
+    pub fn counts(&self) -> BTreeMap<u32, usize> {
+        ksync::critical(|| self.counts.lock().clone())
+    }
+
     pub fn notify(&'static self, hid: usize) {
         let cx = Self::hid_to_cx(hid);
         let pin = self.plic.claim(cx);
@@ -54,6 +61,7 @@ impl IntrManager {
         // log::trace!("Intr::notify cx = {cx}, pin = {pin}");
         let exist = ksync::critical(move || {
             let map = self.map.upgradeable_read();
+            *self.counts.lock().entry(pin).or_default() += 1;
             let ret = map.handle(pin, &move || self.plic.complete(cx, pin));
             match ret {
                 Some(false) => {

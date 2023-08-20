@@ -3,7 +3,7 @@ use core::{
     future::ready,
     iter,
     sync::atomic::{
-        AtomicUsize,
+        AtomicU32, AtomicUsize,
         Ordering::{Relaxed, SeqCst},
     },
 };
@@ -30,6 +30,7 @@ pub struct FatFile<T: TimeProvider> {
     clusters: RwLock<Vec<(u32, u32)>>,
     cluster_shift: u32,
 
+    perm: AtomicU32,
     entry: Option<Mutex<DirEntryEditor>>,
     len: AtomicUsize,
     cur_offset: AtomicUsize,
@@ -59,6 +60,7 @@ impl<T: TimeProvider> FatFile<T> {
             fs,
             clusters: RwLock::new(clusters),
             cluster_shift,
+            perm: AtomicU32::new(Permissions::me(true, true, true).bits()),
             entry: entry.map(Mutex::new),
             len: AtomicUsize::new(len),
             cur_offset: AtomicUsize::new(0),
@@ -379,7 +381,7 @@ impl<T: TimeProvider> Entry for FatFile<T> {
             ty: FileType::FILE,
             len: self.len.load(SeqCst),
             offset: self.abs_start_pos().await.unwrap_or(u64::MAX),
-            perm: Permissions::all(),
+            perm: Permissions::from_bits_truncate(self.perm.load(SeqCst)),
             block_size: 1 << self.cluster_shift,
             block_count: self.clusters.read().await.len(),
             times: Default::default(),
@@ -389,6 +391,9 @@ impl<T: TimeProvider> Entry for FatFile<T> {
     async fn set_metadata(&self, metadata: SetMetadata) -> Result<(), Error> {
         if let Some(new_len) = metadata.len {
             self.truncate(new_len.try_into()?).await?;
+        }
+        if let Some(perm) = metadata.perm {
+            self.perm.store(perm.bits(), SeqCst);
         }
         Ok(())
     }

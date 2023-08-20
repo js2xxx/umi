@@ -127,4 +127,5 @@ pub enum Scn {
     RENAMEAT2 = 276,
     GETRANDOM = 278,
     MEMBARRIER = 283,
+    COPY_FILE_RANGE = 285,
 }
