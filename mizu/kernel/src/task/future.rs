@@ -26,6 +26,7 @@ use sygnal::{Sig, SigCode, SigInfo, SigSet};
 
 use super::TaskState;
 use crate::{
+    fs::Coverage,
     syscall::ScRet,
     task::signal::SIGRETURN_GUARD,
     trap::{Fp, FP},
@@ -35,14 +36,19 @@ use crate::{
 pub struct TaskFut<F> {
     virt: Arsc<Virt>,
     fp: Fp,
+    coverage: Coverage,
     #[pin]
     fut: F,
 }
 
 impl<F> TaskFut<F> {
     pub fn new(virt: Arsc<Virt>, fut: F) -> Self {
-        let fp = FP.try_with(Fp::copy).unwrap_or_default();
-        TaskFut { virt, fp, fut }
+        TaskFut {
+            virt,
+            fp: FP.try_with(Fp::copy).unwrap_or_default(),
+            coverage: Coverage::new(),
+            fut,
+        }
     }
 }
 
@@ -52,7 +58,9 @@ impl<F: Future> Future for TaskFut<F> {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         unsafe { self.virt.clone().load() };
         let this = self.project();
-        let ret = FP.set(this.fp, || this.fut.poll(cx));
+        let ret = FP.set(this.fp, || {
+            crate::fs::COVERAGE.set(this.coverage, || this.fut.poll(cx))
+        });
         if ret.is_pending() {
             this.fp.yield_now();
         }
@@ -123,6 +131,8 @@ pub async fn user_loop(mut ts: TaskState, mut tf: TrapFrame) {
 }
 
 async fn handle_scause(scause: Scause, ts: &mut TaskState, tf: &mut TrapFrame) -> ScRet {
+    crate::fs::coverage().await;
+
     match scause.cause() {
         Trap::Interrupt(intr) => crate::trap::handle_intr(intr, "user task"),
         Trap::Exception(excep) => match excep {
@@ -195,6 +205,8 @@ async fn handle_scause(scause: Scause, ts: &mut TaskState, tf: &mut TrapFrame) -
 
 impl TaskState {
     async fn handle_syscall(&mut self, tf: &mut TrapFrame) -> ScRet {
+        crate::fs::coverage().await;
+
         let scn = match tf.scn() {
             Ok(scn) => scn,
             Err(num) => {

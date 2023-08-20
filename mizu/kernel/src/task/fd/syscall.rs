@@ -11,10 +11,12 @@ use ksc::{
     Error::{self, *},
 };
 use umifs::types::{OpenOptions, Permissions};
+use umio::IntoAnyExt;
 
 pub use self::{fs::*, io::*, net::*};
 use super::Files;
 use crate::{
+    fs::CoverageFile,
     mem::{In, Out, UserPtr},
     syscall::ScRet,
     task::{fd::FdInfo, TaskState},
@@ -225,24 +227,29 @@ pub async fn pipe(
 }
 
 #[async_handler]
-#[allow(unused)]
 pub async fn socket_pair(
     ts: &mut TaskState,
     cx: UserCx<'_, fn(usize, usize, usize, UserPtr<i32, Out>) -> Result<(), Error>>,
 ) -> ScRet {
-    loop {
-        crate::task::yield_now().await;
-    }
     let fut = pipe_inner(&ts.files, &ts.virt, cx.args().3);
     cx.ret(fut.await);
     ScRet::Continue(None)
 }
 
 #[async_handler]
-pub async fn ioctl(ts: &mut TaskState, cx: UserCx<'_, fn(i32) -> Result<(), Error>>) -> ScRet {
-    let fd = cx.args();
+pub async fn ioctl(ts: &mut TaskState, cx: UserCx<'_, fn(i32, i32) -> Result<(), Error>>) -> ScRet {
+    let (fd, request) = cx.args();
     let fut = async {
-        ts.files.get(fd).await?;
+        let file = ts.files.get(fd).await?;
+        if let Some(cov) = file.downcast::<CoverageFile>() {
+            const KCOV_ENABLE: i32 = 100 + ((b'c' as i32) << 8);
+            const KCOV_DISABLE: i32 = 101 + ((b'c' as i32) << 8);
+            match request {
+                KCOV_ENABLE => cov.enable(true),
+                KCOV_DISABLE => cov.enable(false),
+                _ => {}
+            }
+        }
         Ok(())
     };
     cx.ret(fut.await);

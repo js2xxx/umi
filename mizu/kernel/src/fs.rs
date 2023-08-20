@@ -1,4 +1,5 @@
 mod cache;
+mod debug;
 mod dev;
 mod pipe;
 mod proc;
@@ -23,7 +24,10 @@ use umifs::{
 };
 use umio::{IntoAnyExt, IoExt};
 
-pub use self::pipe::pipe;
+pub use self::{
+    debug::{coverage, Coverage, CoverageFile, COVERAGE},
+    pipe::pipe,
+};
 use crate::{dev::blocks, executor};
 
 type FsCollection = BTreeMap<PathBuf, FsHandle>;
@@ -135,6 +139,11 @@ pub async fn fs_init() {
     mount("dev".into(), "devfs".into(), Arsc::new(dev::DevFs));
     mount("proc".into(), "procfs".into(), Arsc::new(proc::ProcFs));
     mount("tmp".into(), "tmpfs".into(), Arsc::new(tmp::TmpFs::new()));
+    mount(
+        "sys/kernel/debug".into(),
+        "debugfs".into(),
+        Arsc::new(debug::DebugFs),
+    );
     for (index, block) in blocks().into_iter().enumerate() {
         if let Some(sdmmc) = block.clone().downcast::<sdmmc::Sdmmc>() {
             sdmmc.init().await.expect("Failed to initialize SD card")

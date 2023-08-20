@@ -78,7 +78,7 @@ const ENVS: [&str; 8] = [
     "USER=root",
     "_=busybox",
     "SHELL=/busybox",
-    "ENOUGH=1000000",
+    "ENOUGH=5000",
     "LD_LIBRARY_PATH=/",
     "LOGNAME=root",
     "HOME=/",
@@ -241,23 +241,56 @@ pub async fn busybox_interact() {
 }
 
 #[allow(dead_code)]
+async fn unixbench() {
+    run(r##"./dhry2reg 10 | ./busybox grep -o "COUNT|[[:digit:]]\+|" | ./busybox grep -o "[[:digit:]]\+" | ./busybox awk '{print "Unixbench DHRY2 test(lps): "$0}'"##).await;
+    run(r##"./whetstone-double 10 | ./busybox grep -o "COUNT|[[:digit:]]\+.[[:digit:]]\+|" | ./busybox grep -o "[[:digit:]]\+.[[:digit:]]\+" | ./busybox awk '{print "Unixbench WHETSTONE test(MFLOPS): "$0}'"##).await;
+    run(r##"./syscall 10 | ./busybox grep -o "COUNT|[[:digit:]]\+|" | ./busybox grep -o "[[:digit:]]\+" | ./busybox awk '{print "Unixbench SYSCALL test(lps): "$0}'"##).await;
+    run(r##"./context1 10 | ./busybox grep -o "COUNT|[[:digit:]]\+|" | ./busybox tail -n1 | ./busybox grep -o "[[:digit:]]\+" | ./busybox awk '{print "Unixbench CONTEXT test(lps): "$0}'"##).await;
+    run(r##"./pipe 10 | ./busybox grep -o "COUNT|[[:digit:]]\+|" | ./busybox grep -o "[[:digit:]]\+" | ./busybox awk '{print "Unixbench PIPE test(lps): "$0}'"##).await;
+    run(r##"./spawn 10 | ./busybox grep -o "COUNT|[[:digit:]]\+|" | ./busybox grep -o "[[:digit:]]\+" | ./busybox awk '{print "Unixbench SPAWN test(lps): "$0}'"##).await;
+    run(r##"UB_BINDIR=./ ./execl 10 | ./busybox grep -o "COUNT|[[:digit:]]\+|" | ./busybox grep -o "[[:digit:]]\+" | ./busybox awk '{print "Unixbench EXECL test(lps): "$0}'"##).await;
+
+    run(r##"./fstime -w -t 20 -b 256 -m 500 | ./busybox grep -o "WRITE COUNT|[[:digit:]]\+|" | ./busybox grep -o "[[:digit:]]\+" | ./busybox awk '{print "Unixbench FS_WRITE_SMALL test(KBps): "$0}'"##).await;
+    run(r##"./fstime -r -t 20 -b 256 -m 500 | ./busybox grep -o "READ COUNT|[[:digit:]]\+|" | ./busybox grep -o "[[:digit:]]\+" | ./busybox awk '{print "Unixbench FS_READ_SMALL test(KBps): "$0}'"##).await;
+    run(r##"./fstime -c -t 20 -b 256 -m 500 | ./busybox grep -o "COPY COUNT|[[:digit:]]\+|" | ./busybox grep -o "[[:digit:]]\+" | ./busybox awk '{print "Unixbench FS_COPY_SMALL test(KBps): "$0}'"##).await;
+
+    run(r##"./fstime -w -t 20 -b 1024 -m 2000 | ./busybox grep -o "WRITE COUNT|[[:digit:]]\+|" | ./busybox grep -o "[[:digit:]]\+" | ./busybox awk '{print "Unixbench FS_WRITE_MIDDLE test(KBps): "$0}'"##).await;
+    run(r##"./fstime -r -t 20 -b 1024 -m 2000 | ./busybox grep -o "READ COUNT|[[:digit:]]\+|" | ./busybox grep -o "[[:digit:]]\+" | ./busybox awk '{print "Unixbench FS_READ_MIDDLE test(KBps): "$0}'"##).await;
+    run(r##"./fstime -c -t 20 -b 1024 -m 2000 | ./busybox grep -o "COPY COUNT|[[:digit:]]\+|" | ./busybox grep -o "[[:digit:]]\+" | ./busybox awk '{print "Unixbench FS_COPY_MIDDLE test(KBps): "$0}'"##).await;
+
+    run(r##"./fstime -w -t 20 -b 4096 -m 8000 | ./busybox grep -o "WRITE COUNT|[[:digit:]]\+|" | ./busybox grep -o "[[:digit:]]\+" | ./busybox awk '{print "Unixbench FS_WRITE_BIG test(KBps): "$0}'"##).await;
+    run(r##"./fstime -r -t 20 -b 4096 -m 8000 | ./busybox grep -o "READ COUNT|[[:digit:]]\+|" | ./busybox grep -o "[[:digit:]]\+" | ./busybox awk '{print "Unixbench FS_READ_BIG test(KBps): "$0}'"##).await;
+    run(r##"./fstime -c -t 20 -b 4096 -m 8000 | ./busybox grep -o "COPY COUNT|[[:digit:]]\+|" | ./busybox grep -o "[[:digit:]]\+" | ./busybox awk '{print "Unixbench FS_COPY_BIG test(KBps): "$0}'"##).await;
+
+    run(r##"./arithoh 10 | ./busybox grep -o "COUNT|[[:digit:]]\+|" | ./busybox grep -o "[[:digit:]]\+" | ./busybox awk '{print "Unixbench ARITHOH test(lps): "$0}'"##).await;
+    run(r##"./short 10 | ./busybox grep -o "COUNT|[[:digit:]]\+|" | ./busybox grep -o "[[:digit:]]\+" | ./busybox awk '{print "Unixbench SHORT test(lps): "$0}'"##).await;
+    run(r##"./int 10 | ./busybox grep -o "COUNT|[[:digit:]]\+|" | ./busybox grep -o "[[:digit:]]\+" | ./busybox awk '{print "Unixbench INT test(lps): "$0}'"##).await;
+    run(r##"./long 10 | ./busybox grep -o "COUNT|[[:digit:]]\+|" | ./busybox grep -o "[[:digit:]]\+" | ./busybox awk '{print "Unixbench LONG test(lps): "$0}'"##).await;
+    run(r##"./float 10 | ./busybox grep -o "COUNT|[[:digit:]]\+|" | ./busybox grep -o "[[:digit:]]\+" | ./busybox awk '{print "Unixbench FLOAT test(lps): "$0}'"##).await;
+    run(r##"./double 10 | ./busybox grep -o "COUNT|[[:digit:]]\+|" | ./busybox grep -o "[[:digit:]]\+" | ./busybox awk '{print "Unixbench DOUBLE test(lps): "$0}'"##).await;
+    run(r##"./hanoi 10 | ./busybox grep -o "COUNT|[[:digit:]]\+|" | ./busybox grep -o "[[:digit:]]\+" | ./busybox awk '{print "Unixbench HANOI test(lps): "$0}'"##).await;
+    run(r##"./syscall 10 exec | ./busybox grep -o "COUNT|[[:digit:]]\+|" | ./busybox grep -o "[[:digit:]]\+" | ./busybox awk '{print "Unixbench EXEC test(lps): "$0}'"##).await;
+}
+
+#[allow(dead_code)]
 pub async fn test_all() {
     // self::test::run_busybox(Some("./test_all.sh")).await;
 
     println!("run time-test");
     run_task("time-test").await;
 
-    println!("run interrupts-test");
-    run_task("interrupts-test-1").await;
-    run_task("interrupts-test-2").await;
+    println!("run busybox_testcode.sh");
+    run_busybox(Some("./busybox_testcode.sh")).await;
 
     println!("run copy-file-range-test");
     run_task("copy-file-range-test-1").await;
     run_task("copy-file-range-test-2").await;
     run_task("copy-file-range-test-3").await;
+    run_task("copy-file-range-test-4").await;
 
-    println!("run busybox_testcode.sh");
-    run_busybox(Some("./busybox_testcode.sh")).await;
+    println!("run interrupts-test");
+    run_task("interrupts-test-1").await;
+    run_task("interrupts-test-2").await;
 
     println!("run libctest_testcode.sh");
     run_busybox(Some("./libctest_testcode.sh")).await;
@@ -277,11 +310,11 @@ pub async fn test_all() {
     println!("run netperf_testcode.sh");
     run_busybox(Some("./netperf_testcode.sh")).await;
 
+    println!("run unixbench_testcode.sh");
+    unixbench().await;
+
     println!("run lmbench_testcode.sh");
     run_busybox(Some("./lmbench_testcode.sh")).await;
-
-    println!("run unixbench_testcode.sh");
-    run_busybox(Some("./unixbench_testcode.sh")).await;
 
     println!("run iozone_testcode.sh");
     run_busybox(Some("./iozone_testcode.sh")).await;

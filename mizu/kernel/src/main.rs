@@ -6,6 +6,7 @@
 #![feature(const_mut_refs)]
 #![feature(const_trait_impl)]
 #![feature(inline_const)]
+#![feature(link_llvm_intrinsics)]
 #![feature(maybe_uninit_as_bytes)]
 #![feature(naked_functions)]
 #![feature(pointer_byte_offsets)]
