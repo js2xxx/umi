@@ -1,14 +1,20 @@
-use alloc::boxed::Box;
-use arsc_rs::Arsc;
-use rv39_paging::PAGE_SIZE;
-use core::{sync::atomic::{AtomicBool, Ordering::SeqCst}, mem};
+use alloc::{boxed::Box, sync::Arc};
+use core::{
+    mem,
+    sync::atomic::{AtomicBool, Ordering::SeqCst},
+};
 
-use alloc::sync::Arc;
+use arsc_rs::Arsc;
 use async_trait::async_trait;
 use kmem::Phys;
 use ksc::Error::{self, ENOENT, ENOTDIR};
+use rv39_paging::PAGE_SIZE;
 use scoped_tls::scoped_thread_local;
-use umifs::{traits::*, types::{FsStat, Metadata, OpenOptions, Permissions, FileType}, path::Path};
+use umifs::{
+    path::Path,
+    traits::*,
+    types::{FileType, FsStat, Metadata, OpenOptions, Permissions},
+};
 use umio::{Io, IoPoll};
 
 pub struct Coverage {
@@ -46,7 +52,7 @@ pub async fn coverage() {
     let Some(data) = COVERAGE
         .try_with(|cov| cov.enabled.load(SeqCst).then(|| cov.data.clone()))
         .flatten() else
-    { 
+    {
         return;
     };
 
@@ -59,7 +65,9 @@ pub async fn coverage() {
 
     let count = usize::from_le_bytes(buffer);
     let return_address = unsafe { return_address(0) } as usize;
-    let _ = data.write_at((count + 1) * SZ, &mut [&return_address.to_le_bytes()]).await;
+    let _ = data
+        .write_at((count + 1) * SZ, &mut [&return_address.to_le_bytes()])
+        .await;
     let _ = data.write_at(0, &mut [&(count + 1).to_le_bytes()]).await;
 }
 
@@ -122,7 +130,6 @@ impl Entry for DebugRoot {
 }
 
 impl IoPoll for DebugRoot {}
-
 
 pub struct CoverageFile;
 
