@@ -1,12 +1,16 @@
 use alloc::{boxed::Box, sync::Arc};
-use core::sync::atomic::{
-    AtomicUsize,
-    Ordering::{Relaxed, SeqCst},
+use core::{
+    pin::pin,
+    sync::atomic::{
+        AtomicUsize,
+        Ordering::{Relaxed, SeqCst},
+    },
 };
 
 use arsc_rs::Arsc;
 use async_trait::async_trait;
 use crossbeam_queue::SegQueue;
+use futures_util::future::{select, Either};
 use kmem::Frame;
 use ksc::{
     Boxed,
@@ -389,4 +393,114 @@ pub fn pipe() -> (Arc<dyn Entry>, Arc<dyn Entry>) {
     let tx = Arc::new(Sender(pipe.clone()));
     let rx = Arc::new(Receiver(pipe));
     (tx, rx)
+}
+
+struct SocketPair {
+    tx: Sender,
+    rx: Receiver,
+}
+
+#[async_trait]
+impl Io for SocketPair {
+    fn read<'a: 'r, 'b: 'r, 'r>(
+        &'a self,
+        buffer: &'b mut [IoSliceMut],
+    ) -> Boxed<'r, Result<usize, Error>> {
+        Box::pin(self.rx.read(buffer))
+    }
+
+    fn write<'a: 'r, 'b: 'r, 'r>(
+        &'a self,
+        buffer: &'b mut [IoSlice],
+    ) -> Boxed<'r, Result<usize, Error>> {
+        Box::pin(self.tx.write(buffer))
+    }
+
+    async fn seek(&self, _: SeekFrom) -> Result<usize, Error> {
+        Err(ESPIPE)
+    }
+
+    async fn read_at(&self, _: usize, _: &mut [IoSliceMut]) -> Result<usize, Error> {
+        Err(ESPIPE)
+    }
+
+    async fn write_at(&self, _: usize, _: &mut [IoSlice]) -> Result<usize, Error> {
+        Err(ESPIPE)
+    }
+
+    async fn flush(&self) -> Result<(), Error> {
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl Entry for SocketPair {
+    async fn open(
+        self: Arc<Self>,
+        path: &Path,
+        options: OpenOptions,
+        perm: Permissions,
+    ) -> Result<(Arc<dyn Entry>, bool), Error> {
+        if !path.as_str().is_empty() || options.contains(OpenOptions::DIRECTORY) {
+            return Err(ENOTDIR);
+        }
+        if options.contains(OpenOptions::CREAT) {
+            return Err(EEXIST);
+        }
+        if !Permissions::all_same(true, true, false).contains(perm) {
+            return Err(EPERM);
+        }
+        Ok((self, false))
+    }
+
+    async fn metadata(&self) -> Metadata {
+        Metadata {
+            ty: FileType::FIFO,
+            len: 0,
+            offset: 0,
+            perm: Permissions::all_same(true, true, false),
+            block_size: 0,
+            block_count: 0,
+            times: Default::default(),
+        }
+    }
+}
+
+#[async_trait]
+impl IoPoll for SocketPair {
+    async fn event(&self, expected: umio::Event) -> Option<umio::Event> {
+        let tx = pin!(self.tx.event(expected));
+        let rx = pin!(self.rx.event(expected));
+        let result = match select(tx, rx).await {
+            Either::Left((None, rx)) => (None, rx.await),
+            Either::Left((Some(e), rx)) => (Some(e), ksync::poll_once(rx).flatten()),
+            Either::Right((None, tx)) => (tx.await, None),
+            Either::Right((Some(e), tx)) => (ksync::poll_once(tx).flatten(), Some(e)),
+        };
+        match result {
+            (None, None) => None,
+            (Some(e), None) | (None, Some(e)) => Some(e),
+            (Some(x), Some(y)) => Some(x | y),
+        }
+    }
+}
+
+pub fn socket_pair() -> [Arc<dyn Entry>; 2] {
+    const DEFAULT_MAX_BUFFERS: usize = 16;
+
+    let p1 = Arsc::new(Pipe::default());
+    p1.max_buffers.store(DEFAULT_MAX_BUFFERS, Relaxed);
+
+    let p2 = Arsc::new(Pipe::default());
+    p2.max_buffers.store(DEFAULT_MAX_BUFFERS, Relaxed);
+
+    let x = SocketPair {
+        tx: Sender(p1.clone()),
+        rx: Receiver(p2.clone()),
+    };
+    let y = SocketPair {
+        tx: Sender(p2),
+        rx: Receiver(p1),
+    };
+    [Arc::new(x), Arc::new(y)]
 }

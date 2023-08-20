@@ -229,6 +229,7 @@ pub async fn getsockname(
 
 #[repr(C)]
 union SockOpt {
+    null: (),
     value: u32,
     tv: Tv,
 }
@@ -290,7 +291,7 @@ pub async fn getsockopt(
                         .into();
                     (SockOpt { tv }, mem::size_of::<Tv>())
                 }
-                _ => return Ok(()),
+                _ => (SockOpt { null: () }, 0),
             },
             IPPROTO_TCP => match opt {
                 TCP_MAXSEG => match &**socket {
@@ -300,14 +301,16 @@ pub async fn getsockopt(
                     }
                     _ => return Err(ENOPROTOOPT),
                 },
-                _ => return Ok(()),
+                _ => (SockOpt { null: () }, 0),
             },
-            _ => return Ok(()),
+            _ => (SockOpt { null: () }, 0),
         };
 
         let written_len = len.read(&ts.virt).await?.min(value_len);
-        ptr.write_slice(&ts.virt, &value.as_bytes()[..written_len], false)
-            .await?;
+        if written_len > 0 {
+            ptr.write_slice(&ts.virt, &value.as_bytes()[..written_len], false)
+                .await?;
+        }
         len.write(&ts.virt, value_len).await?;
 
         Ok(())

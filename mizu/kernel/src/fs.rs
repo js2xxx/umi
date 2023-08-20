@@ -26,7 +26,7 @@ use umio::{IntoAnyExt, IoExt};
 
 pub use self::{
     debug::{coverage, Coverage, CoverageFile, COVERAGE},
-    pipe::pipe,
+    pipe::{pipe, socket_pair},
 };
 use crate::{dev::blocks, executor};
 

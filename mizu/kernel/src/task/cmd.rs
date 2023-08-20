@@ -310,7 +310,8 @@ impl InitTask {
         let (loaded, args) = match elf::get_interp(phys).await? {
             Some(interp) => {
                 let mut interp = CStr::from_bytes_until_nul(&interp)?.to_str()?.to_string();
-                interp = interp.replace("/lib/ld-musl-riscv64-sf.so.1", "libc.so");
+                interp = interp.replace("/lib/ld-musl-riscv64-sf.so.1", "lib/libc.so");
+                interp = interp.replace("/lib/ld-linux-riscv64-lp64d.so.1", "lib/libc.so");
 
                 let (entry, _) = crate::fs::open(
                     interp.as_ref(),
@@ -321,7 +322,9 @@ impl InitTask {
                 let phys = crate::mem::new_phys(entry.to_io().ok_or(EISDIR)?, true);
                 let loaded = elf::load(&Arc::new(phys), None, &virt).await?;
 
-                let args = [interp, "--library-path=/".into()].into_iter().chain(args);
+                let args = [interp, "--library-path=/lib".into()]
+                    .into_iter()
+                    .chain(args);
                 (loaded, args.collect())
             }
             None => {

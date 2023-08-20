@@ -5,7 +5,6 @@ mod net;
 use alloc::boxed::Box;
 
 use co_trap::UserCx;
-use kmem::Virt;
 use ksc::{
     async_handler,
     Error::{self, *},
@@ -14,7 +13,6 @@ use umifs::types::{OpenOptions, Permissions};
 use umio::IntoAnyExt;
 
 pub use self::{fs::*, io::*, net::*};
-use super::Files;
 use crate::{
     fs::CoverageFile,
     mem::{In, Out, UserPtr},
@@ -192,36 +190,35 @@ pub async fn close(ts: &mut TaskState, cx: UserCx<'_, fn(i32) -> Result<(), Erro
     ScRet::Continue(None)
 }
 
-async fn pipe_inner(files: &Files, virt: &Virt, mut fd: UserPtr<i32, Out>) -> Result<(), Error> {
-    let (tx, rx) = crate::fs::pipe();
-
-    let tx = crate::task::fd::FdInfo {
-        entry: tx,
-        close_on_exec: false,
-        nonblock: false,
-        perm: Permissions::SELF_W,
-        saved_next_dirent: Default::default(),
-    };
-    let tx = files.open(tx).await?;
-
-    let rx = crate::task::fd::FdInfo {
-        entry: rx,
-        close_on_exec: false,
-        nonblock: false,
-        perm: Permissions::SELF_R,
-        saved_next_dirent: Default::default(),
-    };
-    let rx = files.open(rx).await?;
-
-    fd.write_slice(virt, &[rx, tx], false).await
-}
-
 #[async_handler]
 pub async fn pipe(
     ts: &mut TaskState,
     cx: UserCx<'_, fn(UserPtr<i32, Out>) -> Result<(), Error>>,
 ) -> ScRet {
-    let fut = pipe_inner(&ts.files, &ts.virt, cx.args());
+    let mut fd = cx.args();
+    let fut = async {
+        let (tx, rx) = crate::fs::pipe();
+
+        let tx = crate::task::fd::FdInfo {
+            entry: tx,
+            close_on_exec: false,
+            nonblock: false,
+            perm: Permissions::SELF_W,
+            saved_next_dirent: Default::default(),
+        };
+        let tx = ts.files.open(tx).await?;
+
+        let rx = crate::task::fd::FdInfo {
+            entry: rx,
+            close_on_exec: false,
+            nonblock: false,
+            perm: Permissions::SELF_R,
+            saved_next_dirent: Default::default(),
+        };
+        let rx = ts.files.open(rx).await?;
+
+        fd.write_slice(&ts.virt, &[rx, tx], false).await
+    };
     cx.ret(fut.await);
     ScRet::Continue(None)
 }
@@ -231,7 +228,31 @@ pub async fn socket_pair(
     ts: &mut TaskState,
     cx: UserCx<'_, fn(usize, usize, usize, UserPtr<i32, Out>) -> Result<(), Error>>,
 ) -> ScRet {
-    let fut = pipe_inner(&ts.files, &ts.virt, cx.args().3);
+    let (_, _, _, mut fd) = cx.args();
+    let fut = async {
+        let [x, y] = crate::fs::socket_pair();
+
+        let perm = Permissions::SELF_W | Permissions::SELF_R;
+        let x = crate::task::fd::FdInfo {
+            entry: x,
+            close_on_exec: false,
+            nonblock: false,
+            perm,
+            saved_next_dirent: Default::default(),
+        };
+        let x = ts.files.open(x).await?;
+
+        let y = crate::task::fd::FdInfo {
+            entry: y,
+            close_on_exec: false,
+            nonblock: false,
+            perm,
+            saved_next_dirent: Default::default(),
+        };
+        let y = ts.files.open(y).await?;
+
+        fd.write_slice(&ts.virt, &[x, y], false).await
+    };
     cx.ret(fut.await);
     ScRet::Continue(None)
 }

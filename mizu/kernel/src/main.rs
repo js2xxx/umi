@@ -43,5 +43,16 @@ async fn main(payload: usize) {
     mem::test_phys().await;
     fs::test_file().await;
 
-    self::test::test_all().await;
+    // self::test::test_all().await;
+
+    // self::test::run("/bin/ssh-keygen -t rsa -f ssh_host_rsa_key -N \"\"").await;
+    // self::test::run("busybox chmod 0600 ssh_host_rsa_key").await;
+    // self::test::run("busybox chmod 0700 /var/empty").await;
+    // self::test::run("/bin/sshd -ddd").await;
+
+    self::test::busybox_interact().await;
+    println!("Goodbye!");
+    // loop {
+    //     crate::task::yield_now().await;
+    // }
 }

@@ -6,7 +6,7 @@ export ROOT			:= $(shell pwd)
 export TARGET_DIR 	:= $(ROOT)/target/$(TARGET)/$(MODE)
 export DEBUG_DIR   	:= $(ROOT)/debug
 
-export ROOTFS  ?= $(ROOT)/third-party/img/sdcard-comp2.img
+export ROOTFS  ?= $(ROOT)/third-party/img/sdcard-comp3.img
 export SBI ?= $(ROOT)/third-party/bin/opensbi-$(BOARD)
 
 .PHONY: all build run debug test clean
@@ -29,7 +29,7 @@ QEMU_ARGS := -monitor stdio \
 	-drive file=$(ROOTFS),if=none,format=raw,id=x0 \
 	-device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0 \
 	-device virtio-net-device,netdev=net \
-	-netdev user,id=net \
+	-netdev user,id=net,hostfwd=::2222-:22 \
 	-machine virt \
 	-bios $(SBI)
 endif

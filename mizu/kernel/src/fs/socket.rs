@@ -116,7 +116,7 @@ impl SocketFile {
             }
         );
 
-        let timeout = if nonblock {
+        let mut timeout = if nonblock {
             Some(Duration::ZERO)
         } else {
             ksync::critical(|| *self.send_timeout.lock())
@@ -135,6 +135,7 @@ impl SocketFile {
                             if len == 0 {
                                 return Ok((received_len, None));
                             }
+                            timeout = Some(Duration::ZERO);
                             advance_slices(&mut buffer, len);
                         }
                         Err(_) if received_len != 0 => break Ok((received_len, None)),

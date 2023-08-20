@@ -398,7 +398,11 @@ pub async fn fsync(ts: &mut TaskState, cx: UserCx<'_, fn(i32) -> Result<(), Erro
     let fd = cx.args();
     let fut = async {
         let file = ts.files.get(fd).await?;
-        file.to_io().ok_or(EISDIR)?.flush().await
+        let io = file.to_io().ok_or(EISDIR)?;
+        crate::executor()
+            .spawn(async move { io.flush().await })
+            .detach();
+        Ok(())
     };
     cx.ret(fut.await);
     ScRet::Continue(None)

@@ -425,13 +425,7 @@ impl SocketStack {
 
         let instant = instant_to_smoltcp(ktime::Instant::now());
 
-        let mut ifaces = self.ifaces.iter_mut();
-        ifaces
-            .next()
-            .unwrap()
-            .poll(instant, &mut self.loopback, &mut self.sockets);
-
-        for ((iface, dev), state) in ifaces.zip(device).zip(state) {
+        for ((iface, dev), state) in self.ifaces.iter_mut().skip(1).zip(device).zip(state) {
             let mut dev = dev.write();
             Stack::update_interface(iface, &*dev);
 
@@ -466,6 +460,8 @@ impl SocketStack {
                 }
             }
         }
+
+        self.ifaces[0].poll(instant, &mut self.loopback, &mut self.sockets);
 
         let ddl = self.ifaces.iter_mut().fold(None, |acc, iface| {
             let next = iface.poll_at(instant, &self.sockets);

@@ -1,7 +1,12 @@
 pub mod ffi;
 
 use alloc::boxed::Box;
-use core::{mem, ops::ControlFlow, time::Duration};
+use core::{
+    mem,
+    ops::ControlFlow,
+    sync::atomic::{AtomicU32, Ordering::SeqCst},
+    time::Duration,
+};
 
 use co_trap::{TrapFrame, UserCx};
 use kmem::Virt;
@@ -136,13 +141,20 @@ pub static SYSCALL: Lazy<AHandlers<Scn, ScParams, ScRet>> = Lazy::new(|| {
         .map(UNAME, uname)
         .map(GETRANDOM, getrandom)
         .map(SETSID, dummy_zero)
-        .map(GETEUID, dummy_zero)
+        .map(GETEUID, getuid)
         .map(GETEGID, dummy_zero)
         .map(GETPGID, dummy_zero)
-        .map(GETUID, dummy_zero)
+        .map(GETUID, getuid)
         .map(GETGID, dummy_zero)
+        .map(SETGID, dummy_zero)
+        .map(GETGROUPS, getgroups)
+        .map(SETGROUPS, dummy_zero)
+        .map(SETRESUID, setuid)
+        .map(SETRESGID, dummy_zero)
         .map(SYSLOG, dummy_zero)
         .map(UMASK, dummy_umask)
+        .map(CHROOT, dummy_zero)
+        .map(PRCTL, dummy_zero)
 });
 
 #[async_handler]
@@ -264,6 +276,26 @@ async fn sleep(
     ScRet::Continue(None)
 }
 
+static UID: AtomicU32 = AtomicU32::new(0);
+
+#[async_handler]
+async fn getuid(_: &mut TaskState, cx: UserCx<'_, fn() -> u32>) -> ScRet {
+    cx.ret(UID.load(SeqCst));
+    ScRet::Continue(None)
+}
+
+#[async_handler]
+async fn setuid(_: &mut TaskState, cx: UserCx<'_, fn(u32)>) -> ScRet {
+    let uid = cx.args();
+    if uid < i32::MAX as _ {
+        UID.store(uid, SeqCst);
+    } else {
+        UID.store(0, SeqCst);
+    }
+    cx.ret(());
+    ScRet::Continue(None)
+}
+
 #[async_handler]
 async fn uname(
     ts: &mut TaskState,
@@ -299,6 +331,22 @@ async fn getrandom(
             rest -= count;
         }
         Ok(len)
+    };
+    cx.ret(fut.await);
+    ScRet::Continue(None)
+}
+
+#[async_handler]
+async fn getgroups(
+    ts: &mut TaskState,
+    cx: UserCx<'_, fn(usize, UserPtr<u32, Out>) -> Result<usize, Error>>,
+) -> ScRet {
+    let (len, mut out) = cx.args();
+    let fut = async {
+        if len >= 1 {
+            out.write(&ts.virt, 0).await?;
+        }
+        Ok(1)
     };
     cx.ret(fut.await);
     ScRet::Continue(None)

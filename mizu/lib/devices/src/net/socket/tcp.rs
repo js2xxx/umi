@@ -12,6 +12,7 @@ use arsc_rs::Arsc;
 use crossbeam_queue::SegQueue;
 use futures_util::{
     future::{select, Either},
+    task::AtomicWaker,
     Future,
 };
 use ksc::Error::{self, ECONNREFUSED, EEXIST, EINVAL, ENOTCONN};
@@ -51,7 +52,9 @@ struct Inner {
 
     listen: Mutex<Option<IpListenEndpoint>>,
     backlog: AtomicUsize,
-    accept_event: Event,
+    backlog_event: Event,
+
+    accept_waker: AtomicWaker,
 }
 
 impl Inner {
@@ -106,7 +109,7 @@ impl Inner {
         while !tx.is_closed() {
             match listener.take() {
                 Some(listener) => listener.await,
-                None => listener = Some(self.accept_event.listen()),
+                None => listener = Some(self.backlog_event.listen()),
             }
         }
     }
@@ -122,7 +125,7 @@ impl Inner {
             while tx.len() >= self.backlog.load(SeqCst) {
                 match listener.take() {
                     Some(listener) => listener.await,
-                    None => listener = Some(self.accept_event.listen()),
+                    None => listener = Some(self.backlog_event.listen()),
                 }
             }
 
@@ -164,11 +167,15 @@ impl Inner {
 
                             listen: Default::default(),
                             backlog: Default::default(),
-                            accept_event: Default::default(),
+                            backlog_event: Default::default(),
+
+                            accept_waker: Default::default(),
                         }),
                         accept: Default::default(),
                     };
-                    if tx.send(data).await.is_err() {
+                    let send = &tx.send(data).await;
+                    self.accept_waker.wake();
+                    if send.is_err() {
                         break;
                     }
                 }
@@ -199,7 +206,9 @@ impl Socket {
 
                 listen: Default::default(),
                 backlog: Default::default(),
-                accept_event: Default::default(),
+                backlog_event: Default::default(),
+
+                accept_waker: Default::default(),
             }),
             accept: Default::default(),
         }
@@ -277,7 +286,7 @@ impl Socket {
             return Err(EINVAL);
         };
         let socket = rx.recv().await.unwrap();
-        self.inner.accept_event.notify(1);
+        self.inner.backlog_event.notify(1);
         Ok(socket)
     }
 
@@ -314,22 +323,24 @@ impl Socket {
 
     fn poll_wait_for_recv(&self, cx: &mut Context) -> Poll<()> {
         self.inner.with_mut(|_, s| {
-            log::trace!("Wake up for recv, polling: {} {}", s.state(), s.can_recv());
-            if s.can_recv()
-                || matches!(
-                    s.state(),
-                    State::FinWait1 | State::FinWait2 | State::CloseWait
-                )
-            {
-                return Poll::Ready(());
-            }
             if let Some(accept) = &*self.accept.lock() {
                 log::trace!("Accept queue: {}", !accept.is_empty());
                 if !accept.is_empty() {
                     return Poll::Ready(());
                 }
+                self.inner.accept_waker.register(cx.waker());
+            } else {
+                log::trace!("Wake up for recv, polling: {} {}", s.state(), s.can_recv());
+                if s.can_recv()
+                    || matches!(
+                        s.state(),
+                        State::FinWait1 | State::FinWait2 | State::CloseWait
+                    )
+                {
+                    return Poll::Ready(());
+                }
+                s.register_recv_waker(cx.waker());
             }
-            s.register_recv_waker(cx.waker());
             Poll::Pending
         })
     }
@@ -340,17 +351,19 @@ impl Socket {
 
     fn poll_wait_for_send(&self, cx: &mut Context<'_>) -> Poll<()> {
         self.inner.with_mut(|_, s| {
-            log::trace!("Wake up for send, polling: {} {}", s.state(), s.can_send());
-            if s.can_send() {
-                return Poll::Ready(());
-            }
             if let Some(accept) = &*self.accept.lock() {
                 log::trace!("Accept queue: {}", !accept.is_empty());
                 if !accept.is_empty() {
                     return Poll::Ready(());
                 }
+                self.inner.accept_waker.register(cx.waker());
+            } else {
+                log::trace!("Wake up for send, polling: {} {}", s.state(), s.can_send());
+                if s.can_send() {
+                    return Poll::Ready(());
+                }
+                s.register_send_waker(cx.waker());
             }
-            s.register_send_waker(cx.waker());
             Poll::Pending
         })
     }
@@ -398,7 +411,7 @@ impl Socket {
         let ret = ksync::critical(|| self.accept.lock().take());
         if ret.is_some() {
             log::trace!("Closing a listening socket");
-            self.inner.accept_event.notify(1);
+            self.inner.backlog_event.notify(1);
         } else {
             log::trace!("Closing a connection socket");
             self.inner.close().await
@@ -442,7 +455,7 @@ impl Drop for Socket {
     fn drop(&mut self) {
         if self.accept.get_mut().is_some() {
             log::trace!("Dropping a listening socket");
-            self.inner.accept_event.notify(1);
+            self.inner.backlog_event.notify(1);
         }
     }
 }

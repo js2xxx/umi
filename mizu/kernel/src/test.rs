@@ -7,6 +7,11 @@ use umifs::{path::Path, types::OpenOptions};
 
 use crate::{println, task::Command};
 
+const BUSYBOX: &str = "/bin/busybox";
+const PATH_ENV: &str = "PATH=/bin";
+const SHELL_ENV: &str = "SHELL=/bin/busybox";
+const LIBRARY_ENV: &str = "LD_LIBRARY_PATH=/lib";
+
 fn split_cmd(cmd: &str) -> impl Iterator<Item = &str> + '_ {
     fn find_next(cmd: &str) -> Option<usize> {
         let space = cmd.find(' ')?;
@@ -74,22 +79,22 @@ pub async fn libc() {
 }
 
 const ENVS: [&str; 8] = [
-    "PATH=/",
+    PATH_ENV,
     "USER=root",
     "_=busybox",
-    "SHELL=/busybox",
-    "ENOUGH=5000",
-    "LD_LIBRARY_PATH=/",
+    SHELL_ENV,
+    "ENOUGH=1000000",
+    LIBRARY_ENV,
     "LOGNAME=root",
     "HOME=/",
 ];
 
 pub async fn run_busybox(script: Option<&str>) -> (i32, Option<Sig>) {
-    let mut cmd = Command::new("/busybox");
+    let mut cmd = Command::new(BUSYBOX);
     cmd.open_executable().await.unwrap();
     match script {
-        Some(script) => cmd.args(["busybox", "sh", script]),
-        None => cmd.args(["busybox", "sh"]),
+        Some(script) => cmd.args([BUSYBOX, "sh", script]),
+        None => cmd.args([BUSYBOX, "sh"]),
     };
     let task = cmd.envs(ENVS).spawn().await.unwrap();
 
@@ -98,9 +103,9 @@ pub async fn run_busybox(script: Option<&str>) -> (i32, Option<Sig>) {
 
 #[allow(dead_code)]
 pub async fn run(command: &str) -> (i32, Option<Sig>) {
-    let mut cmd = Command::new("/busybox");
+    let mut cmd = Command::new(BUSYBOX);
     cmd.open_executable().await.unwrap();
-    cmd.args(["busybox", "sh", "-c", command]);
+    cmd.args([BUSYBOX, "sh", "-c", command]);
     let task = cmd.envs(ENVS).spawn().await;
     task.unwrap().wait().await
 }
