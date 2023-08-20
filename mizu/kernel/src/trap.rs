@@ -1,5 +1,5 @@
 use core::{
-    sync::atomic::{AtomicU8, Ordering::Relaxed, AtomicUsize},
+    sync::atomic::{AtomicU8, AtomicUsize, Ordering::Relaxed},
     time::Duration,
 };
 

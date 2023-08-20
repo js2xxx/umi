@@ -243,7 +243,7 @@ impl<D: InPtr> UserPtr<u8, D> {
         let path = self.read_str(virt, buf).await?;
         if let Some(rel) = path.strip_prefix('.') {
             let path = rel.strip_prefix('/').unwrap_or(rel);
-            return Ok((Path::new(path), false))
+            return Ok((Path::new(path), false));
         }
         Ok(match path.strip_prefix('/') {
             Some(path) => (Path::new(path), true),
