@@ -247,6 +247,15 @@ pub async fn test_all() {
     println!("run time-test");
     run_task("time-test").await;
 
+    println!("run interrupts-test");
+    run_task("interrupts-test-1").await;
+    run_task("interrupts-test-2").await;
+
+    println!("run copy-file-range-test");
+    run_task("copy-file-range-test-1").await;
+    run_task("copy-file-range-test-2").await;
+    run_task("copy-file-range-test-3").await;
+
     println!("run busybox_testcode.sh");
     run_busybox(Some("./busybox_testcode.sh")).await;
 

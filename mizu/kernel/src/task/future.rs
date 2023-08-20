@@ -167,6 +167,21 @@ async fn handle_scause(scause: Scause, ts: &mut TaskState, tf: &mut TrapFrame) -
                 #[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))]
                 if excep == Exception::InstructionPageFault {
                     unsafe { core::arch::asm!("fence.i") }
+                    #[cfg(feature = "cv1811h")]
+                    unsafe {
+                        core::arch::asm!(".insn r 0b1011, 0, 1, zero, {}, x16", in(reg) tf.stval)
+                    }
+                }
+            }
+            Exception::IllegalInstruction => {
+                // TODO: avoid raw instruction.
+                #[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))]
+                if excep == Exception::InstructionPageFault {
+                    unsafe { core::arch::asm!("fence.i") }
+                    #[cfg(feature = "cv1811h")]
+                    unsafe {
+                        core::arch::asm!(".insn r 0b1011, 0, 1, zero, {}, x16", in(reg) tf.sepc)
+                    }
                 }
             }
             _ => panic!(

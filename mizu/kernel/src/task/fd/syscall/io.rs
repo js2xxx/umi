@@ -1,4 +1,4 @@
-use alloc::{boxed::Box, vec, vec::Vec};
+use alloc::{boxed::Box, sync::Arc, vec, vec::Vec};
 use core::{mem, time::Duration};
 
 use co_trap::UserCx;
@@ -13,7 +13,7 @@ use ksc::{
 use ktime::TimeOutExt;
 use rv39_paging::{Attr, PAGE_SIZE};
 use sygnal::SigSet;
-use umio::SeekFrom;
+use umio::{Io, SeekFrom};
 
 use crate::{
     mem::{In, InOut, UserBuffer, UserPtr},
@@ -300,6 +300,94 @@ pub async fn sendfile(
             offset_ptr.write(&ts.virt, offset).await?;
             Ok(ret)
         }
+    };
+    cx.ret(fut.await);
+    ScRet::Continue(None)
+}
+
+#[async_handler]
+pub async fn copy_file_range(
+    ts: &mut TaskState,
+    cx: UserCx<
+        '_,
+        fn(
+            i32,
+            UserPtr<usize, InOut>,
+            i32,
+            UserPtr<usize, InOut>,
+            usize,
+            i32,
+        ) -> Result<usize, Error>,
+    >,
+) -> ScRet {
+    async fn read(
+        input: &Arc<dyn Io>,
+        offset: &mut Option<usize>,
+        buf: &mut [u8],
+    ) -> Result<usize, Error> {
+        match offset {
+            Some(offset) => {
+                let ret = input.read_at(*offset, &mut [buf]).await?;
+                *offset += ret;
+                Ok(ret)
+            }
+            None => input.read(&mut [buf]).await,
+        }
+    }
+
+    async fn write(
+        output: &Arc<dyn Io>,
+        offset: &mut Option<usize>,
+        buf: &[u8],
+    ) -> Result<usize, Error> {
+        match offset {
+            Some(offset) => {
+                let ret = output.write_at(*offset, &mut [buf]).await?;
+                *offset += ret;
+                Ok(ret)
+            }
+            None => output.write(&mut [buf]).await,
+        }
+    }
+
+    let (input, mut in_off, output, mut out_off, len, _flags) = cx.args();
+    let fut = async {
+        let input = ts.files.get(input).await?.to_io().ok_or(EISDIR)?;
+        let output = ts.files.get(output).await?.to_io().ok_or(EISDIR)?;
+
+        let mut in_offset = if in_off.is_null() {
+            None
+        } else {
+            Some(in_off.read(&ts.virt).await?)
+        };
+        let mut out_offset = if out_off.is_null() {
+            None
+        } else {
+            Some(out_off.read(&ts.virt).await?)
+        };
+
+        let mut buf = kmem::Frame::new()?;
+
+        let mut ret = 0;
+        while ret < len {
+            let count = (len - ret).min(PAGE_SIZE);
+            let read = read(&input, &mut in_offset, &mut buf[..count]).await?;
+            let written = write(&output, &mut out_offset, &buf[..read]).await?;
+            ret += written;
+            if written == 0 {
+                break;
+            }
+        }
+        output.flush().await?;
+        
+        if let Some(in_offset) = in_offset {
+            in_off.write(&ts.virt, in_offset).await?;
+        }
+        if let Some(out_offset) = out_offset {
+            out_off.write(&ts.virt, out_offset).await?;
+        }
+
+        Ok(ret)
     };
     cx.ret(fut.await);
     ScRet::Continue(None)

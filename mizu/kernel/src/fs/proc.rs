@@ -1,7 +1,10 @@
 use alloc::{boxed::Box, string::String, sync::Arc};
 use core::{
     fmt::Write,
-    sync::atomic::{AtomicUsize, Ordering::SeqCst},
+    sync::atomic::{
+        AtomicUsize,
+        Ordering::{Relaxed, SeqCst},
+    },
 };
 
 use arsc_rs::Arsc;
@@ -43,6 +46,7 @@ impl FileSystem for ProcFs {
 pub struct ProcRoot {
     minfo: Arc<MemInfo>,
     mounts: Arc<Mounts>,
+    intrs: Arc<Interrupts>,
 }
 
 impl ToIo for ProcRoot {}
@@ -58,6 +62,7 @@ impl Entry for ProcRoot {
         match path.as_str() {
             "meminfo" => self.minfo.clone().open(Path::new(""), options, perm).await,
             "mounts" => self.mounts.clone().open(Path::new(""), options, perm).await,
+            "interrupts" => self.intrs.clone().open(Path::new(""), options, perm).await,
             _ => {
                 let (dir, _next) = {
                     let mut comp = path.components();
@@ -230,6 +235,80 @@ impl Entry for Mounts {
     }
 }
 impl IoPoll for Mounts {}
+
+#[derive(Default)]
+pub struct Interrupts(Mutex<String>, AtomicUsize);
+
+#[async_trait]
+impl Io for Interrupts {
+    async fn seek(&self, whence: SeekFrom) -> Result<usize, Error> {
+        let pos = match whence {
+            SeekFrom::Start(pos) => pos,
+            SeekFrom::End(_) => return Err(ESPIPE),
+            SeekFrom::Current(pos) if pos >= 0 => self.1.load(SeqCst) + pos as usize,
+            SeekFrom::Current(pos) => self.1.load(SeqCst) - (-pos as usize),
+        };
+        self.1.store(pos, SeqCst);
+        Ok(pos)
+    }
+
+    async fn read_at(&self, offset: usize, buffer: &mut [IoSliceMut]) -> Result<usize, Error> {
+        let counts = crate::dev::INTR.counts();
+
+        let mut buf = self.0.lock().await;
+        buf.clear();
+
+        write!(buf, "0: {}\n", crate::trap::TIMER_COUNT.load(Relaxed)).unwrap();
+        for (pin, count) in counts {
+            write!(buf, "{pin}: {count}\n").unwrap();
+        }
+
+        let Some(buf) = buf.as_bytes().get(offset..) else {
+            return Ok(0)
+        };
+        Ok(copy_to_ioslice(buf, buffer))
+    }
+
+    async fn write_at(&self, _: usize, _: &mut [IoSlice]) -> Result<usize, Error> {
+        Err(EPERM)
+    }
+
+    async fn flush(&self) -> Result<(), Error> {
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl Entry for Interrupts {
+    async fn open(
+        self: Arc<Self>,
+        path: &Path,
+        options: OpenOptions,
+        perm: Permissions,
+    ) -> Result<(Arc<dyn Entry>, bool), Error> {
+        umifs::misc::open_file(
+            self,
+            path,
+            options,
+            perm,
+            Permissions::all_same(true, true, false),
+        )
+        .await
+    }
+
+    async fn metadata(&self) -> Metadata {
+        Metadata {
+            ty: FileType::FILE,
+            len: 0,
+            offset: rand_riscv::seed64(),
+            perm: Permissions::all_same(true, false, false),
+            block_size: 1024,
+            block_count: 0,
+            times: Default::default(),
+        }
+    }
+}
+impl IoPoll for Interrupts {}
 
 pub fn copy_to_ioslice(mut buf: &[u8], mut out: &mut [IoSliceMut]) -> usize {
     let mut read_len = 0;

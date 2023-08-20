@@ -225,10 +225,14 @@ pub async fn pipe(
 }
 
 #[async_handler]
+#[allow(unused)]
 pub async fn socket_pair(
     ts: &mut TaskState,
     cx: UserCx<'_, fn(usize, usize, usize, UserPtr<i32, Out>) -> Result<(), Error>>,
 ) -> ScRet {
+    loop {
+        crate::task::yield_now().await;
+    }
     let fut = pipe_inner(&ts.files, &ts.virt, cx.args().3);
     cx.ret(fut.await);
     ScRet::Continue(None)
