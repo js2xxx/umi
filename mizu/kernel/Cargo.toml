@@ -64,7 +64,7 @@ scoped-tls = {git = "https://github.com/js2xxx/scoped-tls", branch = "no_std"}
 spin = "0"
 static_assertions = "1"
 virtio-drivers = {git = "https://github.com/rcore-os/virtio-drivers", branch = "new-netdev"}
-zerocopy = "0"
+zerocopy = {version = "0", features = ["derive"]}
 
 [dependencies.smoltcp]
 branch = "reuse_endpoints"

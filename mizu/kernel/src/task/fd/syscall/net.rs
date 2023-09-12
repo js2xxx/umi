@@ -12,7 +12,7 @@ use rv39_paging::Attr;
 use smoltcp::wire::{IpAddress, IpEndpoint, IpListenEndpoint, Ipv4Address, Ipv6Address};
 use umifs::types::{OpenOptions, Permissions};
 use umio::IntoAnyExt;
-use zerocopy::{AsBytes, FromBytes};
+use zerocopy::{AsBytes, FromBytes, FromZeroes};
 
 use crate::{
     fs::socket::{self, SocketFile},
@@ -28,7 +28,7 @@ use crate::{
 const AF_INET: u16 = 2; // Internet IP Protocol
 const AF_INET6: u16 = 10; // IP version 6
 
-#[derive(Debug, Clone, Copy, FromBytes, AsBytes, Default)]
+#[derive(Debug, Clone, Copy, FromZeroes, FromBytes, AsBytes, Default)]
 #[repr(C, packed)]
 struct SockAddrIpv4 {
     // Big endian.
@@ -58,7 +58,7 @@ impl From<SockAddrIpv4> for IpListenEndpoint {
     }
 }
 
-#[derive(Debug, Clone, Copy, FromBytes, AsBytes, Default)]
+#[derive(Debug, Clone, Copy, FromZeroes, FromBytes, AsBytes, Default)]
 #[repr(C, packed)]
 struct SockAddrIpv6 {
     // Big endian.
@@ -231,6 +231,15 @@ pub async fn getsockname(
 union SockOpt {
     value: u32,
     tv: Tv,
+}
+
+unsafe impl FromZeroes for SockOpt {
+    fn only_derive_is_allowed_to_implement_this_trait()
+    where
+        Self: Sized,
+    {
+        todo!()
+    }
 }
 
 unsafe impl AsBytes for SockOpt {
