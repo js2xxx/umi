@@ -17,3 +17,5 @@
 [Gitlab](https://gitlab.eduxiji.net/PLNTRY/OSKernel2023-umi/-/blob/comp3-coverage/docs/kcov.md)，
 [Github](https://github.com/js2xxx/umi/blob/comp3-coverage/docs/kcov.md)
 互为镜像。
+
+## [最终设计文档](设计文档.pdf)
